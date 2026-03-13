@@ -114,6 +114,7 @@ using ..MPSToolkit:
   ChebyshevRescaling,
   SpectralFunction,
   chebyshev_moments,
+  energy_cutoff!,
   jackson_damping,
   jackson_kernel,
   reconstruct_chebyshev,
@@ -121,6 +122,7 @@ using ..MPSToolkit:
 export ChebyshevRescaling,
   SpectralFunction,
   chebyshev_moments,
+  energy_cutoff!,
   jackson_damping,
   jackson_kernel,
   reconstruct_chebyshev,
@@ -135,6 +137,6 @@ export tebd_evolve!, dmt_evolve!, tdvp_evolve!, local_gates_from_hamiltonians, t
 export pauli_matrices, pauli_basis, pauli_components
 export spinhalf_matrices, spinhalf_xyz_bond_hamiltonian, spinhalf_tfim_bond_hamiltonian
 export pauli_siteinds, pauli_basis_state, pauli_total_sz_state, pauli_gate, pauli_gate_from_hamiltonian, pauli_lindblad_generator, pauli_gate_from_lindbladian, DMTOptions, dmt_step!, dmt_evolve!, pauli_daoe_projector, fdaoe_projector
-export ChebyshevRescaling, SpectralFunction, chebyshev_moments, jackson_damping, jackson_kernel, reconstruct_chebyshev, spectral_function
+export ChebyshevRescaling, SpectralFunction, chebyshev_moments, energy_cutoff!, jackson_damping, jackson_kernel, reconstruct_chebyshev, spectral_function
 
 end

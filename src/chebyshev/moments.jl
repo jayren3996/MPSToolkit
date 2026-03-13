@@ -1,5 +1,16 @@
 """
-    chebyshev_moments(H, psi; order, maxdim=32, cutoff=1e-12, normalize_initial=true)
+    chebyshev_moments(H, psi;
+      order,
+      maxdim=32,
+      cutoff=1e-12,
+      normalize_initial=true,
+      energy_cutoff=false,
+      energy_cutoff_sweeps=5,
+      krylovdim=30,
+      window=1.0,
+      energy_cutoff_tol=1e-12,
+      energy_cutoff_verbose=false,
+    )
 
 Compute Chebyshev moments `μ_n = ⟨ψ|T_n(H)|ψ⟩` for a finite `MPO` and `MPS`.
 
@@ -17,6 +28,12 @@ function chebyshev_moments(
   maxdim::Integer=32,
   cutoff::Real=1e-12,
   normalize_initial::Bool=true,
+  energy_cutoff::Bool=false,
+  energy_cutoff_sweeps::Integer=5,
+  krylovdim::Integer=30,
+  window::Real=1.0,
+  energy_cutoff_tol::Real=1e-12,
+  energy_cutoff_verbose::Bool=false,
 )
   order > 0 || throw(ArgumentError("Chebyshev order must be positive"))
   hascommoninds(siteinds, H, psi) || throw(ArgumentError("Hamiltonian and state must share site indices"))
@@ -29,6 +46,17 @@ function chebyshev_moments(
 
   tm_prev = base_state
   tm_curr = apply(H, base_state; maxdim=maxdim, cutoff=cutoff)
+  if energy_cutoff
+    energy_cutoff!(
+      tm_curr,
+      H;
+      sweeps=energy_cutoff_sweeps,
+      krylovdim=krylovdim,
+      window=window,
+      tol=energy_cutoff_tol,
+      verbose=energy_cutoff_verbose,
+    )
+  end
   moments[2] = real(inner(base_state, tm_curr))
   order == 2 && return moments
 
@@ -37,6 +65,17 @@ function chebyshev_moments(
     previous_state = -tm_prev
     next_state = add(apply(doubled_h, tm_curr; maxdim=maxdim, cutoff=cutoff), previous_state; maxdim=maxdim, cutoff=cutoff)
     _optimize_chebyshev_vector!(next_state, doubled_h, tm_curr, previous_state)
+    if energy_cutoff
+      energy_cutoff!(
+        next_state,
+        H;
+        sweeps=energy_cutoff_sweeps,
+        krylovdim=krylovdim,
+        window=window,
+        tol=energy_cutoff_tol,
+        verbose=energy_cutoff_verbose,
+      )
+    end
     tm_prev = tm_curr
     tm_curr = next_state
     moments[n] = real(inner(base_state, tm_curr))
@@ -90,4 +129,116 @@ function _optimize_chebyshev_vector!(psi::MPS, h2::MPO, current::MPS, previous::
     end
   end
   return psi
+end
+
+"""
+    energy_cutoff!(psi, h; sweeps=5, krylovdim=30, window=1.0, tol=1e-12, verbose=false)
+
+Apply the standalone CheMPS-style energy-window projection to an `MPS` with respect to the
+effective local problem induced by the MPO `h`. This is intended for Chebyshev vectors after
+the Hamiltonian has already been rescaled into the target Chebyshev window.
+"""
+function energy_cutoff!(
+  psi::MPS,
+  h::MPO;
+  sweeps::Integer=5,
+  krylovdim::Integer=30,
+  window::Real=1.0,
+  tol::Real=1e-12,
+  verbose::Bool=false,
+)
+  projector = ProjMPO(h)
+  ITensorMPS.set_nsite!(projector, 1)
+
+  error_estimate = 0.0
+  for sweep in 1:Int(sweeps)
+    error_estimate = _energy_cutoff_sweep!(projector, psi; krylovdim=Int(krylovdim), window=window)
+    if verbose
+      println("energy cutoff sweep $sweep: err = $error_estimate")
+      flush(stdout)
+    end
+    error_estimate < tol && break
+  end
+  return psi
+end
+
+function _energy_cutoff_sweep!(projector::ProjMPO, psi::MPS; krylovdim::Integer, window::Real)
+  nsites = length(psi)
+  accumulated_error = 0.0
+
+  for site in 2:nsites
+    orthogonalize!(psi, site)
+    position!(projector, psi, site)
+    local_error, psi[site] = _krylov_energy_cutoff(projector, psi[site], krylovdim; window=window)
+    accumulated_error += local_error
+  end
+
+  for site in (nsites - 1):-1:1
+    orthogonalize!(psi, site)
+    position!(projector, psi, site)
+    local_error, psi[site] = _krylov_energy_cutoff(projector, psi[site], krylovdim; window=window)
+    accumulated_error += local_error
+  end
+
+  return sqrt(accumulated_error / nsites)
+end
+
+function _krylov_energy_cutoff(projector::ProjMPO, tensor::ITensor, krylovdim::Integer; window::Real=1.0)
+  tensor_norm = norm(tensor)
+  iszero(tensor_norm) && return 0.0, tensor
+
+  local_krylovdim = min(krylovdim, length(tensor.tensor))
+  tridiagonal, basis = _lanczos_tridiagonal(projector, tensor, local_krylovdim)
+  eigenvalues, eigenvectors = eigen(tridiagonal)
+  projected_coefficients, error_estimate = _project_energy_window(eigenvalues, eigenvectors; window=window)
+  projected_tensor = sum(projected_coefficients[index] * basis[index] for index in eachindex(projected_coefficients))
+  return error_estimate, tensor_norm * projected_tensor
+end
+
+function _project_energy_window(eigenvalues::AbstractVector, eigenvectors::AbstractMatrix; window::Real=1.0)
+  coefficients = zeros(eltype(eigenvectors), size(eigenvectors, 1))
+  coefficients[1] = one(eltype(coefficients))
+  removed_weight = 0.0
+
+  for (column, value) in enumerate(eigenvalues)
+    if value < -window || value > window
+      vector = eigenvectors[:, column]
+      overlap = conj(vector[1])
+      coefficients .-= overlap * vector
+      removed_weight += abs2(overlap)
+    end
+  end
+
+  return coefficients, removed_weight
+end
+
+function _lanczos_tridiagonal(projector::ProjMPO, tensor::ITensor, krylovdim::Integer)
+  basis = Vector{ITensor}(undef, krylovdim)
+  diagonal = Vector{Float64}(undef, krylovdim)
+  offdiagonal = Vector{Float64}(undef, max(krylovdim - 1, 0))
+
+  basis[1] = normalize(tensor)
+  if krylovdim == 1
+    diagonal[1] = real(inner(basis[1], projector(basis[1])))
+    return SymTridiagonal(diagonal, offdiagonal), basis
+  end
+
+  residual = projector(basis[1])
+  diagonal[1] = real(inner(basis[1], residual))
+  residual -= diagonal[1] * basis[1]
+  offdiagonal[1] = norm(residual)
+  offdiagonal[1] > 0 || return SymTridiagonal(diagonal[1:1], Float64[]), basis[1:1]
+  basis[2] = residual / offdiagonal[1]
+
+  for index in 2:(krylovdim - 1)
+    residual = projector(basis[index])
+    diagonal[index] = real(inner(basis[index], residual))
+    residual -= offdiagonal[index - 1] * basis[index - 1] + diagonal[index] * basis[index]
+    offdiagonal[index] = norm(residual)
+    offdiagonal[index] > 0 || return SymTridiagonal(diagonal[1:index], offdiagonal[1:(index - 1)]), basis[1:index]
+    basis[index + 1] = residual / offdiagonal[index]
+  end
+
+  diagonal[krylovdim] = real(inner(basis[krylovdim], projector(basis[krylovdim])))
+  return SymTridiagonal(diagonal, offdiagonal), basis
 end
