@@ -23,8 +23,7 @@ The package does not currently support:
 
 ```julia
 using Pkg
-Pkg.activate(".")
-Pkg.instantiate()
+Pkg.add(url="https://github.com/jayren3996/MPSToolkit.git")
 ```
 
 ## Design
