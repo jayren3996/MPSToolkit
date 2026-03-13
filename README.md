@@ -1,23 +1,8 @@
 # MPSToolkit.jl
 
-Low-level finite-`MPS` tooling built on `ITensors.jl` and `ITensorMPS.jl`.
+`MPSToolkit.jl` is a low-level finite-`MPS` toolkit built on top of [`ITensors.jl`](https://itensor.github.io/ITensors.jl/stable/) and `ITensorMPS.jl`.
 
-`MPSToolkit.jl` is a finite-chain package organized around explicit tensor-network building blocks. The current supported workflows are:
-
-- finite OBC `MPS` time evolution from local gates or MPO Hamiltonians
-- finite OBC `MPS` ScarFinder loops with explicit projection
-- dense local-gate TEBD, including multi-site and per-bond gate schedules
-- MPO-driven TDVP
-- entanglement entropy and entanglement spectrum diagnostics
-- entropy-based and fidelity-based trajectory refinement
-- spin-1/2 Pauli-basis helpers for operator-space work
-- DAOE/FDAOE projector MPO construction for operator-space truncation
-
-The package does not currently support:
-
-- finite-ring PBC `MPS`
-- automatic `OpSum` conversion inside `TDVPEvolution`
-- DAOE/FDAOE-specific operator evolution workflows
+The package is organized around explicit tensor-network building blocks instead of a single opaque workflow. You can use the high-level loops when they help, but the lower-level evolution, truncation, observable, and operator-space pieces are all exposed directly.
 
 ## Installation
 
@@ -26,18 +11,32 @@ using Pkg
 Pkg.add(url="https://github.com/jayren3996/MPSToolkit.git")
 ```
 
-## Design
+## What It Covers
 
-The package keeps the algorithm intentionally explicit:
+Current public functionality includes:
 
-1. `evolve!(psi, evolution)`
-2. `project!(psi, truncation)`
-3. optional `match_energy!`
-4. optional trajectory refinement with a selector such as `EntropySelector` or `FidelitySelector`
+- finite OBC `MPS` evolution from dense local gates
+- helper-driven TEBD setup from dense local Hamiltonians
+- odd-even-odd Strang TEBD helpers
+- scheduled multi-site gate application, including custom per-bond and mixed-span schedules
+- MPO-based TDVP
+- explicit bond-dimension projection for ScarFinder workflows
+- selector-driven trajectory refinement with entropy and fidelity selectors
+- entanglement and energy diagnostics
+- spin-1/2 Pauli-basis helpers for operator-space calculations
+- operator-space Lindblad and local superoperator helpers
+- operator-space DMT with low-level `dmt_step!` and scheduled `DMTGateEvolution`
+- DAOE/FDAOE projector MPO construction
+- Chebyshev moment generation and spectral reconstruction helpers
 
-That split makes the backend tunable. TEBD and TDVP are both first-class evolution engines, while truncation stays visible and replaceable.
+## Current Limits
 
-## Public API
+- finite OBC `MPS` is the main supported state class
+- finite-ring PBC is not a general supported mode
+- `TDVPEvolution` currently expects MPO generators
+- DMT is currently implemented for operator-space workflows, not as a generic physical-state truncation backend
+
+## Package Layout
 
 Feature namespaces:
 
@@ -47,126 +46,190 @@ Feature namespaces:
 - `MPSToolkit.Bases`
 - `MPSToolkit.OperatorSpace`
 - `MPSToolkit.Models`
+- `MPSToolkit.Chebyshev`
 
-Core entry points:
+The design is intentionally explicit:
 
-- `scarfinder_step!(psi, evolution, truncation; target_energy=nothing, selector=nothing, kwargs...)`
-- `scarfinder!(psi, evolution, truncation, niter; refine=false, selector=nothing, kwargs...)`
+1. `evolve!(psi, evolution)`
+2. `project!(psi, truncation)`
+3. optional `match_energy!`
+4. optional trajectory refinement
 
-Backend primitives:
+That split keeps TEBD, TDVP, DMT, and ScarFinder-style workflows composable rather than fused into one control path.
 
-- `tebd_evolve!(psi, gate, bond; maxdim, cutoff)`
-- `tebd_evolution_from_hamiltonians(hamiltonians, dt; kwargs...)`
-- `tebd_strang_evolution(nsites, dt; local_hamiltonian, kwargs...)`
-- `tdvp_evolve!(psi::MPS, evo::TDVPEvolution)`
-- `project!(psi, truncation)`
-- `energy_density(psi, op)`
-- `bond_entropy(psi, bond)`
-- `entanglement_spectrum(psi, bond)`
+## Evolution APIs
 
-Configuration types:
+TEBD and scheduled local-gate evolution:
 
 - `LocalGateEvolution`
+- `tebd_evolve!`
+- `local_gates_from_hamiltonians`
+- `tebd_evolution_from_hamiltonians`
+- `tebd_strang_schedule`
+- `tebd_strang_evolution`
+
+Operator-space DMT:
+
+- `DMTGateEvolution`
+- `dmt_step!`
+- `dmt_evolve!`
+
+TDVP:
+
 - `TDVPEvolution`
+- `tdvp_evolve!`
+
+ScarFinder and explicit projection:
+
 - `BondDimTruncation`
 - `EnergyTarget`
 - `EntropySelector`
 - `FidelitySelector`
+- `scarfinder_step!`
+- `scarfinder!`
+
+Observables:
+
+- `energy_density`
+- `bond_entropy`
+- `entanglement_spectrum`
+- `fidelity_distance`
+
+Operator-space helpers:
+
+- `pauli_siteinds`
+- `pauli_basis_state`
+- `pauli_total_sz_state`
+- `pauli_gate`
+- `pauli_gate_from_hamiltonian`
+- `pauli_lindblad_generator`
+- `pauli_gate_from_lindbladian`
+- `pauli_daoe_projector`
+- `fdaoe_projector`
 
 Model helpers:
 
+- `spinhalf_matrices`
 - `spinhalf_tfim_bond_hamiltonian`
 - `spinhalf_xyz_bond_hamiltonian`
 
+Chebyshev helpers:
+
+- `ChebyshevRescaling`
+- `SpectralFunction`
+- `chebyshev_moments`
+- `jackson_damping`
+- `jackson_kernel`
+- `reconstruct_chebyshev`
+- `spectral_function`
+
 ## Quick Start
 
-### Finite OBC TEBD
+### Physical-Spin TEBD From Hamiltonians
 
 ```julia
-using MPSToolkit, ITensors, ITensorMPS, LinearAlgebra
+using MPSToolkit
+using ITensors
+using ITensorMPS
 
-sites = siteinds("S=1/2", 6)
-psi = MPS(sites, n -> "Up")
+nsites = 6
+sites = siteinds("S=1/2", nsites)
+psi = MPS(sites, n -> isodd(n) ? "Up" : "Dn")
 
-sx = ComplexF64[0 1; 1 0] / 2
-hbond = kron(sx, sx)
-gate = exp(-0.05im * hbond)
-
-evo = LocalGateEvolution(gate, 0.05; schedule=1:5, nstep=1, maxdim=16, cutoff=1e-12)
-trunc = BondDimTruncation(8; cutoff=1e-12)
-
-scarfinder!(psi, evo, trunc, 2; refine=true, selector=EntropySelector())
-println(expect(psi, "Sz"))
-```
-
-### Finite OBC TDVP
-
-```julia
-using MPSToolkit, ITensors, ITensorMPS
-
-sites = siteinds("S=1/2", 6)
-psi = MPS(sites, n -> "Up")
-
-opsum = OpSum()
-for j in 1:length(sites)
-  opsum += 1.0, "Sx", j
-end
-hamiltonian = MPO(opsum, sites)
-
-evo = TDVPEvolution(
-  hamiltonian,
-  -0.1im;
-  time_step=-0.05im,
-  nsteps=2,
-  normalize=true,
-  solver_kwargs=(maxdim=16, cutoff=1e-12),
+evolution = tebd_strang_evolution(
+  nsites,
+  0.05;
+  local_hamiltonian=(bond, weight) -> weight * spinhalf_tfim_bond_hamiltonian(nsites, bond; J=1.0, g=0.8),
+  maxdim=32,
+  cutoff=1e-12,
 )
-trunc = BondDimTruncation(8; cutoff=1e-12)
 
-scarfinder!(psi, evo, trunc, 1; refine=true, selector=EntropySelector())
+for _ in 1:4
+  evolve!(psi, evolution)
+end
+
 println(expect(psi, "Sz"))
-println(energy_density(psi, hamiltonian))
+println(maxlinkdim(psi))
 ```
 
-## Example Suite
+### Operator-Space TEBD
 
-The example tree is grouped by workflow:
+```julia
+using MPSToolkit
+using ITensors
+using ITensorMPS
 
-- `examples/benchmarks/`
-- `examples/daoe/`
-- `examples/open_systems/`
-- `examples/operator_space/`
-- `examples/scarfinder/`
+nsites = 6
+sites = pauli_siteinds(nsites)
+state = pauli_basis_state(sites, ["Z", "I", "I", "I", "I", "I"])
+
+evolution = tebd_strang_evolution(
+  nsites,
+  0.05;
+  local_hamiltonian=(bond, weight) -> weight * spinhalf_tfim_bond_hamiltonian(nsites, bond; J=1.0, g=0.8),
+  map_hamiltonian=pauli_gate_from_hamiltonian,
+  maxdim=64,
+  cutoff=1e-12,
+)
+
+evolve!(state, evolution)
+println(inner(pauli_basis_state(sites, ["Z", "I", "I", "I", "I", "I"]), state))
+```
+
+### Scheduled Operator-Space DMT
+
+```julia
+using MPSToolkit
+using ITensors
+using ITensorMPS
+
+nsites = 6
+sites = pauli_siteinds(nsites)
+state = pauli_basis_state(sites, ["Z", "I", "I", "I", "I", "I"])
+
+gate = pauli_gate_from_hamiltonian(spinhalf_tfim_bond_hamiltonian(nsites, 1; J=1.0, g=0.6), 0.05)
+schedule = collect(1:(nsites - 1))
+
+evolution = DMTGateEvolution(
+  fill(gate, length(schedule)),
+  0.05;
+  schedule=schedule,
+  reverse_schedule=collect(reverse(schedule)),
+  maxdim=16,
+  cutoff=1e-10,
+)
+
+dmt_evolve!(state, evolution)
+println(maxlinkdim(state))
+```
+
+## Example Notebooks And Scripts
+
+Examples are grouped by workflow:
+
 - `examples/tebd/`
+- `examples/operator_space/`
+- `examples/open_systems/`
+- `examples/chebyshev/`
+- `examples/scarfinder/`
+- `examples/daoe/`
+- `examples/tdvp/`
 
-Operator-space examples:
+Good starting points:
 
-- [examples/daoe/projectors.jl](/Users/ren/Codex/MPSToolkit/examples/daoe/projectors.jl)
-- [examples/operator_space/tfim_local_z.jl](/Users/ren/Codex/MPSToolkit/examples/operator_space/tfim_local_z.jl)
-- [examples/operator_space/tfim_total_sz.jl](/Users/ren/Codex/MPSToolkit/examples/operator_space/tfim_total_sz.jl)
-- [examples/operator_space/tfim_string.jl](/Users/ren/Codex/MPSToolkit/examples/operator_space/tfim_string.jl)
-- [examples/operator_space/tfim_autocorrelator.jl](/Users/ren/Codex/MPSToolkit/examples/operator_space/tfim_autocorrelator.jl)
-- [examples/operator_space/tfim_entanglement.jl](/Users/ren/Codex/MPSToolkit/examples/operator_space/tfim_entanglement.jl)
-- [examples/operator_space/custom_hamiltonians.jl](/Users/ren/Codex/MPSToolkit/examples/operator_space/custom_hamiltonians.jl)
-- [examples/operator_space/xyz_local_z.jl](/Users/ren/Codex/MPSToolkit/examples/operator_space/xyz_local_z.jl)
-- [examples/open_systems/pauli_lindblad_tebd.ipynb](/Users/ren/Codex/MPSToolkit/examples/open_systems/pauli_lindblad_tebd.ipynb)
-- [examples/open_systems/boundary_driven_xxz_steady_state.ipynb](/Users/ren/Codex/MPSToolkit/examples/open_systems/boundary_driven_xxz_steady_state.ipynb)
-
-Additional workflows:
-
-- [examples/chebyshev/two_peak_spectrum.jl](/Users/ren/Codex/MPSToolkit/examples/chebyshev/two_peak_spectrum.jl)
-- [examples/chebyshev/two_peak_spectrum.ipynb](/Users/ren/Codex/MPSToolkit/examples/chebyshev/two_peak_spectrum.ipynb)
-- [examples/chebyshev/tfim_local_spectrum.ipynb](/Users/ren/Codex/MPSToolkit/examples/chebyshev/tfim_local_spectrum.ipynb)
-- [examples/tebd/xxz_tebd_vs_ed.ipynb](/Users/ren/Codex/MPSToolkit/examples/tebd/xxz_tebd_vs_ed.ipynb)
-- [examples/benchmarks/pbc_tdvp_vs_tebd.ipynb](/Users/ren/Codex/MPSToolkit/examples/benchmarks/pbc_tdvp_vs_tebd.ipynb)
-- [examples/tebd/disordered_xxz_mbl_tebd.ipynb](/Users/ren/Codex/MPSToolkit/examples/tebd/disordered_xxz_mbl_tebd.ipynb)
-- [examples/scarfinder/xyz_spiral.jl](/Users/ren/Codex/MPSToolkit/examples/scarfinder/xyz_spiral.jl)
+- [examples/tebd/tebd_helper_apis.ipynb](examples/tebd/tebd_helper_apis.ipynb)
+- [examples/tebd/scheduler_patterns.ipynb](examples/tebd/scheduler_patterns.ipynb)
+- [examples/operator_space/operator_tebd_helper_apis.ipynb](examples/operator_space/operator_tebd_helper_apis.ipynb)
+- [examples/operator_space/dmt_scheduler.ipynb](examples/operator_space/dmt_scheduler.ipynb)
+- [examples/open_systems/pauli_lindblad_tebd.ipynb](examples/open_systems/pauli_lindblad_tebd.ipynb)
+- [examples/tebd/xxz_tebd_vs_ed.ipynb](examples/tebd/xxz_tebd_vs_ed.ipynb)
+- [examples/chebyshev/tfim_local_spectrum.ipynb](examples/chebyshev/tfim_local_spectrum.ipynb)
 
 ## Documentation
 
 Additional docs:
 
-- [docs/index.md](/Users/ren/Codex/MPSToolkit/docs/index.md)
-- [docs/architecture.md](/Users/ren/Codex/MPSToolkit/docs/architecture.md)
-- [docs/api.md](/Users/ren/Codex/MPSToolkit/docs/api.md)
-- [docs/examples.md](/Users/ren/Codex/MPSToolkit/docs/examples.md)
+- [docs/index.md](docs/index.md)
+- [docs/architecture.md](docs/architecture.md)
+- [docs/api.md](docs/api.md)
+- [docs/examples.md](docs/examples.md)
