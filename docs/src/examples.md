@@ -24,6 +24,7 @@ The example tree is grouped by workflow so related scripts and notebooks stay to
 
 ## Scripts
 
+- [`examples/scarfinder/pxp_scarfinder.ipynb`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/scarfinder/pxp_scarfinder.ipynb)
 - [`examples/scarfinder/xyz_spiral.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/scarfinder/xyz_spiral.jl)
 - [`examples/daoe/projectors.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/daoe/projectors.jl)
 

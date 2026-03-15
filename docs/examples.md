@@ -42,6 +42,7 @@ jupyter lab examples/open_systems/pauli_lindblad_tebd.ipynb
 jupyter lab examples/open_systems/boundary_driven_xxz_steady_state.ipynb
 jupyter lab examples/operator_space/dmt_scheduler.ipynb
 jupyter lab examples/operator_space/operator_tebd_helper_apis.ipynb
+jupyter lab examples/scarfinder/pxp_scarfinder.ipynb
 ```
 
 ## Workflow Index
@@ -105,5 +106,7 @@ jupyter lab examples/operator_space/operator_tebd_helper_apis.ipynb
 
 ### ScarFinder
 
+- [pxp_scarfinder.ipynb](/Users/ren/Codex/MPSToolkit/examples/scarfinder/pxp_scarfinder.ipynb)
+  Notebook setup for a 32-site open-chain PXP ScarFinder run, with `dt = 0.01` TEBD diagnostics, `Delta t = 0.1` projected steps, a 200-step projected loop, and simple convergence / revival-family diagnostics.
 - [xyz_spiral.jl](/Users/ren/Codex/MPSToolkit/examples/scarfinder/xyz_spiral.jl)
   Periodic-TEBD ScarFinder benchmark against the exact XYZ spiral family.

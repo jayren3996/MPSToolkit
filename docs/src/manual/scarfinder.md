@@ -47,11 +47,82 @@ That makes PXP a good mental model for what ScarFinder is for: not just finding 
 
 ## Example
 
-The current repository example is the periodic XYZ spiral benchmark:
+There are now two in-repo ScarFinder examples:
 
+- [examples/scarfinder/pxp_scarfinder.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/scarfinder/pxp_scarfinder.ipynb)
+  A `L = 32` open-chain PXP notebook using 3-site TEBD gates, `dt = 0.01` diagnostics, `Delta t = 0.1` projected steps, and a 200-step ScarFinder loop.
 - [examples/scarfinder/xyz_spiral.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/scarfinder/xyz_spiral.jl)
+  A periodic XYZ benchmark where the target scarred trajectory is known analytically.
 
-It uses the same core projected-evolution loop as the PXP application, but on a model where the target scarred trajectory is known analytically. That makes it a good first benchmark before moving on to the less structured PXP setting discussed in the paper.
+The PXP notebook is the direct example of the physics discussed above. The XYZ script remains useful as a controlled benchmark where the target trajectory is known analytically.
+
+## Core PXP Setup
+
+The notebook uses the public API directly. The core setup is:
+
+```julia
+using MPSToolkit
+using ITensors
+using ITensorMPS
+using LinearAlgebra
+
+function pxp_local_hamiltonian()
+    projector_dn = ComplexF64[0 0; 0 1]
+    pauli_x = ComplexF64[0 1; 1 0]
+    return kron(projector_dn, kron(pauli_x, projector_dn))
+end
+
+function pxp_schedule(nsites::Int)
+    starts = Int[]
+    for offset in 1:3
+        append!(starts, offset:3:(nsites - 2))
+    end
+    return starts
+end
+
+function pxp_mpo(sites)
+    opsum = OpSum()
+    for j in 2:(length(sites) - 1)
+        opsum += 2.0, "ProjDn", j - 1, "Sx", j, "ProjDn", j + 1
+    end
+    return MPO(opsum, sites)
+end
+
+nsites = 32
+sites = siteinds("S=1/2", nsites)
+schedule = pxp_schedule(nsites)
+local_hamiltonian = pxp_local_hamiltonian()
+hamiltonian_mpo = pxp_mpo(sites)
+
+scar_evolution = tebd_evolution_from_hamiltonians(
+    fill(local_hamiltonian, length(schedule)),
+    0.1;
+    schedule=schedule,
+    nstep=1,
+    maxdim=64,
+    cutoff=1e-10,
+)
+
+diagnostic_evolution = tebd_evolution_from_hamiltonians(
+    fill(local_hamiltonian, length(schedule)),
+    0.01;
+    schedule=schedule,
+    nstep=1,
+    maxdim=64,
+    cutoff=1e-10,
+)
+
+truncation = BondDimTruncation(1; cutoff=1e-10)
+energy_target = EnergyTarget(0.0; operator=hamiltonian_mpo, tol=1e-8, alpha=0.1, maxstep=4)
+z2 = MPS(sites, n -> isodd(n) ? "Up" : "Dn")
+psi = deepcopy(z2)
+
+for _ in 1:200
+    scarfinder_step!(psi, scar_evolution, truncation; target_energy=energy_target)
+end
+```
+
+That is the same setup used in the notebook, with the notebook adding convergence histories and a short fine-TEBD diagnostic against the `|Z2>` / `|Z2bar>` revival family.
 
 ## Selectors And Targeting
 
