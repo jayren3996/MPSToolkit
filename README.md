@@ -2,8 +2,8 @@
 
 `MPSToolkit.jl` is a low-level finite-`MPS` toolkit built on top of [`ITensors.jl`](https://itensor.github.io/ITensors.jl/stable/) and `ITensorMPS.jl`.
 
-[![Documentation - Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://jayren3996.github.io/MPSToolkit.jl/stable/)
-[![Documentation - Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://jayren3996.github.io/MPSToolkit.jl/dev/)
+[![Documentation - Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://jayren3996.github.io/MPSToolkit/stable/)
+[![Documentation - Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://jayren3996.github.io/MPSToolkit/dev/)
 
 The package is organized around explicit tensor-network building blocks instead of a single opaque workflow. You can use the high-level loops when they help, but the lower-level evolution, truncation, observable, and operator-space pieces are all exposed directly.
 
@@ -232,8 +232,8 @@ Good starting points:
 
 Additional docs:
 
-- [Stable documentation](https://jayren3996.github.io/MPSToolkit.jl/stable/)
-- [Development documentation](https://jayren3996.github.io/MPSToolkit.jl/dev/)
+- [Stable documentation](https://jayren3996.github.io/MPSToolkit/stable/)
+- [Development documentation](https://jayren3996.github.io/MPSToolkit/dev/)
 - [docs/index.md](docs/index.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/api.md](docs/api.md)

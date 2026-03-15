@@ -10,7 +10,7 @@ makedocs(
   checkdocs=:none,
   format=Documenter.HTML(
     prettyurls=PRETTY_URLS,
-    canonical="https://jayren3996.github.io/MPSToolkit.jl/stable",
+    canonical="https://jayren3996.github.io/MPSToolkit/stable",
     edit_link="main",
   ),
   pages=[
