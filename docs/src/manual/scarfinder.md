@@ -36,6 +36,14 @@ The important point is that projection is explicit. `scarfinder_step!` does not 
 
 The PXP model is the standard kinetically constrained spin-chain model for Rydberg-blockaded atom arrays, and it is one of the best-known settings for quantum many-body scar dynamics. In the ScarFinder paper, this projection loop is used on the PXP model to uncover a trajectory with nearly perfect revivals in the thermodynamic limit without assuming prior knowledge of the scar tower.
 
+For an open chain, the Hamiltonian used in the example is
+
+```math
+H_{\mathrm{PXP}} = \sum_{j=2}^{L-1} 2 P^{\downarrow}_{j-1} X_j P^{\downarrow}_{j+1},
+```
+
+where `P^\downarrow = |\downarrow\rangle\langle\downarrow|` enforces the blockade constraint on the neighboring sites and `X_j` flips the center spin.
+
 Conceptually, the PXP use case looks like:
 
 1. choose a low-entanglement initial product-state ansatz
@@ -47,18 +55,12 @@ That makes PXP a good mental model for what ScarFinder is for: not just finding 
 
 ## Example
 
-There are now two in-repo ScarFinder examples:
-
 - [examples/scarfinder/pxp_scarfinder.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/scarfinder/pxp_scarfinder.ipynb)
   A `L = 32` open-chain PXP notebook using 3-site TEBD gates, `dt = 0.01` diagnostics, `Delta t = 0.1` projected steps, and a 200-step ScarFinder loop.
-- [examples/scarfinder/xyz_spiral.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/scarfinder/xyz_spiral.jl)
-  A periodic XYZ benchmark where the target scarred trajectory is known analytically.
-
-The PXP notebook is the direct example of the physics discussed above. The XYZ script remains useful as a controlled benchmark where the target trajectory is known analytically.
 
 ## Core PXP Setup
 
-The notebook uses the public API directly. The core setup is:
+The notebook uses the public API directly. The minimal ScarFinder loop is:
 
 ```julia
 using MPSToolkit
@@ -122,7 +124,7 @@ for _ in 1:200
 end
 ```
 
-That is the same setup used in the notebook, with the notebook adding convergence histories and a short fine-TEBD diagnostic against the `|Z2>` / `|Z2bar>` revival family.
+The notebook adds warmup, convergence histories, and a short fine-TEBD diagnostic against the `|Z2>` / `|Z2bar>` revival family, but the loop above is the core ScarFinder setup.
 
 ## Selectors And Targeting
 
