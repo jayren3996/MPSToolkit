@@ -54,4 +54,5 @@ dmt_evolve!
 
 ## References
 
-- C. W. von Keyserlingk, T. Rakovszky, F. Pollmann, and S. L. Sondhi, [Emergent Hydrodynamics in Nonequilibrium Quantum Systems](https://arxiv.org/abs/1902.01859)
+- Stuart Yi-Thomas, Brayden Ware, Jay D. Sau, and Christopher David White, [Comparing numerical methods for hydrodynamics in a one-dimensional lattice spin model](https://arxiv.org/abs/2310.06886)
+- En-Jui Kuo, Brayden Ware, Peter Lunts, Mohammad Hafezi, and Christopher David White, [Energy diffusion in weakly interacting chains with fermionic dissipation-assisted operator evolution](https://arxiv.org/abs/2311.17148)
