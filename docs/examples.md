@@ -33,6 +33,7 @@ Open the notebook benchmark in Jupyter or VS Code:
 jupyter lab examples/benchmarks/pbc_tdvp_vs_tebd.ipynb
 jupyter lab examples/chebyshev/two_peak_spectrum.ipynb
 jupyter lab examples/chebyshev/tfim_local_spectrum.ipynb
+jupyter lab examples/chebyshev/energy_cutoff_comparison.ipynb
 jupyter lab examples/tebd/xxz_tebd_vs_ed.ipynb
 jupyter lab examples/tebd/disordered_xxz_mbl_tebd.ipynb
 jupyter lab examples/tebd/scheduler_patterns.ipynb
@@ -53,6 +54,8 @@ jupyter lab examples/operator_space/operator_tebd_helper_apis.ipynb
   Notebook version of the same workflow, with a method overview, model explanation, and plots of the reconstructed spectrum and moment sequence.
 - [tfim_local_spectrum.ipynb](/Users/ren/Codex/MPSToolkit/examples/chebyshev/tfim_local_spectrum.ipynb)
   Local TFIM spectral function from the probe state `S^z_j |gs⟩`, comparing the Chebyshev reconstruction against exact finite-size spectral sticks.
+- [energy_cutoff_comparison.ipynb](/Users/ren/Codex/MPSToolkit/examples/chebyshev/energy_cutoff_comparison.ipynb)
+  Notebook comparison for the Chebyshev energy-window cutoff, starting from a small exact low-energy reference and then moving to a larger truncation-limited disordered-TFIM calculation.
 
 ### DAOE
 

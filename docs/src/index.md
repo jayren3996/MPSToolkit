@@ -16,6 +16,7 @@ Pkg.add(url="https://github.com/jayren3996/MPSToolkit.git")
 - dense-gate TEBD on finite OBC chains
 - helper-driven TEBD setup from local Hamiltonians
 - MPO-based TDVP
+- ScarFinder projection and selector workflows
 - operator-space DMT with scheduled gate evolution
 - Pauli-basis helpers for operator-space calculations
 - DAOE / FDAOE projector MPOs
@@ -33,8 +34,11 @@ Pkg.add(url="https://github.com/jayren3996/MPSToolkit.git")
 
 - [Getting Started](getting-started.md)
 - [Architecture](manual/architecture.md)
-- [Evolution](manual/evolution.md)
+- [TEBD And TDVP](manual/tebd-tdvp.md)
+- [ScarFinder](manual/scarfinder.md)
 - [Operator Space](manual/operator-space.md)
+- [DAOE](manual/daoe.md)
+- [DMT](manual/dmt.md)
 - [Chebyshev](manual/chebyshev.md)
 - [Examples](examples.md)
 - [API Reference](api.md)

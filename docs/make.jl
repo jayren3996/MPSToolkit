@@ -18,8 +18,11 @@ makedocs(
     "Getting Started" => "getting-started.md",
     "Manual" => [
       "Architecture" => "manual/architecture.md",
-      "Evolution" => "manual/evolution.md",
+      "TEBD And TDVP" => "manual/tebd-tdvp.md",
+      "ScarFinder" => "manual/scarfinder.md",
       "Operator Space" => "manual/operator-space.md",
+      "DAOE" => "manual/daoe.md",
+      "DMT" => "manual/dmt.md",
       "Chebyshev" => "manual/chebyshev.md",
     ],
     "Examples" => "examples.md",

@@ -63,7 +63,10 @@ evolve!(state, evolution)
 ## Next Steps
 
 - For the package layout and shared algorithm split, see [Architecture](manual/architecture.md).
-- For TEBD / TDVP / DMT concepts, see [Evolution](manual/evolution.md).
+- For physical-state evolution, see [TEBD And TDVP](manual/tebd-tdvp.md).
+- For projection-and-refinement workflows, see [ScarFinder](manual/scarfinder.md).
 - For operator-space workflows, see [Operator Space](manual/operator-space.md).
+- For operator-space projection MPOs, see [DAOE](manual/daoe.md).
+- For operator-space truncation, see [DMT](manual/dmt.md).
 - For spectral workflows, see [Chebyshev](manual/chebyshev.md).
 - For runnable notebooks and scripts, see [Examples](examples.md).
