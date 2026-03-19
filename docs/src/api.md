@@ -1,6 +1,13 @@
 # API Reference
 
-The workflow-specific manual pages now carry most of the primary API docs:
+This page is the index for API-level documentation.
+
+For most users, the best reading order is:
+
+1. start with the relevant manual page
+2. come here when you want the exact callable names, signatures, and source-backed docstrings
+
+The workflow-specific manual pages carry the main narrative API docs:
 
 - [TEBD And TDVP](manual/tebd-tdvp.md)
 - [ScarFinder](manual/scarfinder.md)
@@ -9,7 +16,7 @@ The workflow-specific manual pages now carry most of the primary API docs:
 - [DMT](manual/dmt.md)
 - [Chebyshev](manual/chebyshev.md)
 
-This page keeps the remaining cross-cutting helpers in one place.
+This page keeps the cross-cutting entry points and reusable helpers in one place.
 
 ## Dispatch And Shared Entry Points
 

@@ -2,6 +2,13 @@
     DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=480, connector_buffer=8)
 
 Options controlling operator-space density matrix truncation.
+
+# Fields
+- `maxdim`: Target bond dimension after DMT truncation.
+- `cutoff`: Truncation cutoff used in the repair SVD.
+- `gate_maxdim`: Temporary bond dimension budget used during raw gate application.
+- `connector_buffer`: Number of connector directions protected before reduced-matrix
+  truncation.
 """
 Base.@kwdef struct DMTOptions
   maxdim::Int = 30
@@ -10,12 +17,22 @@ Base.@kwdef struct DMTOptions
   connector_buffer::Int = 8
 end
 
+"""
+    _pauli_identity_env(site)
+
+Return the local Pauli-basis identity ket used when building DMT environments.
+"""
 function _pauli_identity_env(site)
   tensor = ITensor(site)
   tensor[site => 1] = 1.0
   return tensor
 end
 
+"""
+    _left_identity_environment(psi, stop)
+
+Contract the left identity environment used by DMT truncation up to site `stop`.
+"""
 function _left_identity_environment(psi::MPS, stop::Integer)
   env = ITensor(1.0)
   for site in 1:Int(stop)
@@ -24,6 +41,11 @@ function _left_identity_environment(psi::MPS, stop::Integer)
   return env
 end
 
+"""
+    _right_identity_environment(psi, start)
+
+Contract the right identity environment used by DMT truncation starting at site `start`.
+"""
 function _right_identity_environment(psi::MPS, start::Integer)
   env = ITensor(1.0)
   for site in length(psi):-1:Int(start)
@@ -32,12 +54,32 @@ function _right_identity_environment(psi::MPS, start::Integer)
   return env
 end
 
+"""
+    _dmt_truncation_bond(start, span, direction)
+
+Return the bond index at which DMT truncation should be applied for one local update.
+"""
 function _dmt_truncation_bond(start::Integer, span::Integer, direction::Symbol)
   direction === :R && return Int(start)
   direction === :L && return Int(start + span - 2)
   throw(ArgumentError("DMT direction must be :R or :L"))
 end
 
+"""
+    _mat_trunc!(matrix_data, χ; connector_buffer=8)
+
+Apply the reduced-matrix truncation step used by DMT.
+
+# Arguments
+- `matrix_data`: Dense reduced matrix to truncate in place.
+- `χ`: Number of singular directions to retain after removing the protected connector block.
+
+# Keyword Arguments
+- `connector_buffer`: Size of the connector block left untouched at the top-left corner.
+
+# Returns
+- `nothing`. The input matrix is modified in place.
+"""
 function _mat_trunc!(matrix_data::AbstractMatrix, χ::Integer; connector_buffer::Integer=8)
   size(matrix_data, 1) < connector_buffer + 1 && return nothing
   χ + connector_buffer >= size(matrix_data, 1) && return nothing
@@ -56,6 +98,24 @@ function _mat_trunc!(matrix_data::AbstractMatrix, χ::Integer; connector_buffer:
   return nothing
 end
 
+"""
+    _dmt_bond_truncate!(psi, bond; maxdim, cutoff, direction=:R, connector_buffer=8)
+
+Perform one DMT-preserving bond truncation step.
+
+# Arguments
+- `psi`: Operator-space `MPS` to mutate in place.
+- `bond`: Bond index to truncate.
+
+# Keyword Arguments
+- `maxdim`: Target bond dimension.
+- `cutoff`: Truncation cutoff used in the final repair SVD.
+- `direction`: Sweep direction, either `:R` or `:L`.
+- `connector_buffer`: Number of protected connector directions.
+
+# Returns
+- The mutated `psi`.
+"""
 function _dmt_bond_truncate!(psi::MPS, bond::Integer; maxdim::Integer, cutoff::Real, direction::Symbol=:R, connector_buffer::Integer=8)
   maxdim > 0 || return psi
   1 <= bond < length(psi) || throw(ArgumentError("DMT bond must lie in 1:length(psi)-1"))
@@ -98,7 +158,22 @@ end
 """
     dmt_step!(psi, gate, bond; maxdim=30, cutoff=1e-12, direction=:R, gate_maxdim=max(maxdim * 16, 64), connector_buffer=8)
 
-Apply one local operator-space gate and then perform DMT-preserving truncation on the associated bond.
+Apply one local operator-space gate and then perform DMT-preserving truncation.
+
+# Arguments
+- `psi`: Operator-space `MPS` to mutate in place.
+- `gate`: Dense local gate in the Pauli basis.
+- `bond`: Left-edge location of the local update.
+
+# Keyword Arguments
+- `maxdim`: Target post-truncation bond dimension.
+- `cutoff`: Truncation cutoff used in the final repair SVD.
+- `direction`: Sweep direction, either `:R` or `:L`.
+- `gate_maxdim`: Temporary bond dimension budget used for the raw gate application.
+- `connector_buffer`: Number of protected connector directions.
+
+# Returns
+- The mutated `psi`.
 """
 function dmt_step!(
   psi::MPS,
@@ -128,7 +203,20 @@ end
 """
     dmt_evolve!(psi, evo::DMTGateEvolution)
 
-Run scheduled operator-space DMT evolution using the same gate/schedule structure as local-gate TEBD.
+Run scheduled operator-space DMT evolution.
+
+# Arguments
+- `psi`: Operator-space `MPS` to mutate in place.
+- `evo`: [`DMTGateEvolution`](@ref) describing the gate specification, schedules, and
+  truncation budgets.
+
+# Returns
+- The mutated and normalized `psi`.
+
+# Notes
+- One call runs `evo.nstep` complete forward-and-reverse sweeps.
+- `normalize!(psi)` is applied at the end because operator-space trajectories typically
+  interpret the state as a normalized vectorized operator.
 """
 function dmt_evolve!(psi::MPS, evo::DMTGateEvolution)
   for _ in 1:evo.nstep
@@ -163,6 +251,11 @@ function dmt_evolve!(psi::MPS, evo::DMTGateEvolution)
   return psi
 end
 
+"""
+    evolve!(psi, evo::DMTGateEvolution)
+
+Dispatch operator-space evolution through the DMT backend.
+"""
 function evolve!(psi::MPS, evo::DMTGateEvolution)
   return dmt_evolve!(psi, evo)
 end

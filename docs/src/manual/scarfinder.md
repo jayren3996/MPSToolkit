@@ -1,13 +1,36 @@
 # ScarFinder
 
-The ScarFinder layer packages a small but flexible projection workflow:
+ScarFinder in `MPSToolkit.jl` is a deliberately explicit workflow:
 
 1. evolve the state
-2. truncate or project it
+2. project or truncate it
 3. optionally match a target energy
 4. optionally refine along a short projected trajectory
 
-That split makes ScarFinder usable with both local-gate and MPO-based evolution backends.
+That split is important. ScarFinder is not a hidden backend with its own internal state machine. It is a small, composable loop built from public pieces like `evolve!`, `project!`, `match_energy!`, and selector scoring.
+
+## When To Use It
+
+ScarFinder is useful when you want to search for low-entanglement or approximately recurrent trajectories without baking that search logic directly into the evolution engine itself. In practice, that often means:
+
+- evolve under a physical or effective Hamiltonian for a short time
+- project back into a chosen variational manifold
+- repeat until the trajectory stabilizes
+- rank or refine the resulting orbit with a simple selector
+
+## Recommended Step-Count Rule
+
+ScarFinder now treats an effective evolution step count of `1` as a bad main-loop setting.
+
+- If `scarfinder_step!`, `scarfinder!`, or `trajectory_refine!` receive:
+  - `LocalGateEvolution` with `nstep == 1`
+  - `DMTGateEvolution` with `nstep == 1`
+  - `TDVPEvolution` with effective steps `1` via `nsteps` or `nsweeps`
+- then ScarFinder emits a warning and internally uses `10` for that ScarFinder call.
+
+This rule is local to ScarFinder only. The global TEBD, DMT, and TDVP constructors still keep their own defaults. If you already know you are building an evolution object for ScarFinder, it is best to set `nstep=10` or `nsteps=10` explicitly and avoid the warning.
+
+Internal correction moves inside `match_energy!` still use one-step updates on purpose. Those are narrow post-step corrections, not the main ScarFinder trajectory evolution.
 
 ## Minimal Workflow
 
@@ -30,7 +53,7 @@ scarfinder!(
 )
 ```
 
-The important point is that projection is explicit. `scarfinder_step!` does not hide a bespoke evolution backend; it composes the same public `evolve!`, `project!`, and `match_energy!` style building blocks that you can also call yourself.
+The important point is that projection is explicit. `scarfinder_step!` does not hide a bespoke evolution backend; it composes the same public building blocks that you can also call yourself.
 
 ## PXP Background
 
@@ -42,7 +65,7 @@ For an open chain, the Hamiltonian used in the example is
 H_{\mathrm{PXP}} = \sum_{j=2}^{L-1} 2 P^{\downarrow}_{j-1} X_j P^{\downarrow}_{j+1},
 ```
 
-where `P^\downarrow = |\downarrow\rangle\langle\downarrow|` enforces the blockade constraint on the neighboring sites and `X_j` flips the center spin.
+where `P^\downarrow = |\downarrow\rangle\langle\downarrow|` enforces the blockade constraint on neighboring sites and `X_j` flips the center spin.
 
 Conceptually, the PXP use case looks like:
 
@@ -56,11 +79,11 @@ That makes PXP a good mental model for what ScarFinder is for: not just finding 
 ## Example
 
 - [examples/scarfinder/pxp_scarfinder.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/scarfinder/pxp_scarfinder.ipynb)
-  A `L = 32` open-chain PXP notebook using 3-site TEBD gates, `dt = 0.01` diagnostics, `Delta t = 0.1` projected steps, and a 200-step ScarFinder loop.
+  A `L = 32` open-chain PXP notebook using 3-site TEBD gates, explicit projection, energy targeting, and selector-based diagnostics.
 
 ## Core PXP Setup
 
-The notebook uses the public API directly. The minimal ScarFinder loop is:
+The notebook uses the public API directly. A minimal ScarFinder-oriented setup is:
 
 ```julia
 using MPSToolkit
@@ -100,16 +123,7 @@ scar_evolution = tebd_evolution_from_hamiltonians(
     fill(local_hamiltonian, length(schedule)),
     0.1;
     schedule=schedule,
-    nstep=1,
-    maxdim=64,
-    cutoff=1e-10,
-)
-
-diagnostic_evolution = tebd_evolution_from_hamiltonians(
-    fill(local_hamiltonian, length(schedule)),
-    0.01;
-    schedule=schedule,
-    nstep=1,
+    nstep=10,
     maxdim=64,
     cutoff=1e-10,
 )
@@ -124,15 +138,16 @@ for _ in 1:200
 end
 ```
 
-The notebook adds warmup, convergence histories, and a short fine-TEBD diagnostic against the `|Z2>` / `|Z2bar>` revival family, but the loop above is the core ScarFinder setup.
+If you are using TDVP instead of dense-gate TEBD, the same recommendation applies: prefer an explicit `nsteps=10` configuration when the evolution object is intended for ScarFinder.
 
 ## Selectors And Targeting
 
 - `BondDimTruncation` controls the explicit projection budget.
 - `EnergyTarget` adds a post-step correction loop toward a desired expectation value.
 - `EntropySelector` and `FidelitySelector` provide small scoring rules for trajectory refinement.
+- `SelectionContext` carries optional external information, such as the reference state needed by `FidelitySelector`.
 
-This is useful when you want to search for low-entanglement or approximately recurrent trajectories without hard-wiring the search logic into the evolution engine itself.
+This makes the search logic easy to inspect and easy to modify. If you want to replace the projector, selector, or energy-correction step, you can do that without rewriting the entire workflow.
 
 ## API
 

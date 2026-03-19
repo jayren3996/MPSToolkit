@@ -20,6 +20,25 @@ The returned vector is stored in the natural Julia order:
 - `moments[1] = μ_0`
 - `moments[2] = μ_1`
 - ...
+
+# Arguments
+- `H`: Rescaled `MPO` whose spectrum should already lie in `[-1, 1]`.
+- `psi`: Initial state used to seed the Chebyshev recursion.
+
+# Keyword Arguments
+- `order`: Number of moments to compute.
+- `maxdim`: Bond dimension cap used during MPO application and vector addition.
+- `cutoff`: Truncation cutoff used during MPO application and vector addition.
+- `normalize_initial`: If `true`, normalize the starting state before building moments.
+- `energy_cutoff`: If `true`, apply [`energy_cutoff!`](@ref) after each recursion step.
+- `energy_cutoff_sweeps`: Number of sweeps used by `energy_cutoff!`.
+- `krylovdim`: Local Krylov subspace dimension used by `energy_cutoff!`.
+- `window`: Allowed rescaled energy window for the cutoff projector.
+- `energy_cutoff_tol`: Early-stop tolerance for the cutoff sweeps.
+- `energy_cutoff_verbose`: If `true`, print per-sweep cutoff diagnostics.
+
+# Returns
+- A dense `Vector{Float64}` storing `μ_0, μ_1, ..., μ_{order-1}`.
 """
 function chebyshev_moments(
   H::MPO,
@@ -87,6 +106,18 @@ end
     _optimize_chebyshev_vector!(psi, h2, current, previous; nsweep=5)
 
 Refine the fitted Chebyshev vector `psi ≈ 2H * current - previous` by sweeping.
+
+# Arguments
+- `psi`: Current approximation to the next Chebyshev vector. Mutated in place.
+- `h2`: The doubled Hamiltonian `2H`.
+- `current`: Current Chebyshev vector.
+- `previous`: Previous Chebyshev vector, already negated in the caller when appropriate.
+
+# Keyword Arguments
+- `nsweep`: Number of left-right/right-left optimization sweeps.
+
+# Returns
+- The mutated `psi`.
 """
 function _optimize_chebyshev_vector!(psi::MPS, h2::MPO, current::MPS, previous::MPS; nsweep::Integer=5)
   nsites = length(psi)
@@ -137,6 +168,20 @@ end
 Apply the standalone CheMPS-style energy-window projection to an `MPS` with respect to the
 effective local problem induced by the MPO `h`. This is intended for Chebyshev vectors after
 the Hamiltonian has already been rescaled into the target Chebyshev window.
+
+# Arguments
+- `psi`: State to mutate in place.
+- `h`: Rescaled Hamiltonian `MPO`.
+
+# Keyword Arguments
+- `sweeps`: Maximum number of left-right/right-left cutoff sweeps.
+- `krylovdim`: Local Krylov subspace dimension used at each site update.
+- `window`: Allowed rescaled energy window.
+- `tol`: Early-stop tolerance on the accumulated sweep error estimate.
+- `verbose`: If `true`, print per-sweep diagnostics.
+
+# Returns
+- The mutated `psi`.
 """
 function energy_cutoff!(
   psi::MPS,
@@ -162,6 +207,11 @@ function energy_cutoff!(
   return psi
 end
 
+"""
+    _energy_cutoff_sweep!(projector, psi; krylovdim, window)
+
+Run one bidirectional energy-cutoff sweep and return its RMS error estimate.
+"""
 function _energy_cutoff_sweep!(projector::ProjMPO, psi::MPS; krylovdim::Integer, window::Real)
   nsites = length(psi)
   accumulated_error = 0.0
@@ -183,6 +233,14 @@ function _energy_cutoff_sweep!(projector::ProjMPO, psi::MPS; krylovdim::Integer,
   return sqrt(accumulated_error / nsites)
 end
 
+"""
+    _krylov_energy_cutoff(projector, tensor, krylovdim; window=1.0)
+
+Project one local tensor onto the target energy window using a Krylov approximation.
+
+# Returns
+- `(error_estimate, projected_tensor)`.
+"""
 function _krylov_energy_cutoff(projector::ProjMPO, tensor::ITensor, krylovdim::Integer; window::Real=1.0)
   tensor_norm = norm(tensor)
   iszero(tensor_norm) && return 0.0, tensor
@@ -195,6 +253,14 @@ function _krylov_energy_cutoff(projector::ProjMPO, tensor::ITensor, krylovdim::I
   return error_estimate, tensor_norm * projected_tensor
 end
 
+"""
+    _project_energy_window(eigenvalues, eigenvectors; window=1.0)
+
+Project a local Krylov basis state onto the eigenmodes whose energies lie within `[-window, window]`.
+
+# Returns
+- `(projected_coefficients, removed_weight)`.
+"""
 function _project_energy_window(eigenvalues::AbstractVector, eigenvectors::AbstractMatrix; window::Real=1.0)
   coefficients = zeros(eltype(eigenvectors), size(eigenvectors, 1))
   coefficients[1] = one(eltype(coefficients))
@@ -212,6 +278,14 @@ function _project_energy_window(eigenvalues::AbstractVector, eigenvectors::Abstr
   return coefficients, removed_weight
 end
 
+"""
+    _lanczos_tridiagonal(projector, tensor, krylovdim)
+
+Build the Lanczos tridiagonal matrix and basis vectors for one local effective projector problem.
+
+# Returns
+- `(tridiagonal_matrix, basis_vectors)`.
+"""
 function _lanczos_tridiagonal(projector::ProjMPO, tensor::ITensor, krylovdim::Integer)
   basis = Vector{ITensor}(undef, krylovdim)
   diagonal = Vector{Float64}(undef, krylovdim)

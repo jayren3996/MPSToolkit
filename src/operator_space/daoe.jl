@@ -3,6 +3,15 @@
 
 Construct a vector of dimension-4 site indices suitable for vectorized local Pauli bases.
 The basis ordering is `(I, X, Y, Z)`.
+
+# Arguments
+- `nsites`: Number of operator-space sites.
+
+# Keyword Arguments
+- `tagprefix`: Prefix used when naming the generated `Index` tags.
+
+# Returns
+- A vector of length `nsites` containing dimension-4 `Index` objects.
 """
 function pauli_siteinds(nsites::Integer; tagprefix::AbstractString="PauliSpace")
   nsites < 1 && throw(ArgumentError("number of Pauli-basis sites must be positive"))
@@ -12,7 +21,7 @@ end
 """
     _daoe_nontrivial(local_state)
 
-Return `true` if the local Pauli-basis label is nontrivial for DAOE counting.
+Return `true` if the local Pauli-basis label contributes to the DAOE Pauli weight.
 """
 function _daoe_nontrivial(local_state::Int)
   return local_state != 1
@@ -22,6 +31,9 @@ end
     _daoe_transition(weight, local_state, lstar, gamma)
 
 Return the next DAOE virtual weight and local decay factor for one Pauli-basis symbol.
+
+# Returns
+- `(next_weight, coeff)` for the diagonal MPO transition rule.
 """
 function _daoe_transition(weight::Int, local_state::Int, lstar::Int, gamma::Real)
   if !_daoe_nontrivial(local_state)
@@ -87,6 +99,9 @@ end
     _fdaoe_transition(state, local_state, wstar, gamma)
 
 Return the next FDAOE virtual state and local decay factor for one Pauli-basis symbol.
+
+# Returns
+- `(next_state, coeff)` for the diagonal MPO transition rule.
 """
 function _fdaoe_transition(state::Int, local_state::Int, wstar::Int, gamma::Real)
   odd_parity = _fdaoe_parity(state, wstar)
@@ -109,6 +124,14 @@ end
     _diagonal_projector_mpo(sites, bond_dim, transition_rule)
 
 Build a diagonal MPO from a virtual-state transition rule on the local Pauli basis.
+
+# Arguments
+- `sites`: Pauli-space site indices.
+- `bond_dim`: MPO bond dimension required by the automaton state space.
+- `transition_rule`: Function `(state, local_state) -> (next_state, coeff)`.
+
+# Returns
+- A diagonal `MPO` whose action is fully determined by the supplied automaton.
 """
 function _diagonal_projector_mpo(sites, bond_dim::Int, transition_rule::Function)
   nsites = length(sites)
@@ -168,6 +191,16 @@ end
 
 Construct the DAOE projector MPO that damps Pauli strings by their Pauli weight beyond cutoff `lstar`.
 The local operator basis is assumed to be ordered as `(I, X, Y, Z)`.
+
+# Arguments
+- `sites`: Pauli-space site indices.
+
+# Keyword Arguments
+- `lstar`: Pauli-weight cutoff. Strings heavier than `lstar` acquire exponential damping.
+- `gamma`: Damping strength.
+
+# Returns
+- A diagonal `MPO` implementing the DAOE projector.
 """
 function pauli_daoe_projector(sites; lstar::Integer, gamma::Real)
   lstar < 0 && throw(ArgumentError("lstar must be nonnegative"))
@@ -184,6 +217,16 @@ end
 
 Construct the FDAOE projector MPO that damps Pauli-basis operator strings by fermionic Majorana weight beyond cutoff `wstar`.
 The local operator basis is assumed to be ordered as `(I, X, Y, Z)`.
+
+# Arguments
+- `sites`: Pauli-space site indices.
+
+# Keyword Arguments
+- `wstar`: Fermionic Majorana-weight cutoff.
+- `gamma`: Damping strength applied beyond the cutoff.
+
+# Returns
+- A diagonal `MPO` implementing the fermionic DAOE projector.
 """
 function fdaoe_projector(sites; wstar::Integer, gamma::Real)
   wstar < 0 && throw(ArgumentError("wstar must be nonnegative"))

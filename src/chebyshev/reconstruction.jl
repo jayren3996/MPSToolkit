@@ -2,6 +2,13 @@
     jackson_damping(n, order)
 
 Return the Jackson damping factor for Chebyshev index `n = 0, 1, ..., order - 1`.
+
+# Arguments
+- `n`: Zero-based Chebyshev index.
+- `order`: Total number of moments in the truncated expansion.
+
+# Returns
+- The scalar Jackson damping factor for index `n`.
 """
 function jackson_damping(n::Integer, order::Integer)
   0 <= n < order || throw(ArgumentError("Jackson index must satisfy 0 <= n < order"))
@@ -14,6 +21,12 @@ end
     jackson_kernel(order)
 
 Return the full Jackson damping kernel for a Chebyshev series of length `order`.
+
+# Arguments
+- `order`: Number of retained Chebyshev moments.
+
+# Returns
+- A dense vector whose `n + 1` entry stores the Jackson weight for moment `μ_n`.
 """
 function jackson_kernel(order::Integer)
   order > 0 || throw(ArgumentError("Chebyshev order must be positive"))
@@ -25,6 +38,19 @@ end
 
 Evaluate the Chebyshev reconstruction at rescaled frequency `x ∈ (-1, 1)`.
 If `kernel` is omitted, the raw truncated series is used.
+
+# Arguments
+- `x`: Rescaled Chebyshev coordinate in `(-1, 1)`.
+- `moments`: Moment vector in the convention `moments[n + 1] = μ_n`.
+
+# Keyword Arguments
+- `kernel`: Optional damping weights with the same length as `moments`.
+
+# Returns
+- The reconstructed spectral density at `x`.
+
+# Notes
+- The returned value already includes the Chebyshev weight factor `1 / (π * sqrt(1 - x^2))`.
 """
 function reconstruct_chebyshev(x::Real, moments::AbstractVector{<:Real}; kernel::Union{Nothing, AbstractVector{<:Real}}=nothing)
   abs(x) < 1 || throw(ArgumentError("Chebyshev reconstruction requires x in (-1, 1)"))
@@ -48,6 +74,11 @@ function reconstruct_chebyshev(x::Real, moments::AbstractVector{<:Real}; kernel:
   return value / (π * sqrt(1 - x^2))
 end
 
+"""
+    _resolve_kernel(kernel, order)
+
+Normalize a user-facing kernel specification into either `nothing` or a dense weight vector.
+"""
 function _resolve_kernel(kernel, order::Integer)
   if kernel === nothing
     return nothing
@@ -60,6 +91,11 @@ function _resolve_kernel(kernel, order::Integer)
   throw(ArgumentError("unsupported Chebyshev kernel specification: $(kernel)"))
 end
 
+"""
+    _kernel_weight(kernel, index)
+
+Return the weight associated with one moment index, defaulting to `1.0` when no kernel is present.
+"""
 function _kernel_weight(kernel, index::Integer)
   return isnothing(kernel) ? 1.0 : kernel[index]
 end

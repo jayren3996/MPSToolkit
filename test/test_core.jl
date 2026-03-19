@@ -47,6 +47,10 @@ mutable struct FidelityState
   value::Int
 end
 
+mutable struct StepCountState
+  value::Int
+end
+
 MPSToolkit.evolve!(psi::DummyState, evo::LocalGateEvolution) = (psi.value += 1; psi)
 MPSToolkit.project!(psi::DummyState, trunc::BondDimTruncation) = (psi.value *= 2; psi)
 MPSToolkit.energy_density(psi::DummyState, op; kwargs...) = psi.value
@@ -66,6 +70,11 @@ MPSToolkit.evolve!(psi::FidelityState, evo::LocalGateEvolution) = (psi.value += 
 MPSToolkit.project!(psi::FidelityState, trunc::BondDimTruncation) = psi
 MPSToolkit.score(selector::FidelitySelector, psi::FidelityState, context::SelectionContext) = abs(psi.value - context.reference_state)
 MPSToolkit._assign_state!(psi::FidelityState, updated::FidelityState) = (psi.value = updated.value; psi)
+
+MPSToolkit.evolve!(psi::StepCountState, evo::LocalGateEvolution) = (psi.value += evo.nstep; psi)
+MPSToolkit.evolve!(psi::StepCountState, evo::DMTGateEvolution) = (psi.value += evo.nstep; psi)
+MPSToolkit.evolve!(psi::StepCountState, evo::TDVPEvolution) = (psi.value += something(evo.nsteps, evo.nsweeps); psi)
+MPSToolkit.project!(psi::StepCountState, trunc::BondDimTruncation) = psi
 
 @testset "feature namespaces" begin
   @test MPSToolkit.Evolution.LocalGateEvolution === LocalGateEvolution
@@ -146,6 +155,35 @@ end
   context = SelectionContext(; reference_state=3)
 
   scarfinder!(psi, evo, trunc, 1; refine=true, selector=selector, selector_context=context, refine_steps=3)
+
+  @test psi.value == 3
+end
+
+@testset "scarfinder upgrades single-step evolutions" begin
+  trunc = BondDimTruncation(2)
+
+  local_state = StepCountState(0)
+  local_evo = LocalGateEvolution(reshape(1:4, 2, 2), 0.1)
+  @test_logs (:warn, r"ScarFinder") scarfinder_step!(local_state, local_evo, trunc)
+  @test local_state.value == 10
+
+  dmt_state = StepCountState(0)
+  dmt_evo = DMTGateEvolution(reshape(1:4, 2, 2), 0.1; schedule=[1])
+  @test_logs (:warn, r"ScarFinder") scarfinder_step!(dmt_state, dmt_evo, trunc)
+  @test dmt_state.value == 10
+
+  tdvp_state = StepCountState(0)
+  tdvp_evo = TDVPEvolution(reshape(1:4, 2, 2), -0.1im; nsteps=1)
+  @test_logs (:warn, r"ScarFinder") scarfinder_step!(tdvp_state, tdvp_evo, trunc)
+  @test tdvp_state.value == 10
+end
+
+@testset "scarfinder preserves non-unit step counts" begin
+  psi = StepCountState(0)
+  evo = LocalGateEvolution(reshape(1:4, 2, 2), 0.1; nstep=3)
+  trunc = BondDimTruncation(2)
+
+  scarfinder_step!(psi, evo, trunc)
 
   @test psi.value == 3
 end

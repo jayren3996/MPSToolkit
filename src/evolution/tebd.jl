@@ -1,7 +1,17 @@
 """
     _bond_start(bond)
 
-Normalize a scheduled finite-MPS bond specifier to its left-site index.
+Normalize a scheduled finite-`MPS` bond specifier to its left-site index.
+
+# Arguments
+- `bond`: Bond identifier stored in a TEBD schedule.
+
+# Returns
+- The left-site index at which the local gate should be applied.
+
+# Notes
+- The current implementation accepts integer bond labels unchanged, but the helper exists so
+  richer schedule encodings can be introduced without rewriting callers.
 """
 function _bond_start(bond::Integer)
   return Int(bond)
@@ -10,7 +20,14 @@ end
 """
     _default_gate_from_hamiltonian(h, step_dt)
 
-Convert a dense local Hamiltonian into a dense TEBD gate over step `step_dt`.
+Convert a dense local Hamiltonian into a dense real-time TEBD gate.
+
+# Arguments
+- `h`: Dense local Hamiltonian matrix.
+- `step_dt`: Time increment attached to that local update.
+
+# Returns
+- `exp(-im * step_dt * h)`.
 """
 function _default_gate_from_hamiltonian(h::AbstractMatrix, step_dt)
   return exp(-im * step_dt * h)
@@ -19,7 +36,17 @@ end
 """
     _dense_local_operator(sites, op)
 
-Convert a dense local operator matrix into an ITensor acting on `sites`.
+Convert a dense local operator matrix into an `ITensor` acting on `sites`.
+
+# Arguments
+- `sites`: Site indices defining the local Hilbert space ordering.
+- `op`: Dense square matrix whose dimension matches `prod(dim.(sites))`.
+
+# Returns
+- An `ITensor` with primed output legs and dagged input legs.
+
+# Notes
+- This helper is shared by gate application and dense local observable evaluation.
 """
 function _dense_local_operator(sites, op::AbstractMatrix)
   dims = dim.(sites)
@@ -33,6 +60,16 @@ end
     _operator_span(psi, op)
 
 Infer the support size of a dense local operator from the site dimension of `psi`.
+
+# Arguments
+- `psi`: Finite `MPS` whose local site dimension defines the base Hilbert-space dimension.
+- `op`: Dense square local operator matrix.
+
+# Returns
+- The number of sites acted on by `op`.
+
+# Notes
+- The calculation assumes a uniform local dimension across the chain.
 """
 function _operator_span(psi::MPS, op::AbstractMatrix)
   size(op, 1) == size(op, 2) || throw(ArgumentError("dense local operator must be square"))
@@ -46,7 +83,15 @@ end
 """
     _gate_for_step(gate_spec, bond, index)
 
-Resolve the concrete dense gate to apply for one finite-TEBD schedule entry.
+Resolve the concrete dense gate to apply for one TEBD schedule entry.
+
+# Arguments
+- `gate_spec`: Gate specification stored inside an evolution object.
+- `bond`: Bond label for the current schedule entry.
+- `index`: Position of the current entry inside the schedule.
+
+# Returns
+- The dense matrix that should be applied for this schedule entry.
 """
 function _gate_for_step(gate_spec::AbstractMatrix, bond, index)
   return gate_spec
@@ -73,7 +118,19 @@ end
 """
     tebd_strang_schedule(nsites)
 
-Return the nearest-neighbor odd-even-odd Strang schedule and per-entry weights for a finite OBC chain.
+Return the nearest-neighbor odd-even-odd Strang schedule for a finite OBC chain.
+
+# Arguments
+- `nsites`: Number of sites in the chain.
+
+# Returns
+- `(schedule, weights)` where:
+  - `schedule` is the ordered bond list
+  - `weights` stores the Strang half-step / full-step prefactors for each entry
+
+# Notes
+- The weights are intended to be passed into a local Hamiltonian builder so that half steps
+  on odd bonds and full steps on even bonds are handled explicitly.
 """
 function tebd_strang_schedule(nsites::Integer)
   nsites < 2 && throw(ArgumentError("Strang TEBD requires at least two sites"))
@@ -89,6 +146,18 @@ end
 
 Convert dense local Hamiltonian data into dense TEBD gates.
 `hamiltonians` may be one dense matrix, a per-step vector of matrices, or a callable provider.
+
+# Arguments
+- `hamiltonians`: Hamiltonian specification. Supported forms match the `gate` conventions of
+  [`LocalGateEvolution`](@ref).
+- `dt`: Time increment passed to `map_hamiltonian`.
+
+# Keyword Arguments
+- `map_hamiltonian`: Function `(h, dt) -> gate`, defaulting to `exp(-im * dt * h)`.
+
+# Returns
+- One gate, a vector of gates, or a callable gate provider with the same structural shape
+  as `hamiltonians`.
 """
 function local_gates_from_hamiltonians(hamiltonians::AbstractMatrix, dt; map_hamiltonian::Function=_default_gate_from_hamiltonian)
   return map_hamiltonian(hamiltonians, dt)
@@ -105,7 +174,21 @@ end
 """
     tebd_evolution_from_hamiltonians(hamiltonians, dt; map_hamiltonian=_default_gate_from_hamiltonian, schedule=nothing, nstep=1, maxdim=0, cutoff=0.0)
 
-Construct a `LocalGateEvolution` by converting dense local Hamiltonians into TEBD gates.
+Construct a [`LocalGateEvolution`](@ref) from dense local Hamiltonians.
+
+# Arguments
+- `hamiltonians`: Hamiltonian specification accepted by [`local_gates_from_hamiltonians`](@ref).
+- `dt`: Logical TEBD time step.
+
+# Keyword Arguments
+- `map_hamiltonian`: Function used to convert each Hamiltonian into a gate.
+- `schedule`: Explicit bond schedule.
+- `nstep`: Number of complete schedule passes per `evolve!` call.
+- `maxdim`: Bond dimension cap for gate application.
+- `cutoff`: Truncation cutoff for gate application.
+
+# Returns
+- A `LocalGateEvolution` whose `gate` field contains the converted dense TEBD gates.
 """
 function tebd_evolution_from_hamiltonians(
   hamiltonians,
@@ -125,6 +208,21 @@ end
 
 Construct a nearest-neighbor odd-even-odd Strang `LocalGateEvolution` from a local Hamiltonian builder.
 `local_hamiltonian(bond, weight)` must return the dense local Hamiltonian for one scheduled update.
+
+# Arguments
+- `nsites`: Number of sites in the open chain.
+- `dt`: Logical time step associated with one Strang sweep.
+
+# Keyword Arguments
+- `local_hamiltonian`: Function `(bond, weight) -> h_local` used to build each scheduled
+  Hamiltonian term.
+- `map_hamiltonian`: Function used to exponentiate each local Hamiltonian.
+- `nstep`: Number of full Strang sweeps per `evolve!` call.
+- `maxdim`: Bond dimension cap for TEBD gate application.
+- `cutoff`: Truncation cutoff for TEBD gate application.
+
+# Returns
+- A `LocalGateEvolution` with explicit Strang schedule metadata.
 """
 function tebd_strang_evolution(
   nsites::Integer,
@@ -154,6 +252,22 @@ end
 Apply one dense local TEBD gate to a finite MPS block starting at `bond`.
 If `bond == length(psi)` and the gate is two-site, the update is applied across the periodic
 boundary between the last and first sites.
+
+# Arguments
+- `psi`: Finite matrix-product state to mutate in place.
+- `gate`: Dense one-site, two-site, or few-site gate matrix.
+- `bond`: Left-edge location of the update window.
+
+# Keyword Arguments
+- `maxdim`: Maximum bond dimension allowed during gate application.
+- `cutoff`: Truncation cutoff used by ITensor operations.
+
+# Returns
+- The mutated `psi`.
+
+# Notes
+- Periodic wraparound is currently supported only for two-site gates and only when the
+  schedule explicitly uses `bond == length(psi)`.
 """
 function tebd_evolve!(psi::MPS, gate::AbstractMatrix, bond; maxdim::Int, cutoff::Real)
   n = _bond_start(bond)
@@ -188,7 +302,19 @@ end
 """
     evolve!(psi, evo::LocalGateEvolution)
 
-Run scheduled local-gate TEBD evolution on a finite OBC MPS.
+Run scheduled local-gate TEBD evolution on a finite `MPS`.
+
+# Arguments
+- `psi`: State to mutate in place.
+- `evo`: [`LocalGateEvolution`](@ref) describing gates, schedule, and truncation settings.
+
+# Returns
+- The mutated `psi`.
+
+# Notes
+- One call runs `evo.nstep` complete traversals of `evo.schedule`.
+- This function is the implementation behind the generic [`evolve!`](@ref) dispatch for
+  `LocalGateEvolution`.
 """
 function evolve!(psi::MPS, evo::LocalGateEvolution)
   for _ in 1:evo.nstep

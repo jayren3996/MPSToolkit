@@ -53,6 +53,21 @@ evolution = TDVPEvolution(
 evolve!(psi, evolution)
 ```
 
+## Choosing Step Counts
+
+For plain TEBD or TDVP usage, the evolution objects keep their own constructor defaults. In other words:
+
+- `LocalGateEvolution(...; nstep=1)` still means one complete schedule pass
+- `DMTGateEvolution(...; nstep=1)` still means one forward-and-reverse DMT sweep
+- `TDVPEvolution(...; nsteps=1)` still means one TDVP step
+
+ScarFinder is the only place with extra policy on top of those defaults. If you intend to pass one of these evolution objects into `scarfinder_step!`, `scarfinder!`, or `trajectory_refine!`, prefer setting:
+
+- `nstep=10` for TEBD- or DMT-style evolutions
+- `nsteps=10` for TDVP evolutions
+
+If you pass a single-step evolution object into ScarFinder, ScarFinder will warn and internally upgrade it to `10` for that ScarFinder call only.
+
 ## API
 
 ```@docs
