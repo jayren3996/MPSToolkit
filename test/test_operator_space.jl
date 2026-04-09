@@ -51,6 +51,82 @@ end
     @test size(gate) == (16, 16)
   end
 
+  @testset "pauli_gate_from_hamiltonian multi-site correctness" begin
+    σx = ComplexF64[0 1; 1 0]
+    σy = ComplexF64[0 -im; im 0]
+    σz = ComplexF64[1 0; 0 -1]
+    id2 = Matrix{ComplexF64}(I, 2, 2)
+    zero_jumps = Matrix{ComplexF64}[]
+
+    @testset "2-site: super-operator is real for Hermitian H" begin
+      # Transverse-field Ising-like Hamiltonian on two sites
+      h = kron(σx, id2) + kron(id2, σx) + 0.5 * kron(σz, σz)
+      dt = 0.3
+      gate = pauli_gate_from_hamiltonian(h, dt)
+      @test maximum(abs.(imag.(gate))) < 1e-10
+    end
+
+    @testset "2-site: matches pauli_gate_from_lindbladian with no jumps" begin
+      # For any Hermitian H, pauli_gate_from_hamiltonian(H, dt) must equal
+      # pauli_gate_from_lindbladian(H, [], dt) because the latter computes
+      # exp(dt * -i[H, ·]), which is exactly the coherent super-operator.
+      h = kron(σx, id2) + kron(id2, σx) + 0.5 * kron(σz, σz)
+      dt = 0.3
+      gate_ham = pauli_gate_from_hamiltonian(h, dt)
+      gate_lin = pauli_gate_from_lindbladian(h, zero_jumps, dt)
+      @test gate_ham ≈ gate_lin atol = 1e-10
+    end
+
+    @testset "2-site: XY bond super-operator matches lindbladian path" begin
+      # Non-symmetric coupling that was broken in the original implementation
+      # due to the kron(vec(P₁), vec(P₂)) vs vec(P₁ ⊗ P₂) basis mismatch.
+      h = kron(σx, σx) + kron(σy, σy)
+      dt = 0.4
+      gate_ham = pauli_gate_from_hamiltonian(h, dt)
+      gate_lin = pauli_gate_from_lindbladian(h, zero_jumps, dt)
+      @test gate_ham ≈ gate_lin atol = 1e-10
+    end
+
+    @testset "3-site: super-operator matches lindbladian path" begin
+      h = kron(σx, id2, id2) + kron(id2, σz, σz) + 0.2 * kron(σy, σy, id2)
+      dt = 0.15
+      gate_ham = pauli_gate_from_hamiltonian(h, dt)
+      gate_lin = pauli_gate_from_lindbladian(h, Matrix{ComplexF64}[], dt)
+      @test gate_ham ≈ gate_lin atol = 1e-10
+    end
+
+    @testset "tebd_evolve! with coherent 2-site gate preserves Hermiticity" begin
+      # Apply a non-trivial coherent gate to a Pauli-basis MPS built from a
+      # Hermitian density matrix, and confirm that reading back the Pauli
+      # coefficients gives real values (i.e. the gate preserves Hermiticity).
+      #
+      # Use h = σx ⊗ σz (NOT swap-symmetric) and start from ρ = |↑↑⟩⟨↑↑|. The
+      # gate `exp(-im*dt*h)` rotates |↑↑⟩ → cos(dt)|↑↑⟩ - im sin(dt)|↓↑⟩, so
+      # the evolved density matrix has non-trivial mixing and the gate is not
+      # a no-op on this state.
+      h = kron(σx, σz)
+      dt = 0.5
+      gate = pauli_gate_from_hamiltonian(h, dt)
+
+      # ρ = |↑↑⟩⟨↑↑| = (I+Z)/2 ⊗ (I+Z)/2. In the normalized Pauli basis
+      # P_α = σ_α/√2, the nonzero coefficients are (I,I),(I,Z),(Z,I),(Z,Z).
+      pauli_sites2 = pauli_siteinds(2)
+      uu_labels = [(1,1), (1,4), (4,1), (4,4)]
+      ρ_mps = sum(0.5 * pauli_basis_state(pauli_sites2, [a, b]) for (a, b) in uu_labels)
+      evolved = copy(ρ_mps)
+      tebd_evolve!(evolved, gate, 1; maxdim=16, cutoff=0.0)
+
+      # Reading each Pauli coefficient via inner product with the corresponding
+      # basis state should yield a real number (Hermiticity of ρ).
+      max_imag = 0.0
+      for a in 1:4, b in 1:4
+        coeff = inner(pauli_basis_state(pauli_sites2, [a, b]), evolved)
+        max_imag = max(max_imag, abs(imag(coeff)))
+      end
+      @test max_imag < 1e-10
+    end
+  end
+
   @testset "Pauli-basis Lindblad helpers" begin
     gamma = 0.3
     dt = 0.5

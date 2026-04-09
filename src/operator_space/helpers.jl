@@ -95,15 +95,28 @@ superoperator in the default local Pauli ordering `(I, X, Y, Z)`.
 - A dense matrix representing the induced operator-space map in the Pauli basis.
 
 # Notes
-- Internally the map is built as `kron(conj(unitary), unitary)` and then rotated into the
-  normalized Pauli basis.
+- The returned matrix entry `G[α_out, α_in]` is `tr(P_{α_out}' * U * P_{α_in} * U')`,
+  where `P_α` are the normalized `n`-site Pauli basis operators produced by
+  `_pauli_basis_operators`. This convention matches `pauli_basis_state`,
+  `pauli_siteinds`, and `pauli_lindblad_generator`, so the resulting
+  super-operator can be applied to a Pauli-basis MPS via `tebd_evolve!`
+  consistently.
 """
 function pauli_gate(unitary::AbstractMatrix)
   size(unitary, 1) == size(unitary, 2) || throw(ArgumentError("Pauli-basis gate requires a square unitary"))
   nsites = _spinhalf_span(size(unitary, 1))
-  basis_transform = _pauli_basis_transform(nsites)
-  superoperator = kron(conj(unitary), unitary)
-  return basis_transform' * superoperator * basis_transform
+  basis_operators = _pauli_basis_operators(nsites)
+  u = ComplexF64.(unitary)
+  u_dag = adjoint(u)
+  nbasis = length(basis_operators)
+  gate = Matrix{ComplexF64}(undef, nbasis, nbasis)
+  for column in eachindex(basis_operators)
+    evolved = u * basis_operators[column] * u_dag
+    for row in eachindex(basis_operators)
+      gate[row, column] = tr(adjoint(basis_operators[row]) * evolved)
+    end
+  end
+  return gate
 end
 
 """
@@ -233,32 +246,6 @@ function _spinhalf_span(dim::Integer)
   span = round(Int, log2(dim))
   2^span == dim || throw(ArgumentError("matrix dimension must be compatible with spin-1/2 sites"))
   return span
-end
-
-"""
-    _pauli_basis_local_transform()
-
-Return the single-site change-of-basis matrix from the computational operator basis to the
-normalized Pauli basis.
-"""
-function _pauli_basis_local_transform()
-  paulis = pauli_matrices()
-  columns = [vec(matrix) / sqrt(2) for matrix in values(paulis)]
-  return hcat(columns...)
-end
-
-"""
-    _pauli_basis_transform(nsites)
-
-Return the multi-site Pauli-basis change-of-basis matrix for `nsites` spin-1/2 sites.
-"""
-function _pauli_basis_transform(nsites::Integer)
-  nsites < 1 && throw(ArgumentError("Pauli-basis transform requires at least one site"))
-  transform = _pauli_basis_local_transform()
-  for _ in 2:nsites
-    transform = kron(transform, _pauli_basis_local_transform())
-  end
-  return transform
 end
 
 """
