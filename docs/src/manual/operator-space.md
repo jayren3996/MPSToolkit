@@ -79,6 +79,13 @@ Operator-space specific algorithms include:
 - `pauli_daoe_projector`
 - `fdaoe_projector`
 
+!!! note "DMT is transport-specific"
+    The DMT functions (`dmt_step!`, `dmt_evolve!`, `DMTGateEvolution`) implement a
+    truncation scheme designed specifically for **transport** (e.g. spin or energy diffusion).
+    Their truncation rule preserves the identity component at every bond — an assumption that
+    holds for transport but not for arbitrary operator-space tasks.  For general operator-space
+    TEBD evolution, use [`LocalGateEvolution`](@ref) with the Pauli-basis helpers above.
+
 These tools are intended for explicit operator-space workflows rather than as hidden internals.
 
 ## Examples

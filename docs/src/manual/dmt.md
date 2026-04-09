@@ -1,5 +1,12 @@
 # DMT
 
+!!! warning "Transport-specific algorithm"
+    DMT is a **transport-specific** truncation scheme.  Its core truncation step protects the
+    identity component of the vectorized operator at every bond, which is the right bias for
+    transport observables (e.g. spin or energy diffusion) but **not** for general
+    operator-space tasks.  If your problem does not have a transport structure, use ordinary
+    TEBD truncation ([`LocalGateEvolution`](@ref)) in operator space instead.
+
 Density matrix truncation (DMT) is implemented here as an operator-space truncation backend that shares the same gate-scheduling idea as TEBD while changing the local truncation rule. The scheduler decides where gates act; the DMT kernel decides how the post-gate truncation is performed.
 
 ## Minimal Workflow

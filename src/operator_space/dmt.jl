@@ -1,7 +1,15 @@
 """
     DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=480, connector_buffer=8)
 
-Options controlling operator-space density matrix truncation.
+Options controlling operator-space density matrix truncation (DMT).
+
+!!! warning "Transport-specific algorithm"
+    DMT is a specialized truncation scheme designed for **transport** (e.g. spin or energy
+    diffusion) in operator space.  Its core assumption is that the identity component of the
+    vectorized operator carries the dominant physical information and must be preserved at
+    every bond — an assumption that generally holds for transport problems but **not** for
+    arbitrary operator-space tasks.  For general operator-space evolution without this
+    transport bias, use ordinary TEBD truncation (`LocalGateEvolution`) instead.
 
 # Fields
 - `maxdim`: Target bond dimension after DMT truncation.
@@ -160,6 +168,9 @@ end
 
 Apply one local operator-space gate and then perform DMT-preserving truncation.
 
+This is a **transport-specific** truncation step.  See [`DMTOptions`](@ref) for when DMT
+is (and is not) the appropriate choice.
+
 # Arguments
 - `psi`: Operator-space `MPS` to mutate in place.
 - `gate`: Dense local gate in the Pauli basis.
@@ -204,6 +215,9 @@ end
     dmt_evolve!(psi, evo::DMTGateEvolution)
 
 Run scheduled operator-space DMT evolution.
+
+This driver is intended for **transport simulations** (e.g. spin or energy diffusion).  See
+[`DMTOptions`](@ref) for the transport-specific assumptions built into DMT truncation.
 
 # Arguments
 - `psi`: Operator-space `MPS` to mutate in place.

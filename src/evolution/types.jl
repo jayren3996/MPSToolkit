@@ -55,6 +55,12 @@ end
 
 Configuration for scheduled operator-space DMT evolution.
 
+!!! warning "Transport-specific algorithm"
+    DMT is designed for **transport problems** (e.g. spin or energy diffusion) in operator
+    space.  Its truncation rule assumes the identity component of the vectorized operator
+    dominates at every bond — an assumption that does not hold for general operator-space
+    tasks.  For general-purpose operator-space TEBD, use [`LocalGateEvolution`](@ref).
+
 # Fields
 - `gate`: Dense local gate specification in the Pauli basis.
 - `dt`: Logical time increment associated with one full DMT evolution call.
@@ -81,7 +87,7 @@ end
 """
     DMTGateEvolution(gate, dt; schedule, reverse_schedule=reverse(schedule), nstep=1, maxdim=30, cutoff=1e-12, gate_maxdim=max(maxdim * 16, 64), connector_buffer=8)
 
-Construct a [`DMTGateEvolution`](@ref).
+Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
 
 # Arguments
 - `gate`: Dense local gate specification in the operator-space Pauli basis.
