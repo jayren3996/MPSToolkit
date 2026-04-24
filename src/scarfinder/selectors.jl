@@ -17,7 +17,7 @@ function score(selector::EntropySelector, psi, context::SelectionContext=Selecti
 end
 
 """
-    score(selector::FidelitySelector, psi, context)
+    score(selector::FidelitySelector, psi, context=SelectionContext())
 
 Score a state by its fidelity distance to `context.reference_state`.
 
@@ -29,6 +29,6 @@ Score a state by its fidelity distance to `context.reference_state`.
 # Returns
 - `1 - |⟨reference_state|psi⟩|`, so lower values correspond to larger fidelity.
 """
-function score(selector::FidelitySelector, psi, context::SelectionContext)
+function score(selector::FidelitySelector, psi, context::SelectionContext=SelectionContext())
   return fidelity_distance(psi, context.reference_state)
 end

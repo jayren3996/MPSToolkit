@@ -152,10 +152,10 @@ Configuration for finite-`MPS` TDVP evolution driven by an MPO generator.
 - `tdvp_evolve!` interprets the effective step count as `nsteps` if present, otherwise
   `nsweeps`.
 """
-struct TDVPEvolution{TH,TT,TS,TB,TU,TK}
+struct TDVPEvolution{TH,TT,TTS,TS,TB,TU,TK}
   generator::TH
   t::TT
-  time_step
+  time_step::TTS
   nsteps::Union{Nothing,Int}
   nsweeps::Union{Nothing,Int}
   reverse_step::Bool

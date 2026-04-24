@@ -49,6 +49,16 @@ end
 
     @test inner(state, evolved) ≈ 1.0
     @test size(gate) == (16, 16)
+
+    swap = ComplexF64[1 0 0 0;
+                      0 0 1 0;
+                      0 1 0 0;
+                      0 0 0 1]
+    swap_gate = pauli_gate(swap)
+    swap_sites = pauli_siteinds(2)
+    swapped = pauli_basis_state(swap_sites, [2, 4])
+    tebd_evolve!(swapped, swap_gate, 1; maxdim=16, cutoff=0.0)
+    @test inner(pauli_basis_state(swap_sites, [4, 2]), swapped) ≈ 1.0 atol = 1e-10
   end
 
   @testset "pauli_gate_from_hamiltonian multi-site correctness" begin

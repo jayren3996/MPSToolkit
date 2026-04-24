@@ -123,7 +123,7 @@ Fields:
 
 Scoring is implemented in:
 
-- [src/scarfinder/selectors.jl](/Users/ren/Codex/MPSToolkit/src/scarfinder/selectors.jl)
+- `src/scarfinder/selectors.jl`
 
 ### `FidelitySelector`
 
@@ -144,6 +144,8 @@ Exported helpers:
 - `bond_entropy`
 - `entanglement_spectrum`
 - `fidelity_distance`
+- `dmt_step!`
+- `dmt_evolve!`
 
 ## Basis And Operator-Space Helpers
 

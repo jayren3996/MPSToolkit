@@ -270,14 +270,6 @@ function _solver_kwargs(evolution::TDVPEvolution, truncation)
   return evolution.solver_kwargs
 end
 
-"""
-    _solver_kwargs(evolution::TDVPEvolution, truncation)
-
-Return TDVP solver keyword settings for an MPO-based energy-correction step.
-
-# Returns
-- Exactly `evolution.solver_kwargs`.
-"""
 function _solver_kwargs(evolution::TDVPEvolution, truncation::BondDimTruncation)
   return evolution.solver_kwargs
 end

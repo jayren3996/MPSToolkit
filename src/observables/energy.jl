@@ -26,7 +26,7 @@ end
 """
     energy_density(psi, op; span=_operator_span(psi, op))
 
-Estimate the finite-chain average energy density of an `MPS` for a dense local operator.
+Estimate the finite-chain energy per site of an `MPS` for a dense local operator.
 
 # Arguments
 - `psi`: Finite matrix-product state.
@@ -37,21 +37,24 @@ Estimate the finite-chain average energy density of an `MPS` for a dense local o
   Hilbert-space dimension of `psi`.
 
 # Returns
-- The arithmetic mean of the local expectation value of `op` over all valid windows.
+- The sum of local expectation values over valid windows divided by `length(psi)`.
 
 # Notes
-- No translation invariance is assumed; the routine explicitly averages over all positions.
+- No translation invariance is assumed; the routine explicitly sums over all valid open-chain
+  positions and normalizes by the number of sites to match the `MPO` overload.
 """
 function energy_density(psi::MPS, op::AbstractMatrix; span::Int=_operator_span(psi, op))
+  span > 0 || throw(ArgumentError("operator span must be positive"))
+  span <= length(psi) || throw(ArgumentError("operator span exceeds chain length"))
   last_start = length(psi) - span + 1
-  values = Float64[]
+  total = 0.0
   for start in 1:last_start
     sites = [siteind(psi, n) for n in start:(start + span - 1)]
     op_tensor = _dense_local_operator(sites, op)
     theta = _finite_local_wavefunction(psi, start, span)
-    push!(values, real(inner(theta, apply(op_tensor, theta))))
+    total += real(inner(theta, apply(op_tensor, theta)))
   end
-  return sum(values) / length(values)
+  return total / length(psi)
 end
 
 """

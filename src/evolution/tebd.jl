@@ -199,6 +199,7 @@ function tebd_evolution_from_hamiltonians(
   maxdim=0,
   cutoff=0.0,
 )
+  isnothing(schedule) && throw(ArgumentError("tebd_evolution_from_hamiltonians requires an explicit schedule"))
   gates = local_gates_from_hamiltonians(hamiltonians, dt; map_hamiltonian=map_hamiltonian)
   return LocalGateEvolution(gates, dt; schedule=schedule, nstep=nstep, maxdim=maxdim, cutoff=cutoff)
 end

@@ -34,14 +34,20 @@ end
 
 @testset "finite three-site tebd evolve" begin
   s = siteinds("S=1/2", 5)
-  psi = MPS(s, n -> isodd(n) ? "Up" : "Dn")
-  gate = diagm(ones(8))
+  psi = MPS(s, n -> "Up")
+  id2 = Matrix{ComplexF64}(I, 2, 2)
+  x = ComplexF64[0 1; 1 0]
+  gate = kron(id2, x, id2)
   evo = LocalGateEvolution(gate, 0.1; schedule=[1, 2, 3], nstep=1, maxdim=8, cutoff=1e-12)
 
   evolve!(psi, evo)
 
-  @test length(psi) == 5
-  @test maxlinkdim(psi) == 1
+  sz = expect(psi, "Sz")
+  @test sz[1] ≈ 0.5 atol = 1e-10
+  @test sz[2] ≈ -0.5 atol = 1e-10
+  @test sz[3] ≈ -0.5 atol = 1e-10
+  @test sz[4] ≈ -0.5 atol = 1e-10
+  @test sz[5] ≈ 0.5 atol = 1e-10
 end
 
 @testset "finite tebd supports per-bond gates" begin
@@ -100,6 +106,7 @@ end
   @test sz[2] ≈ -0.5 atol = 1e-10
   @test sz[3] ≈ 0.5 atol = 1e-10
   @test sz[4] ≈ 0.5 atol = 1e-10
+  @test_throws ArgumentError tebd_evolution_from_hamiltonians(h, 0.1)
 end
 
 @testset "Strang schedule helper" begin
@@ -120,11 +127,28 @@ end
 
 @testset "finite energy density" begin
   s = siteinds("S=1/2", 4)
-  psi = MPS(s, n -> "↑")
+  psi = MPS(s, n -> "Up")
   id2 = [1.0 0.0 0.0 0.0;
          0.0 1.0 0.0 0.0;
          0.0 0.0 1.0 0.0;
          0.0 0.0 0.0 1.0]
 
-  @test energy_density(psi, id2) ≈ 1.0 atol = 1e-10
+  @test energy_density(psi, id2) ≈ 3 / 4 atol = 1e-10
+  @test_throws ArgumentError energy_density(MPS(s[1:2], n -> "Up"), diagm(ones(8)))
+end
+
+@testset "finite observable helpers" begin
+  s = siteinds("S=1/2", 2)
+  product = MPS(s, n -> "Up")
+  flipped = MPS(s, n -> n == 1 ? "Dn" : "Up")
+
+  @test fidelity_distance(product, product) ≈ 0.0 atol = 1e-10
+  @test fidelity_distance(product, flipped) ≈ 1.0 atol = 1e-10
+  @test_throws ArgumentError MPSToolkit.score(FidelitySelector(), product)
+  @test bond_entropy(product, 1) ≈ 0.0 atol = 1e-10
+  @test entanglement_spectrum(product, 1) ≈ [1.0] atol = 1e-10
+
+  bell = normalize(add(product, MPS(s, n -> "Dn"); maxdim=2, cutoff=1e-14))
+  @test bond_entropy(bell, 1) ≈ log(2) atol = 1e-10
+  @test sort(entanglement_spectrum(bell, 1)) ≈ [0.5, 0.5] atol = 1e-10
 end
