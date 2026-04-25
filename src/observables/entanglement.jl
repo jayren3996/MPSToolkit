@@ -100,7 +100,8 @@ Return a selector-friendly fidelity distance.
 - `reference_state`: Reference state against which fidelity should be measured.
 
 # Returns
-- `1 - |⟨reference_state|psi⟩|`, so lower values correspond to higher fidelity.
+- `1 - |⟨reference_state|psi⟩| / (‖reference_state‖ ‖psi‖)`, so lower values
+  correspond to higher normalized fidelity.
 
 # Notes
 - This helper is intentionally phrased as a distance because ScarFinder selectors minimize
@@ -108,5 +109,10 @@ Return a selector-friendly fidelity distance.
 """
 function fidelity_distance(psi, reference_state)
   isnothing(reference_state) && throw(ArgumentError("fidelity selection requires a reference state"))
-  return 1 - abs(inner(psi, reference_state))
+  psi_norm2 = real(inner(psi, psi))
+  reference_norm2 = real(inner(reference_state, reference_state))
+  reference_norm2 > 0 || throw(ArgumentError("fidelity reference state must have nonzero norm"))
+  psi_norm2 > 0 || return 1.0
+  overlap = abs(inner(psi, reference_state)) / sqrt(psi_norm2 * reference_norm2)
+  return 1 - clamp(overlap, 0.0, 1.0)
 end

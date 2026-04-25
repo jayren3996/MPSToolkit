@@ -27,6 +27,8 @@ Construct [`BondDimTruncation`](@ref) settings.
 - A `BondDimTruncation` object with normalized numeric field types.
 """
 function BondDimTruncation(maxdim; cutoff=0.0)
+  maxdim >= 1 || throw(ArgumentError("BondDimTruncation requires maxdim >= 1"))
+  cutoff >= 0 || throw(ArgumentError("BondDimTruncation requires cutoff >= 0"))
   return BondDimTruncation(Int(maxdim), Float64(cutoff))
 end
 
@@ -68,6 +70,9 @@ Construct an [`EnergyTarget`](@ref) configuration for [`match_energy!`](@ref).
 - An `EnergyTarget` object.
 """
 function EnergyTarget(target; operator=nothing, tol=1e-6, alpha=0.1, maxstep=50)
+  tol >= 0 || throw(ArgumentError("EnergyTarget requires tol >= 0"))
+  alpha >= 0 || throw(ArgumentError("EnergyTarget requires alpha >= 0"))
+  maxstep >= 1 || throw(ArgumentError("EnergyTarget requires maxstep >= 1"))
   return EnergyTarget(Float64(target), operator, Float64(tol), Float64(alpha), Int(maxstep))
 end
 

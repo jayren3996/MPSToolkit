@@ -6,6 +6,13 @@ end
 
 @testset "docstring coverage" begin
   documented_bindings = [
+    :Evolution,
+    :Observables,
+    :ScarFinder,
+    :Bases,
+    :OperatorSpace,
+    :Models,
+    :Chebyshev,
     :LocalGateEvolution,
     :DMTGateEvolution,
     :TDVPEvolution,

@@ -83,7 +83,7 @@ function chebyshev_moments(
   for n in 3:order
     previous_state = -tm_prev
     next_state = add(apply(doubled_h, tm_curr; maxdim=maxdim, cutoff=cutoff), previous_state; maxdim=maxdim, cutoff=cutoff)
-    _optimize_chebyshev_vector!(next_state, doubled_h, tm_curr, previous_state)
+    length(next_state) == 1 || _optimize_chebyshev_vector!(next_state, doubled_h, tm_curr, previous_state)
     if energy_cutoff
       energy_cutoff!(
         next_state,
@@ -192,6 +192,10 @@ function energy_cutoff!(
   tol::Real=1e-12,
   verbose::Bool=false,
 )
+  sweeps >= 1 || throw(ArgumentError("energy_cutoff! requires sweeps >= 1"))
+  krylovdim >= 1 || throw(ArgumentError("energy_cutoff! requires krylovdim >= 1"))
+  window >= 0 || throw(ArgumentError("energy_cutoff! requires window >= 0"))
+  tol >= 0 || throw(ArgumentError("energy_cutoff! requires tol >= 0"))
   projector = ProjMPO(h)
   ITensorMPS.set_nsite!(projector, 1)
 
@@ -215,6 +219,13 @@ Run one bidirectional energy-cutoff sweep and return its RMS error estimate.
 function _energy_cutoff_sweep!(projector::ProjMPO, psi::MPS; krylovdim::Integer, window::Real)
   nsites = length(psi)
   accumulated_error = 0.0
+
+  if nsites == 1
+    orthogonalize!(psi, 1)
+    position!(projector, psi, 1)
+    local_error, psi[1] = _krylov_energy_cutoff(projector, psi[1], krylovdim; window=window)
+    return sqrt(local_error)
+  end
 
   for site in 2:nsites
     orthogonalize!(psi, site)

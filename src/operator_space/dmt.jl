@@ -212,6 +212,36 @@ function dmt_step!(
 end
 
 """
+    _reverse_gate_for_step(gate_spec, schedule, reverse_schedule, bond, index)
+
+Resolve the gate for a reverse DMT schedule entry. Matrix and callable gate providers keep the
+same semantics as forward sweeps. Vector gate providers are mapped back to the corresponding
+forward schedule entry.
+"""
+function _reverse_gate_index(schedule, reverse_schedule, bond, index)
+  if length(reverse_schedule) == length(schedule) && collect(reverse_schedule) == reverse(collect(schedule))
+    return length(schedule) - index + 1
+  end
+
+  count(==(bond), schedule) == 1 || throw(ArgumentError("custom reverse DMT schedules with repeated bonds require a callable gate provider that does not depend on reverse indices"))
+  forward_index = findfirst(==(bond), schedule)
+  isnothing(forward_index) && throw(ArgumentError("reverse DMT schedule contains bond $(bond), which is absent from the forward schedule"))
+  return forward_index
+end
+
+function _reverse_gate_for_step(gate_spec::AbstractVector, schedule, reverse_schedule, bond, index)
+  return _gate_for_step(gate_spec, bond, _reverse_gate_index(schedule, reverse_schedule, bond, index))
+end
+
+function _reverse_gate_for_step(gate_spec::Function, schedule, reverse_schedule, bond, index)
+  return _gate_for_step(gate_spec, bond, _reverse_gate_index(schedule, reverse_schedule, bond, index))
+end
+
+function _reverse_gate_for_step(gate_spec, schedule, reverse_schedule, bond, index)
+  return _gate_for_step(gate_spec, bond, index)
+end
+
+"""
     dmt_evolve!(psi, evo::DMTGateEvolution)
 
 Run scheduled operator-space DMT evolution.
@@ -248,7 +278,7 @@ function dmt_evolve!(psi::MPS, evo::DMTGateEvolution)
       )
     end
     for (index, bond) in pairs(evo.reverse_schedule)
-      local_gate = _gate_for_step(evo.gate, bond, index)
+      local_gate = _reverse_gate_for_step(evo.gate, evo.schedule, evo.reverse_schedule, bond, index)
       dmt_step!(
         psi,
         local_gate,

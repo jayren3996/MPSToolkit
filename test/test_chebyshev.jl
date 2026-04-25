@@ -39,6 +39,18 @@ end
   @test observed ≈ exact atol=1e-8
 end
 
+@testset "one-site Chebyshev moments match exact recursion" begin
+  sites = siteinds("S=1/2", 1)
+  psi = productMPS(sites, ["Up"])
+  os = OpSum()
+  os += 0.5, "Sz", 1
+  h_mpo = MPO(os, sites)
+
+  observed = chebyshev_moments(h_mpo, psi; order=5, maxdim=4, cutoff=1e-14)
+
+  @test observed ≈ _exact_chebyshev_moments(0.25, 5) atol=1e-8
+end
+
 @testset "spectral reconstruction helpers" begin
   moments = [1.0, 0.2, -0.1, 0.05]
   kernel = jackson_kernel(length(moments))

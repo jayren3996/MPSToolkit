@@ -32,6 +32,15 @@ end
   @test sz[4] ≈ 0.5 atol = 1e-10
 end
 
+@testset "finite tebd validates schedule entries" begin
+  s = siteinds("S=1/2", 3)
+  gate = Matrix{ComplexF64}(I, 2, 2)
+
+  @test_throws ArgumentError tebd_evolve!(MPS(s, n -> "Up"), gate, 0; maxdim=4, cutoff=1e-12)
+  @test_throws ArgumentError evolve!(MPS(s, n -> "Up"), LocalGateEvolution(gate, 0.1; maxdim=4, cutoff=1e-12))
+  @test_throws ArgumentError LocalGateEvolution(gate, 0.1; schedule=[1], nstep=0)
+end
+
 @testset "finite three-site tebd evolve" begin
   s = siteinds("S=1/2", 5)
   psi = MPS(s, n -> "Up")
@@ -76,6 +85,28 @@ end
   @test sz[2] ≈ 0.5 atol = 1e-10
   @test sz[3] ≈ 0.5 atol = 1e-10
   @test sz[4] ≈ -0.5 atol = 1e-10
+end
+
+@testset "finite tebd preserves conventional dense site order" begin
+  s = siteinds("S=1/2", 3)
+  psi = MPS(s, n -> "Up")
+  projector_down = ComplexF64[0 0; 0 1]
+  projector_up = ComplexF64[1 0; 0 0]
+  x = ComplexF64[0 1; 1 0]
+  id2 = Matrix{ComplexF64}(I, 2, 2)
+
+  # This gate is P_down(site 1) ⊗ X(site 2); it should not fire on |Up,Up,Up>.
+  gated = copy(psi)
+  tebd_evolve!(gated, kron(projector_down, x), 1; maxdim=8, cutoff=1e-12)
+  @test norm(gated) ≈ 0.0 atol = 1e-10
+
+  # This three-site gate flips site 2 only when site 1 is Up and site 3 is Up.
+  controlled = copy(psi)
+  tebd_evolve!(controlled, kron(projector_up, x, projector_up), 1; maxdim=8, cutoff=1e-12)
+  sz = expect(controlled, "Sz")
+  @test sz[1] ≈ 0.5 atol = 1e-10
+  @test sz[2] ≈ -0.5 atol = 1e-10
+  @test sz[3] ≈ 0.5 atol = 1e-10
 end
 
 @testset "local gates from Hamiltonians" begin
@@ -144,6 +175,10 @@ end
 
   @test fidelity_distance(product, product) ≈ 0.0 atol = 1e-10
   @test fidelity_distance(product, flipped) ≈ 1.0 atol = 1e-10
+  @test fidelity_distance(2 * product, 3 * product) ≈ 0.0 atol = 1e-10
+  @test fidelity_distance(0 * product, product) ≈ 1.0 atol = 1e-10
+  @test_throws ArgumentError fidelity_distance(product, 0 * product)
+  @test_throws ArgumentError fidelity_distance(0 * product, 0 * product)
   @test_throws ArgumentError MPSToolkit.score(FidelitySelector(), product)
   @test bond_entropy(product, 1) ≈ 0.0 atol = 1e-10
   @test entanglement_spectrum(product, 1) ≈ [1.0] atol = 1e-10

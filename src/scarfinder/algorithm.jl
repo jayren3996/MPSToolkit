@@ -189,18 +189,18 @@ function _match_energy_dense!(psi, evolution, truncation, target)
   energy_error = energy_density(psi, target.operator) - target.target
   abs(energy_error) < target.tol && return psi
 
-  correction_dt = target.alpha * energy_error
-  correction_gate = exp(-correction_dt * target.operator)
-  correction_evolution = LocalGateEvolution(
-    correction_gate,
-    correction_dt;
-    schedule=evolution.schedule,
-    nstep=1,
-    maxdim=truncation.maxdim,
-    cutoff=truncation.cutoff,
-  )
-
   for _ in 1:target.maxstep
+    correction_dt = target.alpha * energy_error
+    correction_gate = exp(-correction_dt * target.operator)
+    correction_evolution = LocalGateEvolution(
+      correction_gate,
+      correction_dt;
+      schedule=evolution.schedule,
+      nstep=1,
+      maxdim=truncation.maxdim,
+      cutoff=truncation.cutoff,
+    )
+
     evolve!(psi, correction_evolution)
     project!(psi, truncation)
 

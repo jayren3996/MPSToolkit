@@ -92,4 +92,70 @@ end
 
     @test inner(manual, scheduled) ≈ 1.0 atol = 1e-8
   end
+
+  @testset "reverse DMT sweep uses gates associated with original bonds" begin
+    sites = pauli_siteinds(4)
+    state_a = pauli_basis_state(sites, [2, 1, 1, 1])
+    state_b = pauli_basis_state(sites, [1, 1, 2, 1])
+    manual = normalize(add(state_a, state_b; maxdim=4, cutoff=1e-14))
+    scheduled = copy(manual)
+
+    gate1 = Diagonal(ComplexF64[isodd(n) ? 1.0 : 2.0 for n in 1:16])
+    gate2 = Diagonal(ComplexF64[isodd(n) ? 1.0 : 0.5 for n in 1:16])
+    gate3 = Matrix{ComplexF64}(I, 16, 16)
+    gates = [gate1, gate2, gate3]
+
+    _manual_dmt_sweep!(manual, gates; maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
+    evo = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 3], reverse_schedule=[3, 2, 1], maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
+    dmt_evolve!(scheduled, evo)
+
+    @test abs(inner(manual, scheduled)) ≈ 1.0 atol = 1e-10
+  end
+
+  @testset "reverse DMT sweep maps repeated forward schedule entries by position" begin
+    sites = pauli_siteinds(3)
+    state_a = pauli_basis_state(sites, [2, 1, 1])
+    state_b = pauli_basis_state(sites, [1, 2, 1])
+    manual = normalize(add(state_a, state_b; maxdim=4, cutoff=1e-14))
+    scheduled = copy(manual)
+
+    gate1 = Diagonal(ComplexF64[isodd(n) ? 1.0 : 2.0 for n in 1:16])
+    gate2 = Diagonal(ComplexF64[isodd(n) ? 1.0 : 0.5 for n in 1:16])
+    gate3 = Diagonal(ComplexF64[isodd(n) ? 1.0 : 1.5 for n in 1:16])
+    gates = [gate1, gate2, gate3]
+
+    for (bond, gate) in zip([1, 2, 1], gates)
+      dmt_step!(manual, gate, bond; maxdim=8, cutoff=1e-12, direction=:R, gate_maxdim=16, connector_buffer=0)
+    end
+    for (bond, gate) in zip([1, 2, 1], reverse(gates))
+      dmt_step!(manual, gate, bond; maxdim=8, cutoff=1e-12, direction=:L, gate_maxdim=16, connector_buffer=0)
+    end
+    normalize!(manual)
+
+    evo = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 1], reverse_schedule=[1, 2, 1], maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
+    dmt_evolve!(scheduled, evo)
+
+    @test abs(inner(manual, scheduled)) ≈ 1.0 atol = 1e-10
+    ambiguous = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 1], reverse_schedule=[2, 1, 1], maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
+    @test_throws ArgumentError dmt_evolve!(copy(scheduled), ambiguous)
+  end
+
+  @testset "reverse DMT sweep maps callable gates by forward position" begin
+    sites = pauli_siteinds(4)
+    state_a = pauli_basis_state(sites, [2, 1, 1, 1])
+    state_b = pauli_basis_state(sites, [1, 1, 2, 1])
+    manual = normalize(add(state_a, state_b; maxdim=4, cutoff=1e-14))
+    scheduled = copy(manual)
+
+    gate1 = Diagonal(ComplexF64[isodd(n) ? 1.0 : 2.0 for n in 1:16])
+    gate2 = Diagonal(ComplexF64[isodd(n) ? 1.0 : 0.5 for n in 1:16])
+    gate3 = Matrix{ComplexF64}(I, 16, 16)
+    gates = [gate1, gate2, gate3]
+
+    _manual_dmt_sweep!(manual, gates; maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
+    evo = DMTGateEvolution((bond, index) -> gates[index], 0.1; schedule=[1, 2, 3], reverse_schedule=[3, 2, 1], maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
+    dmt_evolve!(scheduled, evo)
+
+    @test abs(inner(manual, scheduled)) ≈ 1.0 atol = 1e-10
+  end
 end

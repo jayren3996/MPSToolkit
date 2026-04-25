@@ -164,11 +164,11 @@ function pauli_lindblad_generator(h::AbstractMatrix, jumps)
   for jump in jump_list
     size(jump, 1) == local_dim && size(jump, 2) == local_dim || throw(ArgumentError("jump operators must match the Hamiltonian dimension"))
   end
+  jump_data = [(jump, jump' * jump) for jump in jump_list]
 
   lindblad_action = operator -> begin
     updated = -im * (h * operator - operator * h)
-    for jump in jump_list
-      jump_dag_jump = jump' * jump
+    for (jump, jump_dag_jump) in jump_data
       updated += jump * operator * jump'
       updated -= 0.5 * (jump_dag_jump * operator + operator * jump_dag_jump)
     end

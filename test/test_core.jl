@@ -31,6 +31,20 @@
   @test isnothing(selection_context.reference_state)
 end
 
+@testset "configuration validation" begin
+  gate = ComplexF64[1 0; 0 1]
+
+  @test_throws ArgumentError LocalGateEvolution(gate, 0.1; schedule=[1], nstep=-1)
+  @test_throws ArgumentError LocalGateEvolution(gate, 0.1; schedule=[1], maxdim=-1)
+  @test_throws ArgumentError DMTGateEvolution(gate, 0.1; schedule=[1], maxdim=0)
+  @test_throws ArgumentError DMTGateEvolution(gate, 0.1; schedule=[1], connector_buffer=-1)
+  @test_throws ArgumentError TDVPEvolution(gate, 0.1; nsteps=0)
+  @test_throws ArgumentError BondDimTruncation(0)
+  @test_throws ArgumentError BondDimTruncation(2; cutoff=-1e-3)
+  @test_throws ArgumentError EnergyTarget(0.0; maxstep=0)
+  @test_throws ArgumentError EnergyTarget(0.0; tol=-1e-3)
+end
+
 mutable struct DummyState
   value::Int
 end

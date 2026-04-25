@@ -1,3 +1,7 @@
+"""
+MPSToolkit provides finite-MPS utilities for local-gate and TDVP evolution, observables,
+operator-space workflows, ScarFinder refinement, and Chebyshev spectral reconstruction.
+"""
 module MPSToolkit
 
 using LinearAlgebra
@@ -24,6 +28,9 @@ include("chebyshev/reconstruction.jl")
 include("chebyshev/types.jl")
 include("chebyshev/moments.jl")
 
+"""
+Namespace for evolution configuration objects and TEBD/TDVP drivers.
+"""
 module Evolution
 using ..MPSToolkit:
   LocalGateEvolution,
@@ -40,11 +47,17 @@ using ..MPSToolkit:
 export LocalGateEvolution, DMTGateEvolution, TDVPEvolution, evolve!, tebd_evolve!, dmt_evolve!, tdvp_evolve!, local_gates_from_hamiltonians, tebd_evolution_from_hamiltonians, tebd_strang_schedule, tebd_strang_evolution
 end
 
+"""
+Namespace for finite-MPS energy, entanglement, and fidelity observables.
+"""
 module Observables
 using ..MPSToolkit: energy_density, bond_entropy, entanglement_spectrum, fidelity_distance
 export energy_density, bond_entropy, entanglement_spectrum, fidelity_distance
 end
 
+"""
+Namespace for ScarFinder projection, energy matching, and selector APIs.
+"""
 module ScarFinder
 using ..MPSToolkit:
   BondDimTruncation,
@@ -69,11 +82,17 @@ export BondDimTruncation,
   scarfinder!
 end
 
+"""
+Namespace for local basis helpers.
+"""
 module Bases
 using ..MPSToolkit: pauli_matrices, pauli_basis, pauli_components
 export pauli_matrices, pauli_basis, pauli_components
 end
 
+"""
+Namespace for Pauli-basis operator-space states, gates, DMT, and DAOE projectors.
+"""
 module OperatorSpace
 using ..MPSToolkit:
   pauli_siteinds,
@@ -104,11 +123,17 @@ export pauli_siteinds,
   fdaoe_projector
 end
 
+"""
+Namespace for dense spin-half model-building helpers.
+"""
 module Models
 using ..MPSToolkit: spinhalf_matrices, spinhalf_xyz_bond_hamiltonian, spinhalf_tfim_bond_hamiltonian
 export spinhalf_matrices, spinhalf_xyz_bond_hamiltonian, spinhalf_tfim_bond_hamiltonian
 end
 
+"""
+Namespace for Chebyshev moments, kernels, reconstruction, and energy-window cutoff tools.
+"""
 module Chebyshev
 using ..MPSToolkit:
   ChebyshevRescaling,

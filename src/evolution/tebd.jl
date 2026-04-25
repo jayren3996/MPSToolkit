@@ -52,7 +52,9 @@ function _dense_local_operator(sites, op::AbstractMatrix)
   dims = dim.(sites)
   prod(dims) == size(op, 1) || throw(ArgumentError("operator dimension does not match site dimensions"))
   size(op, 1) == size(op, 2) || throw(ArgumentError("dense local operator must be square"))
-  tensor_data = reshape(op, Tuple(vcat(dims, dims)))
+  span = length(dims)
+  reshaped = reshape(op, Tuple(vcat(reverse(dims), reverse(dims))))
+  tensor_data = permutedims(reshaped, vcat(reverse(1:span), span .+ reverse(1:span)))
   return itensor(tensor_data, prime.(sites)..., dag.(sites)...)
 end
 
@@ -103,6 +105,7 @@ end
 Resolve a per-entry gate from an indexable gate collection.
 """
 function _gate_for_step(gate_spec::AbstractVector, bond, index)
+  1 <= index <= length(gate_spec) || throw(ArgumentError("gate vector does not contain an entry for schedule index $(index)"))
   return gate_spec[index]
 end
 
@@ -273,6 +276,7 @@ boundary between the last and first sites.
 function tebd_evolve!(psi::MPS, gate::AbstractMatrix, bond; maxdim::Int, cutoff::Real)
   n = _bond_start(bond)
   span = _operator_span(psi, gate)
+  n >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
   if span == 1
     n <= length(psi) || throw(ArgumentError("local gate support exceeds chain length"))
     sites = [siteind(psi, n)]
@@ -318,6 +322,7 @@ Run scheduled local-gate TEBD evolution on a finite `MPS`.
   `LocalGateEvolution`.
 """
 function evolve!(psi::MPS, evo::LocalGateEvolution)
+  isnothing(evo.schedule) && throw(ArgumentError("LocalGateEvolution requires an explicit schedule for MPS evolution"))
   for _ in 1:evo.nstep
     for (index, bond) in pairs(evo.schedule)
       local_gate = _gate_for_step(evo.gate, bond, index)

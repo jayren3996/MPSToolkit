@@ -47,6 +47,9 @@ Construct a [`LocalGateEvolution`](@ref).
 - A concrete `LocalGateEvolution` object with normalized numeric field types.
 """
 function LocalGateEvolution(gate, dt; schedule=nothing, nstep=1, maxdim=0, cutoff=0.0)
+  nstep >= 1 || throw(ArgumentError("LocalGateEvolution requires nstep >= 1"))
+  maxdim >= 0 || throw(ArgumentError("LocalGateEvolution requires maxdim >= 0"))
+  cutoff >= 0 || throw(ArgumentError("LocalGateEvolution requires cutoff >= 0"))
   return LocalGateEvolution(gate, Float64(dt), schedule, Int(nstep), Int(maxdim), Float64(cutoff))
 end
 
@@ -117,6 +120,11 @@ function DMTGateEvolution(
   gate_maxdim=max(Int(maxdim) * 16, 64),
   connector_buffer=8,
 )
+  nstep >= 1 || throw(ArgumentError("DMTGateEvolution requires nstep >= 1"))
+  maxdim >= 1 || throw(ArgumentError("DMTGateEvolution requires maxdim >= 1"))
+  cutoff >= 0 || throw(ArgumentError("DMTGateEvolution requires cutoff >= 0"))
+  gate_maxdim >= 1 || throw(ArgumentError("DMTGateEvolution requires gate_maxdim >= 1"))
+  connector_buffer >= 0 || throw(ArgumentError("DMTGateEvolution requires connector_buffer >= 0"))
   return DMTGateEvolution(
     gate,
     Float64(dt),
@@ -202,6 +210,8 @@ function TDVPEvolution(
   solver_kwargs=(;),
   schedule=nothing,
 )
+  isnothing(nsteps) || nsteps >= 1 || throw(ArgumentError("TDVPEvolution requires nsteps >= 1 when provided"))
+  isnothing(nsweeps) || nsweeps >= 1 || throw(ArgumentError("TDVPEvolution requires nsweeps >= 1 when provided"))
   return TDVPEvolution(
     generator,
     t,
