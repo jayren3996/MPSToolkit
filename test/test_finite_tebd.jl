@@ -191,6 +191,7 @@ end
          0.0 0.0 0.0 1.0]
 
   @test energy_density(psi, id2) ≈ 3 / 4 atol = 1e-10
+  @test energy_density(2 * psi, id2) ≈ energy_density(psi, id2) atol = 1e-10
   @test_throws ArgumentError energy_density(MPS(s[1:2], n -> "Up"), diagm(ones(8)))
 end
 
@@ -206,6 +207,10 @@ end
   @test_throws ArgumentError fidelity_distance(product, 0 * product)
   @test_throws ArgumentError fidelity_distance(0 * product, 0 * product)
   @test_throws ArgumentError MPSToolkit.score(FidelitySelector(), product)
+  @test_throws ArgumentError bond_entropy(product, 0)
+  @test_throws ArgumentError bond_entropy(product, length(product))
+  @test_throws ArgumentError entanglement_spectrum(product, 0)
+  @test_throws ArgumentError entanglement_spectrum(product, length(product))
   @test bond_entropy(product, 1) ≈ 0.0 atol = 1e-10
   @test entanglement_spectrum(product, 1) ≈ [1.0] atol = 1e-10
   @test_throws ArgumentError MPSToolkit.score(EntropySelector(; bond=0), product)

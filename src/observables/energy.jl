@@ -42,10 +42,13 @@ Estimate the finite-chain energy per site of an `MPS` for a dense local operator
 # Notes
 - No translation invariance is assumed; the routine explicitly sums over all valid open-chain
   positions and normalizes by the number of sites to match the `MPO` overload.
+- The returned value is norm-invariant: expectations are divided by `<psi|psi>`.
 """
 function energy_density(psi::MPS, op::AbstractMatrix; span::Int=_operator_span(psi, op))
   span > 0 || throw(ArgumentError("operator span must be positive"))
   span <= length(psi) || throw(ArgumentError("operator span exceeds chain length"))
+  norm2 = real(inner(psi, psi))
+  norm2 > 0 || throw(ArgumentError("energy_density requires a nonzero-norm MPS"))
   last_start = length(psi) - span + 1
   total = 0.0
   for start in 1:last_start
@@ -54,7 +57,7 @@ function energy_density(psi::MPS, op::AbstractMatrix; span::Int=_operator_span(p
     theta = _finite_local_wavefunction(psi, start, span)
     total += real(inner(theta, apply(op_tensor, theta)))
   end
-  return total / length(psi)
+  return total / (norm2 * length(psi))
 end
 
 """
@@ -67,8 +70,10 @@ Return the finite-chain average energy density of an `MPS` for an `MPO`.
 - `op`: Hamiltonian or observable represented as an `MPO`.
 
 # Returns
-- `real(<psi|op|psi>) / length(psi)`.
+- `real(<psi|op|psi>) / (<psi|psi> * length(psi))`.
 """
 function energy_density(psi::MPS, op::MPO)
-  return real(inner(psi', op, psi)) / length(psi)
+  norm2 = real(inner(psi, psi))
+  norm2 > 0 || throw(ArgumentError("energy_density requires a nonzero-norm MPS"))
+  return real(inner(psi', op, psi)) / (norm2 * length(psi))
 end

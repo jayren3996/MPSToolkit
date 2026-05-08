@@ -58,8 +58,10 @@ end
 
   @testset "mpo energy density matches direct expectation value" begin
     psi = MPS(sites, n -> "Up")
-    expected = real(inner(psi', hamiltonian, psi)) / length(sites)
-    @test energy_density(psi, hamiltonian) ≈ expected atol = 1e-10
+    observable = _longitudinal_field_mpo(sites)
+    expected = real(inner(psi', observable, psi)) / (real(inner(psi, psi)) * length(sites))
+    @test energy_density(psi, observable) ≈ expected atol = 1e-10
+    @test energy_density(2 * psi, observable) ≈ expected atol = 1e-10
   end
 
   @testset "mpo target energy correction can move energy toward zero" begin

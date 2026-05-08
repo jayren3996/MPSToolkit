@@ -5,11 +5,10 @@ Options controlling operator-space density matrix truncation (DMT).
 
 !!! warning "Transport-specific algorithm"
     DMT is a specialized truncation scheme designed for **transport** (e.g. spin or energy
-    diffusion) in operator space.  Its core assumption is that the identity component of the
-    vectorized operator carries the dominant physical information and must be preserved at
-    every bond — an assumption that generally holds for transport problems but **not** for
-    arbitrary operator-space tasks.  For general operator-space evolution without this
-    transport bias, use ordinary TEBD truncation (`LocalGateEvolution`) instead.
+    diffusion) in operator space.  It protects local reduced operator data, including the
+    identity/trace component and nearby Pauli components, before truncating connected
+    long-range correlations. For general operator-space evolution without this transport
+    bias, use ordinary TEBD truncation (`LocalGateEvolution`) instead.
 
 # Fields
 - `maxdim`: Target bond dimension after DMT truncation.
@@ -63,14 +62,39 @@ function _right_identity_environment(psi::MPS, start::Integer)
 end
 
 """
-    _dmt_truncation_bond(start, span, direction)
+    _dmt_truncation_bonds(start, span, direction)
 
-Return the bond index at which DMT truncation should be applied for one local update.
+Return the internal bonds at which DMT truncation should be applied for one local update.
 """
-function _dmt_truncation_bond(start::Integer, span::Integer, direction::Symbol)
-  direction === :R && return Int(start)
-  direction === :L && return Int(start + span - 2)
+function _dmt_truncation_bonds(start::Integer, span::Integer, direction::Symbol)
+  bonds = collect(Int(start):(Int(start) + Int(span) - 2))
+  direction === :R && return bonds
+  direction === :L && return reverse(bonds)
   throw(ArgumentError("DMT direction must be :R or :L"))
+end
+
+function _validate_pauli_operator_space(psi::MPS, start::Integer, span::Integer)
+  for site in start:(start + span - 1)
+    dim(siteind(psi, site)) == 4 || throw(ArgumentError("DMT assumes Pauli operator-space sites ordered as (I, X, Y, Z) with local dimension 4"))
+  end
+  return nothing
+end
+
+function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span::Integer, direction::Symbol, maxdim::Integer, connector_buffer::Integer)
+  direction === :R || direction === :L || throw(ArgumentError("DMT direction must be :R or :L"))
+  maxdim >= 0 || throw(ArgumentError("DMT maxdim must be nonnegative"))
+  connector_buffer >= 0 || throw(ArgumentError("DMT connector_buffer must be nonnegative"))
+  maxdim == 0 || connector_buffer <= maxdim || throw(ArgumentError("DMT connector_buffer must be <= maxdim"))
+  start >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
+  last_site = start + span - 1
+  last_site <= length(psi) || throw(ArgumentError("local gate support exceeds chain length"))
+  span == 1 && return nothing
+  start == length(psi) && throw(ArgumentError("periodic boundary DMT is not implemented for local gates"))
+  for bond in start:(last_site - 1)
+    1 <= bond < length(psi) || throw(ArgumentError("DMT target bonds must lie in 1:length(psi)-1"))
+  end
+  _validate_pauli_operator_space(psi, start, span)
+  return nothing
 end
 
 """
@@ -106,6 +130,37 @@ function _mat_trunc!(matrix_data::AbstractMatrix, χ::Integer; connector_buffer:
   return nothing
 end
 
+function _complete_orthonormal_basis(protected::AbstractMatrix, target_dim::Integer=size(protected, 1))
+  ambient_dim = size(protected, 1)
+  0 <= target_dim <= ambient_dim || throw(ArgumentError("orthonormal basis target dimension must lie in 0:size(protected, 1)"))
+  target_dim == 0 && return zeros(eltype(protected), ambient_dim, 0)
+
+  basis = Matrix{eltype(protected)}(undef, ambient_dim, 0)
+  if size(protected, 2) > 0
+    factorization = svd(Matrix(protected))
+    scale = isempty(factorization.S) ? zero(real(float(one(eltype(factorization.S))))) : maximum(factorization.S)
+    tolerance = max(ambient_dim, size(protected, 2)) * eps(real(float(scale == 0 ? one(scale) : scale))) * max(scale, one(scale))
+    protected_rank = min(count(>(tolerance), factorization.S), target_dim)
+    protected_rank > 0 && (basis = factorization.U[:, 1:protected_rank])
+  end
+
+  for column in 1:ambient_dim
+    size(basis, 2) == target_dim && break
+    candidate = zeros(eltype(protected), ambient_dim)
+    candidate[column] = one(eltype(protected))
+    for basis_column in 1:size(basis, 2)
+      candidate .-= basis[:, basis_column] * (basis[:, basis_column]' * candidate)
+    end
+    candidate_norm = norm(candidate)
+    if candidate_norm > ambient_dim * eps(real(float(candidate_norm == 0 ? one(candidate_norm) : candidate_norm)))
+      basis = hcat(basis, candidate / candidate_norm)
+    end
+  end
+
+  size(basis, 2) == target_dim || throw(ArgumentError("could not complete orthonormal DMT basis"))
+  return basis
+end
+
 """
     _dmt_bond_truncate!(psi, bond; maxdim, cutoff, direction=:R, connector_buffer=8)
 
@@ -124,7 +179,17 @@ Perform one DMT-preserving bond truncation step.
 # Returns
 - The mutated `psi`.
 """
-function _dmt_bond_truncate!(psi::MPS, bond::Integer; maxdim::Integer, cutoff::Real, direction::Symbol=:R, connector_buffer::Integer=8)
+function _dmt_bond_truncate!(
+  psi::MPS,
+  bond::Integer;
+  maxdim::Integer,
+  cutoff::Real,
+  direction::Symbol=:R,
+  connector_buffer::Integer=8,
+  left_env=nothing,
+  right_env=nothing,
+  orthogonalize::Bool=true,
+)
   maxdim > 0 || return psi
   connector_buffer >= 0 || throw(ArgumentError("DMT connector_buffer must be nonnegative"))
   connector_buffer <= maxdim || throw(ArgumentError("DMT connector_buffer must be <= maxdim"))
@@ -133,12 +198,12 @@ function _dmt_bond_truncate!(psi::MPS, bond::Integer; maxdim::Integer, cutoff::R
   isnothing(current_link) && return psi
   dim(current_link) <= maxdim && return psi
 
-  orthogonalize!(psi, bond)
+  orthogonalize && orthogonalize!(psi, bond)
   left_site = siteind(psi, bond)
   right_site = siteind(psi, bond + 1)
 
-  left_env = _left_identity_environment(psi, bond - 1)
-  right_env = _right_identity_environment(psi, bond + 2)
+  isnothing(left_env) && (left_env = _left_identity_environment(psi, bond - 1))
+  isnothing(right_env) && (right_env = _right_identity_environment(psi, bond + 2))
 
   previous_link = linkind(psi, bond - 1)
   left_inds = isnothing(previous_link) ? (left_site,) : (previous_link, left_site)
@@ -148,14 +213,14 @@ function _dmt_bond_truncate!(psi::MPS, bond::Integer; maxdim::Integer, cutoff::R
 
   left_link = commonind(u, s)
   right_link = commonind(v, s)
-  left_basis = Matrix(qr(matrix(left_env * psi[bond], left_link, left_site)).Q)
-  right_basis = Matrix(qr(matrix(psi[bond + 1] * right_env, right_link, right_site)).Q)
+  left_basis = _complete_orthonormal_basis(matrix(left_env * psi[bond], left_link, left_site), dim(left_link))
+  right_basis = _complete_orthonormal_basis(matrix(psi[bond + 1] * right_env, right_link, right_site), dim(right_link))
   singular_values = Matrix(matrix(s, left_link, right_link))
 
-  reduced = transpose(left_basis) * singular_values * right_basis
+  reduced = left_basis' * singular_values * right_basis
   _mat_trunc!(reduced, maxdim - connector_buffer; connector_buffer=connector_buffer)
 
-  repaired = ITensor(left_basis * reduced * transpose(right_basis), left_link, right_link)
+  repaired = ITensor(left_basis * reduced * right_basis', left_link, right_link)
   new_u, new_s, new_v = svd(repaired, left_link; maxdim=maxdim, cutoff=cutoff)
   if direction === :R
     psi[bond] *= new_u
@@ -163,6 +228,69 @@ function _dmt_bond_truncate!(psi::MPS, bond::Integer; maxdim::Integer, cutoff::R
   else
     psi[bond] = psi[bond] * new_u * new_s
     psi[bond + 1] = new_v * psi[bond + 1]
+  end
+  return psi
+end
+
+function _left_identity_prefixes(psi::MPS)
+  prefixes = Vector{ITensor}(undef, length(psi) + 1)
+  prefixes[1] = ITensor(1.0)
+  for site in 1:length(psi)
+    prefixes[site + 1] = prefixes[site] * _pauli_identity_env(siteind(psi, site)) * psi[site]
+  end
+  return prefixes
+end
+
+function _right_identity_suffixes(psi::MPS)
+  suffixes = Vector{ITensor}(undef, length(psi) + 2)
+  suffixes[length(psi) + 1] = ITensor(1.0)
+  suffixes[length(psi) + 2] = ITensor(1.0)
+  for site in length(psi):-1:1
+    suffixes[site] = suffixes[site + 1] * _pauli_identity_env(siteind(psi, site)) * psi[site]
+  end
+  return suffixes
+end
+
+function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::Integer, cutoff::Real, direction::Symbol, connector_buffer::Integer)
+  span <= 1 && return psi
+  bonds = _dmt_truncation_bonds(start, span, direction)
+  isempty(bonds) && return psi
+
+  orthogonalize!(psi, first(bonds))
+  if direction === :R
+    right_suffixes = _right_identity_suffixes(psi)
+    left_env = _left_identity_environment(psi, first(bonds) - 1)
+    for (index, bond) in pairs(bonds)
+      _dmt_bond_truncate!(
+        psi,
+        bond;
+        maxdim=maxdim,
+        cutoff=cutoff,
+        direction=direction,
+        connector_buffer=connector_buffer,
+        left_env=left_env,
+        right_env=right_suffixes[bond + 2],
+        orthogonalize=false,
+      )
+      index < length(bonds) && (left_env = left_env * _pauli_identity_env(siteind(psi, bond)) * psi[bond])
+    end
+  else
+    left_prefixes = _left_identity_prefixes(psi)
+    right_env = _right_identity_environment(psi, first(bonds) + 2)
+    for (index, bond) in pairs(bonds)
+      _dmt_bond_truncate!(
+        psi,
+        bond;
+        maxdim=maxdim,
+        cutoff=cutoff,
+        direction=direction,
+        connector_buffer=connector_buffer,
+        left_env=left_prefixes[bond],
+        right_env=right_env,
+        orthogonalize=false,
+      )
+      index < length(bonds) && (right_env = right_env * _pauli_identity_env(siteind(psi, bond + 1)) * psi[bond + 1])
+    end
   end
   return psi
 end
@@ -200,16 +328,14 @@ function dmt_step!(
   gate_maxdim::Integer=max(Int(maxdim) * 16, 64),
   connector_buffer::Integer=8,
 )
-  maxdim >= 0 || throw(ArgumentError("DMT maxdim must be nonnegative"))
-  connector_buffer >= 0 || throw(ArgumentError("DMT connector_buffer must be nonnegative"))
-  maxdim == 0 || connector_buffer <= maxdim || throw(ArgumentError("DMT connector_buffer must be <= maxdim"))
   start = _bond_start(bond)
   span = _operator_span(psi, gate)
+  _validate_dmt_step(psi, gate, start, span, direction, Int(maxdim), Int(connector_buffer))
   tebd_evolve!(psi, gate, start; maxdim=Int(gate_maxdim), cutoff=0.0)
-  truncation_bond = _dmt_truncation_bond(start, span, direction)
-  _dmt_bond_truncate!(
+  _dmt_window_truncate!(
     psi,
-    truncation_bond;
+    start,
+    span;
     maxdim=Int(maxdim),
     cutoff=cutoff,
     direction=direction,
@@ -225,8 +351,16 @@ Resolve the gate for a reverse DMT schedule entry. Matrix and callable gate prov
 same semantics as forward sweeps. Vector gate providers are mapped back to the corresponding
 forward schedule entry.
 """
+function _is_default_reverse_schedule(schedule, reverse_schedule)
+  length(reverse_schedule) == length(schedule) || return false
+  for index in eachindex(reverse_schedule)
+    reverse_schedule[index] == schedule[length(schedule) - index + 1] || return false
+  end
+  return true
+end
+
 function _reverse_gate_index(schedule, reverse_schedule, bond, index)
-  if length(reverse_schedule) == length(schedule) && collect(reverse_schedule) == reverse(collect(schedule))
+  if _is_default_reverse_schedule(schedule, reverse_schedule)
     return length(schedule) - index + 1
   end
 
@@ -241,7 +375,7 @@ function _reverse_gate_for_step(gate_spec::AbstractVector, schedule, reverse_sch
 end
 
 function _reverse_gate_for_step(gate_spec::Function, schedule, reverse_schedule, bond, index)
-  return _gate_for_step(gate_spec, bond, index)
+  return _gate_for_step(gate_spec, bond, _reverse_gate_index(schedule, reverse_schedule, bond, index))
 end
 
 function _reverse_gate_for_step(gate_spec, schedule, reverse_schedule, bond, index)

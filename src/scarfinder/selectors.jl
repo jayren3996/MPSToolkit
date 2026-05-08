@@ -14,7 +14,7 @@ Score a state using the rule encoded by `selector`.
 """
 function score(selector::EntropySelector, psi, context::SelectionContext=SelectionContext())
   if psi isa MPS && !isnothing(selector.bond)
-    1 <= selector.bond < length(psi) || throw(ArgumentError("EntropySelector bond must lie in 1:length(psi)-1"))
+    _validate_entanglement_bond(psi, selector.bond)
   end
   return bond_entropy(psi, selector.bond)
 end

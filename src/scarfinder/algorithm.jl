@@ -171,12 +171,6 @@ function _normalized_energy_density(psi, op)
   return energy_density(psi, op)
 end
 
-function _normalized_energy_density(psi::MPS, op)
-  norm2 = real(inner(psi, psi))
-  norm2 > 0 || throw(ArgumentError("energy matching requires a nonzero-norm MPS"))
-  return energy_density(psi, op) / norm2
-end
-
 function _energy_error(psi, target)
   return _normalized_energy_density(psi, target.operator) - target.target
 end

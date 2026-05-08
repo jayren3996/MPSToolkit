@@ -39,6 +39,11 @@ function _entropy_from_values(values)
   return -sum(p -> iszero(p) ? 0.0 : p * log(p), normalized)
 end
 
+function _validate_entanglement_bond(psi::MPS, bond_index::Int)
+  1 <= bond_index < length(psi) || throw(ArgumentError("entanglement bond must lie in 1:length(psi)-1"))
+  return bond_index
+end
+
 """
     bond_entropy(psi::MPS, bond)
 
@@ -74,12 +79,12 @@ Return the normalized Schmidt probabilities for a finite `MPS`.
 - A vector of normalized Schmidt probabilities.
 
 # Notes
-- Out-of-range bonds return an empty vector rather than throwing.
+- Out-of-range bonds throw an `ArgumentError`.
 - The state is copied before orthogonalization, so the input `psi` is not mutated.
 """
 function entanglement_spectrum(psi::MPS, bond::Union{Nothing,Int})
   bond_index = isnothing(bond) ? max(1, length(psi) ÷ 2) : bond
-  (bond_index < 1 || bond_index >= length(psi)) && return Float64[]
+  _validate_entanglement_bond(psi, bond_index)
 
   centered = orthogonalize(copy(psi), bond_index)
   left_inds = uniqueinds(centered[bond_index], centered[bond_index + 1])
