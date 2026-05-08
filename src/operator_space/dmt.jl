@@ -241,7 +241,7 @@ function _reverse_gate_for_step(gate_spec::AbstractVector, schedule, reverse_sch
 end
 
 function _reverse_gate_for_step(gate_spec::Function, schedule, reverse_schedule, bond, index)
-  return _gate_for_step(gate_spec, bond, _reverse_gate_index(schedule, reverse_schedule, bond, index))
+  return _gate_for_step(gate_spec, bond, index)
 end
 
 function _reverse_gate_for_step(gate_spec, schedule, reverse_schedule, bond, index)

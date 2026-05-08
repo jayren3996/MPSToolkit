@@ -78,6 +78,7 @@ function _operator_span(psi::MPS, op::AbstractMatrix)
   d = dim(siteind(psi, 1))
   d > 1 || throw(ArgumentError("site dimension must be larger than one"))
   span = round(Int, log(size(op, 1)) / log(d))
+  span > 0 || throw(ArgumentError("operator span must be positive"))
   d^span == size(op, 1) || throw(ArgumentError("operator size is incompatible with the site dimension"))
   return span
 end

@@ -132,8 +132,8 @@ end
   psi = DummyState(1)
   evo = LocalGateEvolution(reshape(1:4, 2, 2), 0.1)
   trunc = BondDimTruncation(2)
-  evolve!(psi, evo)
-  project!(psi, trunc)
+  @test evolve!(psi, evo) === psi
+  @test project!(psi, trunc) === psi
   @test psi.value == 4
   @test energy_density(psi, nothing) == 4
 end

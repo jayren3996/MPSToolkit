@@ -61,6 +61,7 @@ end
     dmt_step!(psi, _identity_gate(2), 2; maxdim=8, cutoff=1e-12, direction=:R, gate_maxdim=64)
 
     @test inner(reference, psi) ≈ 1.0 atol = 1e-10
+    @test dmt_step!(psi, _identity_gate(2), 2; maxdim=8, cutoff=1e-12, direction=:R, gate_maxdim=64) === psi
   end
 
   @testset "DMT truncates an enlarged first bond" begin
@@ -96,7 +97,7 @@ end
 
     _manual_dmt_sweep!(manual, gates; maxdim=4, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
     evo = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 3, 4], reverse_schedule=[4, 3, 2, 1], maxdim=4, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
-    dmt_evolve!(scheduled, evo)
+    @test dmt_evolve!(scheduled, evo) === scheduled
 
     @test inner(manual, scheduled) ≈ 1.0 atol = 1e-8
   end
@@ -177,6 +178,30 @@ end
 
     _manual_dmt_sweep!(manual, gates; maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
     evo = DMTGateEvolution((bond, index) -> gates[index], 0.1; schedule=[1, 2, 3], reverse_schedule=[3, 2, 1], maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
+    dmt_evolve!(scheduled, evo)
+
+    @test abs(inner(manual, scheduled)) ≈ 1.0 atol = 1e-10
+  end
+
+  @testset "custom repeated reverse DMT schedule accepts callable gates" begin
+    sites = pauli_siteinds(3)
+    state_a = pauli_basis_state(sites, [2, 1, 1])
+    state_b = pauli_basis_state(sites, [1, 2, 1])
+    manual = normalize(add(state_a, state_b; maxdim=4, cutoff=1e-14))
+    scheduled = copy(manual)
+
+    gate = Diagonal(ComplexF64[isodd(n) ? 1.0 : 1.2 for n in 1:16])
+    forward_schedule = [1, 2, 1]
+    reverse_schedule = [2, 1, 1]
+    for bond in forward_schedule
+      dmt_step!(manual, gate, bond; maxdim=8, cutoff=1e-12, direction=:R, gate_maxdim=16, connector_buffer=0)
+    end
+    for bond in reverse_schedule
+      dmt_step!(manual, gate, bond; maxdim=8, cutoff=1e-12, direction=:L, gate_maxdim=16, connector_buffer=0)
+    end
+    normalize!(manual)
+
+    evo = DMTGateEvolution((bond, index) -> gate, 0.1; schedule=forward_schedule, reverse_schedule=reverse_schedule, maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
     dmt_evolve!(scheduled, evo)
 
     @test abs(inner(manual, scheduled)) ≈ 1.0 atol = 1e-10

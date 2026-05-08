@@ -61,7 +61,14 @@ end
   @test jackson_damping(0, length(moments)) ≈ kernel[1]
   @test reconstruct_chebyshev(x, moments; kernel=kernel) ≈ spectrum(ω) * 1.7 atol=1e-12
   @test spectrum(0.3 + 1.7 * 1.2) == 0.0
+  @test spectrum([ω, 0.3 + 1.7 * 1.2]) ≈ [spectrum(ω), 0.0] atol=1e-12
   @test MPSToolkit.Chebyshev.chebyshev_moments === chebyshev_moments
+  @test_throws ArgumentError ChebyshevRescaling(0.0, 0.0)
+  @test_throws ArgumentError jackson_kernel(0)
+  @test_throws ArgumentError jackson_damping(-1, length(moments))
+  @test_throws ArgumentError jackson_damping(length(moments), length(moments))
+  @test_throws ArgumentError reconstruct_chebyshev(1.0, moments)
+  @test_throws ArgumentError spectral_function(moments; kernel=[1.0])
 end
 
 @testset "standalone Chebyshev energy cutoff" begin

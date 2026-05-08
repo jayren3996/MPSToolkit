@@ -5,16 +5,18 @@ using LinearAlgebra
 @testset "finite tebd evolve" begin
   s = siteinds("S=1/2", 4)
   psi = MPS(s, n -> "↑")
+  reference = copy(psi)
   gate = [1.0 0.0 0.0 0.0;
           0.0 1.0 0.0 0.0;
           0.0 0.0 1.0 0.0;
           0.0 0.0 0.0 1.0]
   evo = LocalGateEvolution(gate, 0.01; schedule=[1, 2, 3], nstep=1, maxdim=4, cutoff=1e-12)
 
-  evolve!(psi, evo)
+  @test evolve!(psi, evo) === psi
 
   @test length(psi) == 4
   @test maxlinkdim(psi) <= 1
+  @test abs(inner(reference, psi)) ≈ 1.0 atol = 1e-10
 end
 
 @testset "finite tebd default maxdim works" begin
@@ -22,15 +24,19 @@ end
   gate = Matrix{ComplexF64}(I, 4, 4)
 
   psi = MPS(s, n -> "Up")
+  reference = copy(psi)
   evo = LocalGateEvolution(gate, 0.01; schedule=[1, 2, 3])
-  evolve!(psi, evo)
+  @test evolve!(psi, evo) === psi
   @test length(psi) == 4
+  @test abs(inner(reference, psi)) ≈ 1.0 atol = 1e-10
 
   h = zeros(ComplexF64, 4, 4)
   from_hamiltonian = MPS(s, n -> "Up")
+  h_reference = copy(from_hamiltonian)
   h_evo = tebd_evolution_from_hamiltonians(h, 0.01; schedule=[1, 2, 3])
-  evolve!(from_hamiltonian, h_evo)
+  @test evolve!(from_hamiltonian, h_evo) === from_hamiltonian
   @test length(from_hamiltonian) == 4
+  @test abs(inner(h_reference, from_hamiltonian)) ≈ 1.0 atol = 1e-10
 end
 
 @testset "finite one-site tebd evolve" begin
@@ -39,7 +45,7 @@ end
   gate = ComplexF64[0 1; 1 0]
   evo = LocalGateEvolution(gate, 0.1; schedule=[2], nstep=1, maxdim=4, cutoff=1e-12)
 
-  evolve!(psi, evo)
+  @test evolve!(psi, evo) === psi
 
   sz = expect(psi, "Sz")
   @test sz[1] ≈ 0.5 atol = 1e-10
@@ -53,6 +59,7 @@ end
   gate = Matrix{ComplexF64}(I, 2, 2)
 
   @test_throws ArgumentError tebd_evolve!(MPS(s, n -> "Up"), gate, 0; maxdim=4, cutoff=1e-12)
+  @test_throws ArgumentError tebd_evolve!(MPS(s, n -> "Up"), ones(ComplexF64, 1, 1), 1; maxdim=4, cutoff=1e-12)
   @test_throws ArgumentError evolve!(MPS(s, n -> "Up"), LocalGateEvolution(gate, 0.1; maxdim=4, cutoff=1e-12))
   @test_throws ArgumentError LocalGateEvolution(gate, 0.1; schedule=[1], nstep=0)
 end
@@ -78,13 +85,15 @@ end
 @testset "finite tebd supports per-bond gates" begin
   s = siteinds("S=1/2", 5)
   psi = MPS(s, n -> isodd(n) ? "Up" : "Dn")
+  reference = copy(psi)
   gates = [diagm(ones(8)), diagm(ones(8))]
   evo = LocalGateEvolution(gates, 0.1; schedule=[1, 2], nstep=1, maxdim=8, cutoff=1e-12)
 
-  evolve!(psi, evo)
+  @test evolve!(psi, evo) === psi
 
   @test length(psi) == 5
   @test maxlinkdim(psi) == 1
+  @test abs(inner(reference, psi)) ≈ 1.0 atol = 1e-10
 end
 
 @testset "finite tebd supports periodic boundary gates" begin
@@ -160,6 +169,7 @@ end
   schedule, weights = tebd_strang_schedule(6)
   @test schedule == [1, 3, 5, 2, 4, 1, 3, 5]
   @test weights == [0.5, 0.5, 0.5, 1.0, 1.0, 0.5, 0.5, 0.5]
+  @test_throws ArgumentError tebd_strang_schedule(1)
 end
 
 @testset "Strang evolution helper" begin

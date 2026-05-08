@@ -17,4 +17,12 @@ using ITensorMPS
   @test size(tfim) == (4, 4)
   id2 = Matrix{ComplexF64}(I, 2, 2)
   @test tfim ≈ -kron(sz, sz) - 0.5 * (kron(sx, id2) + 0.5 * kron(id2, sx))
+
+  bulk = spinhalf_tfim_bond_hamiltonian(6, 3; J=1.0, g=0.5)
+  @test bulk ≈ -kron(sz, sz) - 0.5 * (0.5 * kron(sx, id2) + 0.5 * kron(id2, sx))
+
+  right_edge = spinhalf_tfim_bond_hamiltonian(6, 5; J=1.0, g=0.5)
+  @test right_edge ≈ -kron(sz, sz) - 0.5 * (0.5 * kron(sx, id2) + kron(id2, sx))
+  @test_throws ArgumentError spinhalf_tfim_bond_hamiltonian(6, 0)
+  @test_throws ArgumentError spinhalf_tfim_bond_hamiltonian(6, 6)
 end

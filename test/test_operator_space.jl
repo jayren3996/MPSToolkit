@@ -33,6 +33,12 @@ end
     basis_state = pauli_basis_state(sites, [4, 1, 1, 1])
     @test inner(basis_state, _basis_product_mps(sites, [4, 1, 1, 1])) ≈ 1.0
 
+    mixed_labels = pauli_basis_state(sites, [:I, " z ", 2, "x"])
+    @test inner(mixed_labels, _basis_product_mps(sites, [1, 4, 2, 2])) ≈ 1.0
+    @test_throws ArgumentError pauli_siteinds(0)
+    @test_throws ArgumentError pauli_basis_state(sites, [:I])
+    @test_throws ArgumentError pauli_basis_state(sites, [:Q, :I, :I, :I])
+
     total_sz = pauli_total_sz_state(sites)
     expected = sum(0.5 * _basis_product_mps(sites, [j == n ? 4 : 1 for j in 1:length(sites)]) for n in 1:length(sites))
     @test inner(expected, total_sz) ≈ length(sites) / 4
@@ -59,6 +65,12 @@ end
     swapped = pauli_basis_state(swap_sites, [2, 4])
     tebd_evolve!(swapped, swap_gate, 1; maxdim=16, cutoff=0.0)
     @test inner(pauli_basis_state(swap_sites, [4, 2]), swapped) ≈ 1.0 atol = 1e-10
+
+    rotation = exp(-0.37im * ComplexF64[0 1; 1 0])
+    rotation_gate = pauli_gate(rotation)
+    @test rotation_gate' * rotation_gate ≈ Matrix{ComplexF64}(I, 4, 4) atol = 1e-10
+    @test_throws ArgumentError pauli_gate(zeros(ComplexF64, 2, 3))
+    @test_throws ArgumentError pauli_gate(zeros(ComplexF64, 3, 3))
   end
 
   @testset "pauli_gate_from_hamiltonian multi-site correctness" begin
@@ -148,8 +160,10 @@ end
     expected_gate = Diagonal(exp.(dt .* diag(expected_generator)))
 
     @test generator ≈ expected_generator atol = 1e-10
+    @test generator[1, :] ≈ zeros(ComplexF64, 4) atol = 1e-10
     @test gate ≈ expected_gate atol = 1e-10
     @test pauli_gate_from_lindbladian(zeros(ComplexF64, 2, 2), ComplexF64[0 0; 0 0], dt) ≈ Matrix{ComplexF64}(I, 4, 4) atol = 1e-10
+    @test_throws ArgumentError pauli_lindblad_generator(zeros(ComplexF64, 2, 2), [zeros(ComplexF64, 3, 3)])
 
     sites1 = pauli_siteinds(1)
     identity_density = pauli_basis_state(sites1, ["I"]; coefficient=2.0^(-0.5))
