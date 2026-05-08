@@ -38,6 +38,8 @@ moments = chebyshev_moments(
 spectrum = spectral_function(moments; center=center, halfwidth=halfwidth)
 ```
 
+By default, `chebyshev_moments` normalizes the initial MPS before starting the recursion. This is useful when you want the reconstructed spectral shape. If absolute intensity matters, for example the total local spectral weight `||O|0>||^2`, pass `normalize_initial=false` or multiply the normalized reconstruction by the probe norm squared.
+
 The `energy_cutoff=true` path is most useful when the relevant spectral window is narrow compared with the full rescaled interval and the recursion is compression-sensitive.
 
 ## Energy-Window Cutoff

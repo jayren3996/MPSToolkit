@@ -61,16 +61,43 @@ end
 
   @test jackson_damping(0, length(moments)) ≈ kernel[1]
   @test reconstruct_chebyshev(x, moments; kernel=kernel) ≈ spectrum(ω) * 1.7 atol=1e-12
+  @test reconstruct_chebyshev(x, moments; kernel=:jackson) ≈ reconstruct_chebyshev(x, moments; kernel=kernel) atol=1e-12
   @test spectrum(0.3 + 1.7 * 1.2) == 0.0
   @test spectrum([ω, 0.3 + 1.7 * 1.2]) ≈ [spectrum(ω), 0.0] atol=1e-12
   @test MPSToolkit.Chebyshev.chebyshev_moments === chebyshev_moments
   @test_throws ArgumentError ChebyshevRescaling(0.0, 0.0)
+  @test_throws ArgumentError ChebyshevRescaling(Inf, 1.0)
+  @test_throws ArgumentError ChebyshevRescaling(0.0, Inf)
+  @test_throws ArgumentError ChebyshevRescaling(NaN, 1.0)
   @test_throws ArgumentError jackson_kernel(0)
   @test_throws ArgumentError jackson_damping(-1, length(moments))
   @test_throws ArgumentError jackson_damping(length(moments), length(moments))
   @test_throws ArgumentError reconstruct_chebyshev(1.0, moments)
+  @test_throws ArgumentError reconstruct_chebyshev(x, moments; kernel=:unsupported)
   @test_throws ArgumentError spectral_function(Float64[])
   @test_throws ArgumentError spectral_function(moments; kernel=[1.0])
+end
+
+@testset "Chebyshev argument validation" begin
+  sites = siteinds("S=1/2", 2)
+  psi = productMPS(sites, ["Up", "Dn"])
+  os = OpSum()
+  os += 0.5, "Sz", 1
+  os += 0.5, "Sz", 2
+  h_mpo = MPO(os, sites)
+
+  other_sites = siteinds("S=1/2", 2)
+  other_psi = productMPS(other_sites, ["Up", "Dn"])
+
+  @test_throws ArgumentError chebyshev_moments(h_mpo, psi; order=0)
+  @test_throws ArgumentError chebyshev_moments(h_mpo, psi; order=2, maxdim=0)
+  @test_throws ArgumentError chebyshev_moments(h_mpo, psi; order=2, cutoff=-1.0)
+  @test_throws ArgumentError chebyshev_moments(h_mpo, other_psi; order=2)
+
+  @test_throws ArgumentError energy_cutoff!(copy(psi), h_mpo; sweeps=0)
+  @test_throws ArgumentError energy_cutoff!(copy(psi), h_mpo; krylovdim=0)
+  @test_throws ArgumentError energy_cutoff!(copy(psi), h_mpo; window=-0.1)
+  @test_throws ArgumentError energy_cutoff!(copy(psi), h_mpo; tol=-0.1)
 end
 
 @testset "standalone Chebyshev energy cutoff" begin

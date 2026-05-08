@@ -179,6 +179,7 @@ Exported helpers:
 - `ChebyshevRescaling`
 - `SpectralFunction`
 - `chebyshev_moments`
+- `energy_cutoff!`
 - `jackson_damping`
 - `jackson_kernel`
 - `reconstruct_chebyshev`

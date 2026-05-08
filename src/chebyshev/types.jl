@@ -13,6 +13,8 @@ struct ChebyshevRescaling
   halfwidth::Float64
 
   function ChebyshevRescaling(center::Real, halfwidth::Real)
+    isfinite(center) || throw(ArgumentError("Chebyshev center must be finite"))
+    isfinite(halfwidth) || throw(ArgumentError("Chebyshev halfwidth must be finite"))
     halfwidth > 0 || throw(ArgumentError("Chebyshev halfwidth must be positive"))
     return new(Float64(center), Float64(halfwidth))
   end

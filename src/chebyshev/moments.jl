@@ -55,6 +55,8 @@ function chebyshev_moments(
   energy_cutoff_verbose::Bool=false,
 )
   order > 0 || throw(ArgumentError("Chebyshev order must be positive"))
+  maxdim >= 1 || throw(ArgumentError("chebyshev_moments requires maxdim >= 1"))
+  cutoff >= 0 || throw(ArgumentError("chebyshev_moments requires cutoff >= 0"))
   hascommoninds(siteinds, H, psi) || throw(ArgumentError("Hamiltonian and state must share site indices"))
   hascommoninds(siteinds, H, psi') || throw(ArgumentError("Hamiltonian and bra state must share site indices"))
 

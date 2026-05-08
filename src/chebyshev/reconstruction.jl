@@ -52,22 +52,22 @@ If `kernel` is omitted, the raw truncated series is used.
 # Notes
 - The returned value already includes the Chebyshev weight factor `1 / (π * sqrt(1 - x^2))`.
 """
-function reconstruct_chebyshev(x::Real, moments::AbstractVector{<:Real}; kernel::Union{Nothing, AbstractVector{<:Real}}=nothing)
+function reconstruct_chebyshev(x::Real, moments::AbstractVector{<:Real}; kernel=nothing)
   abs(x) < 1 || throw(ArgumentError("Chebyshev reconstruction requires x in (-1, 1)"))
   length(moments) > 0 || throw(ArgumentError("Chebyshev reconstruction requires at least one moment"))
-  isnothing(kernel) || length(kernel) == length(moments) || throw(ArgumentError("kernel length must match the number of moments"))
+  resolved_kernel = _resolve_kernel(kernel, length(moments))
 
-  value = _kernel_weight(kernel, 1) * moments[1]
+  value = _kernel_weight(resolved_kernel, 1) * moments[1]
   t_prev = one(float(x))
   if length(moments) == 1
     return value / (π * sqrt(1 - x^2))
   end
 
   t_curr = float(x)
-  value += 2 * _kernel_weight(kernel, 2) * moments[2] * t_curr
+  value += 2 * _kernel_weight(resolved_kernel, 2) * moments[2] * t_curr
   for n in 3:length(moments)
     t_next = 2 * x * t_curr - t_prev
-    value += 2 * _kernel_weight(kernel, n) * moments[n] * t_next
+    value += 2 * _kernel_weight(resolved_kernel, n) * moments[n] * t_next
     t_prev = t_curr
     t_curr = t_next
   end
