@@ -34,16 +34,18 @@ function pauli_basis_state(sites, labels::AbstractVector; coefficient::Number=1.
 end
 
 """
-    pauli_total_sz_state(sites; coefficient=0.5)
+    pauli_total_sz_state(sites; coefficient=nothing)
 
-Build the Pauli-basis `MPS` representing `coefficient * sum_j σ_j^z`.
-With the default `coefficient=0.5`, this is the total spin operator `∑_j S_j^z`.
+Build the Pauli-basis `MPS` representing the total spin operator `∑_j S_j^z`.
+The local Pauli basis is normalized as `σ / sqrt(2)`, so the default coefficient
+inserted for each single-`Z` string is `2^(N / 2 - 1)` for `N` sites.
 
 # Arguments
 - `sites`: Pauli-space site indices.
 
 # Keyword Arguments
-- `coefficient`: Scalar multiplying each local `σ^z` contribution.
+- `coefficient`: Optional scalar coefficient inserted directly for each single-`Z`
+  string in the normalized Pauli-basis `MPS`.
 
 # Returns
 - An `MPS` representation of the summed operator in Pauli space.
@@ -52,9 +54,10 @@ With the default `coefficient=0.5`, this is the total spin operator `∑_j S_j^z
 - The returned state is not a simple product state; it uses bond dimension `2` to encode
   the operator sum compactly.
 """
-function pauli_total_sz_state(sites; coefficient::Number=0.5)
+function pauli_total_sz_state(sites; coefficient=nothing)
   nsites = length(sites)
   nsites < 1 && throw(ArgumentError("pauli_total_sz_state requires at least one site"))
+  coefficient = isnothing(coefficient) ? 2.0^(nsites / 2 - 1) : coefficient
   nsites == 1 && return pauli_basis_state(sites, [4]; coefficient=coefficient)
 
   left_link = Index(2, "OperatorStateLink,n=1")
@@ -242,7 +245,7 @@ end
 Infer how many spin-1/2 sites are represented by a Hilbert-space dimension `dim`.
 """
 function _spinhalf_span(dim::Integer)
-  dim < 1 && throw(ArgumentError("spin-1/2 operator-space helpers require a positive matrix dimension"))
+  dim >= 2 || throw(ArgumentError("spin-1/2 operator-space helpers require dimension >= 2"))
   span = round(Int, log2(dim))
   2^span == dim || throw(ArgumentError("matrix dimension must be compatible with spin-1/2 sites"))
   return span

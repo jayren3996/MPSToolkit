@@ -1,6 +1,7 @@
 using ITensors
 using ITensorMPS
 using LinearAlgebra
+using MPSToolkit
 using Test
 
 function _dmt_test_state(nsites)
@@ -66,6 +67,20 @@ end
   @test MPSToolkit.OperatorSpace.dmt_step! === MPSToolkit.dmt_step!
   @test MPSToolkit.OperatorSpace.dmt_evolve! === MPSToolkit.dmt_evolve!
   @test MPSToolkit.OperatorSpace.DMTGateEvolution === MPSToolkit.DMTGateEvolution
+
+  @testset "DMTOptions validates truncation budgets" begin
+    opts = DMTOptions()
+    @test opts.maxdim == 30
+    @test opts.cutoff == 1e-12
+    @test opts.gate_maxdim == 480
+    @test opts.connector_buffer == 8
+
+    @test_throws ArgumentError DMTOptions(maxdim=0)
+    @test_throws ArgumentError DMTOptions(cutoff=-1e-12)
+    @test_throws ArgumentError DMTOptions(gate_maxdim=0)
+    @test_throws ArgumentError DMTOptions(connector_buffer=-1)
+    @test_throws ArgumentError DMTOptions(maxdim=2, connector_buffer=3)
+  end
 
   @testset "identity DMT step preserves a product operator" begin
     _, psi = _dmt_test_state(4)

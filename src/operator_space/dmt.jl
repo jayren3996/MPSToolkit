@@ -17,11 +17,24 @@ Options controlling operator-space density matrix truncation (DMT).
 - `connector_buffer`: Number of connector directions protected before reduced-matrix
   truncation.
 """
-Base.@kwdef struct DMTOptions
-  maxdim::Int = 30
-  cutoff::Float64 = 1e-12
-  gate_maxdim::Int = 480
-  connector_buffer::Int = 8
+struct DMTOptions
+  maxdim::Int
+  cutoff::Float64
+  gate_maxdim::Int
+  connector_buffer::Int
+
+  function DMTOptions(maxdim, cutoff, gate_maxdim, connector_buffer)
+    maxdim >= 1 || throw(ArgumentError("DMTOptions requires maxdim >= 1"))
+    cutoff >= 0 || throw(ArgumentError("DMTOptions requires cutoff >= 0"))
+    gate_maxdim >= 1 || throw(ArgumentError("DMTOptions requires gate_maxdim >= 1"))
+    connector_buffer >= 0 || throw(ArgumentError("DMTOptions requires connector_buffer >= 0"))
+    connector_buffer <= maxdim || throw(ArgumentError("DMTOptions requires connector_buffer <= maxdim"))
+    return new(Int(maxdim), Float64(cutoff), Int(gate_maxdim), Int(connector_buffer))
+  end
+
+  function DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=480, connector_buffer=8)
+    return DMTOptions(maxdim, cutoff, gate_maxdim, connector_buffer)
+  end
 end
 
 """
@@ -329,7 +342,7 @@ function dmt_step!(
   connector_buffer::Integer=8,
 )
   start = _bond_start(bond)
-  span = _operator_span(psi, gate)
+  span = _operator_span_at(psi, gate, start)
   _validate_dmt_step(psi, gate, start, span, direction, Int(maxdim), Int(connector_buffer))
   tebd_evolve!(psi, gate, start; maxdim=Int(gate_maxdim), cutoff=0.0)
   _dmt_window_truncate!(

@@ -54,6 +54,7 @@ Build a callable [`SpectralFunction`](@ref) from a Chebyshev moment sequence.
 - A `SpectralFunction` object that can be called on scalars or vectors of frequencies.
 """
 function spectral_function(moments::AbstractVector{<:Real}; center::Real=0.0, halfwidth::Real=1.0, kernel=:jackson)
+  length(moments) > 0 || throw(ArgumentError("spectral_function requires at least one moment"))
   applied_kernel = _resolve_kernel(kernel, length(moments))
   return SpectralFunction(collect(float.(moments)), applied_kernel, ChebyshevRescaling(center, halfwidth))
 end

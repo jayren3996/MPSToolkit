@@ -83,6 +83,27 @@ function _operator_span(psi::MPS, op::AbstractMatrix)
   return span
 end
 
+function _operator_span_at(psi::MPS, op::AbstractMatrix, start::Integer)
+  size(op, 1) == size(op, 2) || throw(ArgumentError("dense local operator must be square"))
+  start >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
+
+  product_dim = 1
+  for site in Int(start):length(psi)
+    product_dim *= dim(siteind(psi, site))
+    if product_dim == size(op, 1)
+      return site - Int(start) + 1
+    elseif product_dim > size(op, 1)
+      break
+    end
+  end
+  if Int(start) == length(psi)
+    product_dim *= dim(siteind(psi, 1))
+    product_dim == size(op, 1) && return 2
+  end
+
+  throw(ArgumentError("operator size is incompatible with the target site dimensions"))
+end
+
 """
     _gate_for_step(gate_spec, bond, index)
 
@@ -281,7 +302,7 @@ boundary between the last and first sites.
 """
 function tebd_evolve!(psi::MPS, gate::AbstractMatrix, bond; maxdim::Int, cutoff::Real)
   n = _bond_start(bond)
-  span = _operator_span(psi, gate)
+  span = _operator_span_at(psi, gate, n)
   n >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
   truncation_kwargs = _tebd_truncation_kwargs(maxdim, cutoff)
   if span == 1

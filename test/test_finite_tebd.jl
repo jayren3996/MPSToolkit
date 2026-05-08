@@ -1,6 +1,8 @@
 using ITensors
 using ITensorMPS
 using LinearAlgebra
+using MPSToolkit
+using Test
 
 @testset "finite tebd evolve" begin
   s = siteinds("S=1/2", 4)
@@ -132,6 +134,23 @@ end
   @test sz[1] ≈ 0.5 atol = 1e-10
   @test sz[2] ≈ -0.5 atol = 1e-10
   @test sz[3] ≈ 0.5 atol = 1e-10
+end
+
+@testset "finite tebd infers span from target in inhomogeneous chains" begin
+  sites = [Index(2, "site,n=1"), Index(3, "site,n=2"), Index(3, "site,n=3")]
+  tensors = ITensor[]
+  for site in sites
+    tensor = ITensor(site)
+    tensor[site => 1] = 1.0
+    push!(tensors, tensor)
+  end
+  psi = MPS(tensors)
+
+  gate = Matrix{ComplexF64}(I, 9, 9)
+  @test tebd_evolve!(psi, gate, 2; maxdim=8, cutoff=1e-12) === psi
+
+  bad_gate = Matrix{ComplexF64}(I, 4, 4)
+  @test_throws ArgumentError tebd_evolve!(psi, bad_gate, 2; maxdim=8, cutoff=1e-12)
 end
 
 @testset "local gates from Hamiltonians" begin

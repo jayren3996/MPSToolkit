@@ -1,6 +1,7 @@
 using ITensors
 using ITensorMPS
 using LinearAlgebra
+using MPSToolkit
 using Test
 
 function _exact_chebyshev_moments(energy::Real, order::Integer)
@@ -68,6 +69,7 @@ end
   @test_throws ArgumentError jackson_damping(-1, length(moments))
   @test_throws ArgumentError jackson_damping(length(moments), length(moments))
   @test_throws ArgumentError reconstruct_chebyshev(1.0, moments)
+  @test_throws ArgumentError spectral_function(Float64[])
   @test_throws ArgumentError spectral_function(moments; kernel=[1.0])
 end
 

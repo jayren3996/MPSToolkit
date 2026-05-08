@@ -1,6 +1,8 @@
 using ITensors
 using ITensorMPS
 using LinearAlgebra
+using MPSToolkit
+using Test
 
 function _basis_product_mps(sites, labels::Vector{Int})
   tensors = ITensor[]
@@ -40,9 +42,28 @@ end
     @test_throws ArgumentError pauli_basis_state(sites, [:Q, :I, :I, :I])
 
     total_sz = pauli_total_sz_state(sites)
-    expected = sum(0.5 * _basis_product_mps(sites, [j == n ? 4 : 1 for j in 1:length(sites)]) for n in 1:length(sites))
-    @test inner(expected, total_sz) ≈ length(sites) / 4
-    @test inner(total_sz, total_sz) ≈ length(sites) / 4
+    expected_coeff = 2.0^(length(sites) / 2 - 1)
+    expected = sum(expected_coeff * _basis_product_mps(sites, [j == n ? 4 : 1 for j in 1:length(sites)]) for n in 1:length(sites))
+    @test inner(expected, total_sz) ≈ length(sites) * expected_coeff^2
+    @test inner(total_sz, total_sz) ≈ length(sites) * expected_coeff^2
+
+    overridden = pauli_total_sz_state(sites; coefficient=0.5)
+    @test inner(pauli_basis_state(sites, [4, 1, 1, 1]), overridden) ≈ 0.5
+  end
+
+  @testset "pauli_total_sz_state uses normalized Pauli-basis coefficients" begin
+    for nsites in (1, 2, 4)
+      local_sites = pauli_siteinds(nsites)
+      total_sz = pauli_total_sz_state(local_sites)
+      expected_coeff = 2.0^(nsites / 2 - 1)
+
+      for target in 1:nsites
+        labels = fill(1, nsites)
+        labels[target] = 4
+        probe = pauli_basis_state(local_sites, labels)
+        @test inner(probe, total_sz) ≈ expected_coeff atol = 1e-12
+      end
+    end
   end
 
   @testset "Pauli-basis gate helpers" begin
@@ -70,6 +91,7 @@ end
     rotation_gate = pauli_gate(rotation)
     @test rotation_gate' * rotation_gate ≈ Matrix{ComplexF64}(I, 4, 4) atol = 1e-10
     @test_throws ArgumentError pauli_gate(zeros(ComplexF64, 2, 3))
+    @test_throws ArgumentError pauli_gate(ones(ComplexF64, 1, 1))
     @test_throws ArgumentError pauli_gate(zeros(ComplexF64, 3, 3))
   end
 
@@ -163,6 +185,7 @@ end
     @test generator[1, :] ≈ zeros(ComplexF64, 4) atol = 1e-10
     @test gate ≈ expected_gate atol = 1e-10
     @test pauli_gate_from_lindbladian(zeros(ComplexF64, 2, 2), ComplexF64[0 0; 0 0], dt) ≈ Matrix{ComplexF64}(I, 4, 4) atol = 1e-10
+    @test_throws ArgumentError pauli_lindblad_generator(ones(ComplexF64, 1, 1), Matrix{ComplexF64}[])
     @test_throws ArgumentError pauli_lindblad_generator(zeros(ComplexF64, 2, 2), [zeros(ComplexF64, 3, 3)])
 
     sites1 = pauli_siteinds(1)
