@@ -1,6 +1,9 @@
+using ITensors
+using ITensorMPS
+
 @testset "configuration types" begin
   evo = LocalGateEvolution(rand(ComplexF64, 4, 4), 0.01; nstep=10)
-  dmt_evo = DMTGateEvolution(rand(ComplexF64, 4, 4), 0.01; schedule=[1], maxdim=6)
+  dmt_evo = DMTGateEvolution(rand(ComplexF64, 4, 4), 0.01; schedule=[1], maxdim=6, connector_buffer=6)
   tdvp = TDVPEvolution(rand(2, 2), -0.1im; time_step=-0.05im, nsteps=2, nsweeps=2, reverse_step=false, updater_backend="exponentiate", normalize=false, solver_kwargs=(cutoff=1e-9,))
   trunc = BondDimTruncation(8; cutoff=1e-10)
   target = EnergyTarget(0.0; operator=rand(4, 4), tol=1e-6, alpha=0.1, maxstep=50)
@@ -200,4 +203,21 @@ end
   scarfinder_step!(psi, evo, trunc)
 
   @test psi.value == 3
+end
+
+@testset "energy matching uses normalized energy" begin
+  sites = siteinds("S=1/2", 1)
+  psi = MPS(sites, n -> "Up")
+  initial_norm = real(inner(psi, psi))
+  h = ComplexF64[1 0; 0 0]
+  evo = LocalGateEvolution(h, 0.1; schedule=[1], nstep=2, maxdim=4, cutoff=1e-12)
+  trunc = BondDimTruncation(4; cutoff=1e-12)
+  target = EnergyTarget(0.1; operator=h, alpha=1.0, maxstep=1, tol=1e-12)
+
+  MPSToolkit.match_energy!(psi, evo, trunc, target)
+
+  final_norm = real(inner(psi, psi))
+  normalized_energy = energy_density(psi, h) / final_norm
+  @test normalized_energy ≈ 1.0 atol = 1e-10
+  @test final_norm ≈ initial_norm atol = 1e-10
 end

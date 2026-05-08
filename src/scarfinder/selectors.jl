@@ -13,6 +13,9 @@ Score a state using the rule encoded by `selector`.
 - A scalar score, where smaller values are considered better by ScarFinder refinement.
 """
 function score(selector::EntropySelector, psi, context::SelectionContext=SelectionContext())
+  if psi isa MPS && !isnothing(selector.bond)
+    1 <= selector.bond < length(psi) || throw(ArgumentError("EntropySelector bond must lie in 1:length(psi)-1"))
+  end
   return bond_entropy(psi, selector.bond)
 end
 
@@ -27,7 +30,7 @@ Score a state by its fidelity distance to `context.reference_state`.
 - `context`: [`SelectionContext`](@ref) whose `reference_state` field must be populated.
 
 # Returns
-- `1 - |⟨reference_state|psi⟩|`, so lower values correspond to larger fidelity.
+- The normalized [`fidelity_distance`](@ref), so lower values correspond to larger fidelity.
 """
 function score(selector::FidelitySelector, psi, context::SelectionContext=SelectionContext())
   return fidelity_distance(psi, context.reference_state)

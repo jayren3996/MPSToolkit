@@ -126,6 +126,8 @@ Perform one DMT-preserving bond truncation step.
 """
 function _dmt_bond_truncate!(psi::MPS, bond::Integer; maxdim::Integer, cutoff::Real, direction::Symbol=:R, connector_buffer::Integer=8)
   maxdim > 0 || return psi
+  connector_buffer >= 0 || throw(ArgumentError("DMT connector_buffer must be nonnegative"))
+  connector_buffer <= maxdim || throw(ArgumentError("DMT connector_buffer must be <= maxdim"))
   1 <= bond < length(psi) || throw(ArgumentError("DMT bond must lie in 1:length(psi)-1"))
   current_link = linkind(psi, bond)
   isnothing(current_link) && return psi
@@ -138,7 +140,9 @@ function _dmt_bond_truncate!(psi::MPS, bond::Integer; maxdim::Integer, cutoff::R
   left_env = _left_identity_environment(psi, bond - 1)
   right_env = _right_identity_environment(psi, bond + 2)
 
-  u, s, v = svd(psi[bond], (linkind(psi, bond - 1), left_site))
+  previous_link = linkind(psi, bond - 1)
+  left_inds = isnothing(previous_link) ? (left_site,) : (previous_link, left_site)
+  u, s, v = svd(psi[bond], left_inds)
   psi[bond] = u
   psi[bond + 1] = v * psi[bond + 1]
 
@@ -196,6 +200,9 @@ function dmt_step!(
   gate_maxdim::Integer=max(Int(maxdim) * 16, 64),
   connector_buffer::Integer=8,
 )
+  maxdim >= 0 || throw(ArgumentError("DMT maxdim must be nonnegative"))
+  connector_buffer >= 0 || throw(ArgumentError("DMT connector_buffer must be nonnegative"))
+  maxdim == 0 || connector_buffer <= maxdim || throw(ArgumentError("DMT connector_buffer must be <= maxdim"))
   start = _bond_start(bond)
   span = _operator_span(psi, gate)
   tebd_evolve!(psi, gate, start; maxdim=Int(gate_maxdim), cutoff=0.0)

@@ -119,5 +119,6 @@ end
     window=0.3,
     energy_cutoff_tol=1e-12,
   )
-  @test filtered_moments ≈ [1.0, 0.0, -0.5, 0.0] atol=1e-8
+  @test filtered_moments[1] ≈ 0.5 atol=1e-8
+  @test filtered_moments ≈ [0.5, 0.0, -0.5, 0.0] atol=1e-8
 end

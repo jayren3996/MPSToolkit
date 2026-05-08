@@ -167,6 +167,20 @@ function _clone_state(psi)
   return deepcopy(psi)
 end
 
+function _normalized_energy_density(psi, op)
+  return energy_density(psi, op)
+end
+
+function _normalized_energy_density(psi::MPS, op)
+  norm2 = real(inner(psi, psi))
+  norm2 > 0 || throw(ArgumentError("energy matching requires a nonzero-norm MPS"))
+  return energy_density(psi, op) / norm2
+end
+
+function _energy_error(psi, target)
+  return _normalized_energy_density(psi, target.operator) - target.target
+end
+
 """
     _match_energy_dense!(psi, evolution, truncation, target)
 
@@ -186,7 +200,7 @@ Apply a dense-local-operator post-evolution correction loop.
   rollback-or-improvement move, not the main ScarFinder trajectory evolution.
 """
 function _match_energy_dense!(psi, evolution, truncation, target)
-  energy_error = energy_density(psi, target.operator) - target.target
+  energy_error = _energy_error(psi, target)
   abs(energy_error) < target.tol && return psi
 
   for _ in 1:target.maxstep
@@ -204,7 +218,7 @@ function _match_energy_dense!(psi, evolution, truncation, target)
     evolve!(psi, correction_evolution)
     project!(psi, truncation)
 
-    next_error = energy_density(psi, target.operator) - target.target
+    next_error = _energy_error(psi, target)
     if energy_error * next_error < 0
       mix = abs(next_error) / (abs(energy_error) + abs(next_error))
       rollback_gate = exp(mix * correction_dt * target.operator)
@@ -219,7 +233,7 @@ function _match_energy_dense!(psi, evolution, truncation, target)
       evolve!(psi, rollback_evolution)
       project!(psi, truncation)
       return psi
-    elseif abs(next_error) > abs(energy_error)
+    elseif abs(next_error) >= abs(energy_error) - target.tol
       rollback_gate = exp(correction_dt * target.operator)
       rollback_evolution = LocalGateEvolution(
         rollback_gate,
@@ -333,7 +347,7 @@ Apply an MPO-based TDVP correction loop that nudges a finite `MPS` toward a targ
 - The mutated `psi`.
 """
 function _match_energy_mpo!(psi::MPS, evolution, truncation, target)
-  energy_error = energy_density(psi, target.operator) - target.target
+  energy_error = _energy_error(psi, target)
   abs(energy_error) < target.tol && return psi
 
   correction_time = _correction_time(target, energy_error)
@@ -343,7 +357,7 @@ function _match_energy_mpo!(psi::MPS, evolution, truncation, target)
     evolve!(psi, correction_evolution)
     project!(psi, truncation)
 
-    next_error = energy_density(psi, target.operator) - target.target
+    next_error = _energy_error(psi, target)
     abs(next_error) < target.tol && return psi
 
     if energy_error * next_error < 0 || abs(next_error) > abs(energy_error)

@@ -118,6 +118,11 @@ function _gate_for_step(gate_spec::Function, bond, index)
   return gate_spec(bond, index)
 end
 
+function _tebd_truncation_kwargs(maxdim::Integer, cutoff::Real)
+  maxdim > 0 && return (; maxdim=Int(maxdim), cutoff=cutoff)
+  return (; cutoff=cutoff)
+end
+
 """
     tebd_strang_schedule(nsites)
 
@@ -277,21 +282,22 @@ function tebd_evolve!(psi::MPS, gate::AbstractMatrix, bond; maxdim::Int, cutoff:
   n = _bond_start(bond)
   span = _operator_span(psi, gate)
   n >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
+  truncation_kwargs = _tebd_truncation_kwargs(maxdim, cutoff)
   if span == 1
     n <= length(psi) || throw(ArgumentError("local gate support exceeds chain length"))
     sites = [siteind(psi, n)]
     gate_tensor = _dense_local_operator(sites, gate)
-    updated = product(gate_tensor, psi, [n]; maxdim=maxdim, cutoff=cutoff)
+    updated = product(gate_tensor, psi, [n]; truncation_kwargs...)
     psi[:] = updated
     return psi
   end
   if n == length(psi)
     span == 2 || throw(ArgumentError("periodic boundary TEBD currently supports only two-site gates"))
-    reordered = movesite(psi, 1 => length(psi); orthocenter=length(psi), maxdim=maxdim, cutoff=cutoff)
+    reordered = movesite(psi, 1 => length(psi); orthocenter=length(psi), truncation_kwargs...)
     sites = [siteind(reordered, length(psi) - 1), siteind(reordered, length(psi))]
     gate_tensor = _dense_local_operator(sites, gate)
-    updated = product(gate_tensor, reordered, [length(psi) - 1, length(psi)]; maxdim=maxdim, cutoff=cutoff)
-    restored = movesite(updated, length(psi) => 1; orthocenter=1, maxdim=maxdim, cutoff=cutoff)
+    updated = product(gate_tensor, reordered, [length(psi) - 1, length(psi)]; truncation_kwargs...)
+    restored = movesite(updated, length(psi) => 1; orthocenter=1, truncation_kwargs...)
     psi[:] = restored
     return psi
   end
@@ -299,7 +305,7 @@ function tebd_evolve!(psi::MPS, gate::AbstractMatrix, bond; maxdim::Int, cutoff:
   last_site <= length(psi) || throw(ArgumentError("local gate support exceeds chain length"))
   sites = [siteind(psi, j) for j in n:last_site]
   gate_tensor = _dense_local_operator(sites, gate)
-  updated = product(gate_tensor, psi, collect(n:last_site); maxdim=maxdim, cutoff=cutoff)
+  updated = product(gate_tensor, psi, collect(n:last_site); truncation_kwargs...)
   psi[:] = updated
   return psi
 end

@@ -63,6 +63,29 @@ end
     @test inner(reference, psi) ≈ 1.0 atol = 1e-10
   end
 
+  @testset "DMT truncates an enlarged first bond" begin
+    sites = pauli_siteinds(3)
+    terms = [
+      pauli_basis_state(sites, [1, 1, 1]),
+      pauli_basis_state(sites, [2, 2, 1]),
+      pauli_basis_state(sites, [3, 3, 1]),
+    ]
+    psi = normalize(add(terms...; maxdim=8, cutoff=1e-14))
+
+    @test dim(linkind(psi, 1)) > 1
+    dmt_step!(psi, _identity_gate(2), 1; maxdim=1, cutoff=1e-12, direction=:R, gate_maxdim=8, connector_buffer=0)
+
+    @test dim(linkind(psi, 1)) <= 1
+    @test isfinite(real(inner(psi, psi)))
+  end
+
+  @testset "DMT validates connector buffer budget" begin
+    @test_throws ArgumentError DMTGateEvolution(_identity_gate(2), 0.1; schedule=[1], maxdim=2, connector_buffer=3)
+
+    _, psi = _dmt_test_state(3)
+    @test_throws ArgumentError dmt_step!(psi, _identity_gate(2), 1; maxdim=2, connector_buffer=3)
+  end
+
   @testset "scheduled DMT evolution matches explicit two-site sweep" begin
     _, manual = _dmt_test_state(5)
     scheduled = copy(manual)
@@ -71,8 +94,8 @@ end
     gate = pauli_gate(exp(-0.1im * kron(x, zz)))
     gates = [gate, gate, gate, gate]
 
-    _manual_dmt_sweep!(manual, gates; maxdim=4, cutoff=1e-12, gate_maxdim=64, connector_buffer=8)
-    evo = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 3, 4], reverse_schedule=[4, 3, 2, 1], maxdim=4, cutoff=1e-12, gate_maxdim=64)
+    _manual_dmt_sweep!(manual, gates; maxdim=4, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
+    evo = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 3, 4], reverse_schedule=[4, 3, 2, 1], maxdim=4, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
     dmt_evolve!(scheduled, evo)
 
     @test inner(manual, scheduled) ≈ 1.0 atol = 1e-8
@@ -86,8 +109,8 @@ end
     gate = pauli_gate(exp(-0.05im * kron(kron(x, z), x)))
     gates = [gate, gate, gate, gate]
 
-    _manual_dmt_sweep!(manual, gates; maxdim=4, cutoff=1e-12, gate_maxdim=64, connector_buffer=8)
-    evo = DMTGateEvolution(gates, 0.05; schedule=[1, 2, 3, 4], reverse_schedule=[4, 3, 2, 1], maxdim=4, cutoff=1e-12, gate_maxdim=64)
+    _manual_dmt_sweep!(manual, gates; maxdim=4, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
+    evo = DMTGateEvolution(gates, 0.05; schedule=[1, 2, 3, 4], reverse_schedule=[4, 3, 2, 1], maxdim=4, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
     dmt_evolve!(scheduled, evo)
 
     @test inner(manual, scheduled) ≈ 1.0 atol = 1e-8

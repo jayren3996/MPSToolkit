@@ -17,6 +17,22 @@ using LinearAlgebra
   @test maxlinkdim(psi) <= 1
 end
 
+@testset "finite tebd default maxdim works" begin
+  s = siteinds("S=1/2", 4)
+  gate = Matrix{ComplexF64}(I, 4, 4)
+
+  psi = MPS(s, n -> "Up")
+  evo = LocalGateEvolution(gate, 0.01; schedule=[1, 2, 3])
+  evolve!(psi, evo)
+  @test length(psi) == 4
+
+  h = zeros(ComplexF64, 4, 4)
+  from_hamiltonian = MPS(s, n -> "Up")
+  h_evo = tebd_evolution_from_hamiltonians(h, 0.01; schedule=[1, 2, 3])
+  evolve!(from_hamiltonian, h_evo)
+  @test length(from_hamiltonian) == 4
+end
+
 @testset "finite one-site tebd evolve" begin
   s = siteinds("S=1/2", 4)
   psi = MPS(s, n -> "Up")
@@ -182,6 +198,9 @@ end
   @test_throws ArgumentError MPSToolkit.score(FidelitySelector(), product)
   @test bond_entropy(product, 1) ≈ 0.0 atol = 1e-10
   @test entanglement_spectrum(product, 1) ≈ [1.0] atol = 1e-10
+  @test_throws ArgumentError MPSToolkit.score(EntropySelector(; bond=0), product)
+  @test_throws ArgumentError MPSToolkit.score(EntropySelector(; bond=length(product)), product)
+  @test MPSToolkit.score(EntropySelector(; bond=1), product) ≈ 0.0 atol = 1e-10
 
   bell = normalize(add(product, MPS(s, n -> "Dn"); maxdim=2, cutoff=1e-14))
   @test bond_entropy(bell, 1) ≈ log(2) atol = 1e-10

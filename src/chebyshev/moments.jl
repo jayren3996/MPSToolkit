@@ -59,6 +59,17 @@ function chebyshev_moments(
   hascommoninds(siteinds, H, psi') || throw(ArgumentError("Hamiltonian and bra state must share site indices"))
 
   base_state = normalize_initial ? normalize(psi) : copy(psi)
+  if energy_cutoff
+    energy_cutoff!(
+      base_state,
+      H;
+      sweeps=energy_cutoff_sweeps,
+      krylovdim=krylovdim,
+      window=window,
+      tol=energy_cutoff_tol,
+      verbose=energy_cutoff_verbose,
+    )
+  end
   moments = Vector{Float64}(undef, order)
   moments[1] = real(inner(base_state, base_state))
   order == 1 && return moments

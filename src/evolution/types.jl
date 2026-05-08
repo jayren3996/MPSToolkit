@@ -125,6 +125,7 @@ function DMTGateEvolution(
   cutoff >= 0 || throw(ArgumentError("DMTGateEvolution requires cutoff >= 0"))
   gate_maxdim >= 1 || throw(ArgumentError("DMTGateEvolution requires gate_maxdim >= 1"))
   connector_buffer >= 0 || throw(ArgumentError("DMTGateEvolution requires connector_buffer >= 0"))
+  connector_buffer <= maxdim || throw(ArgumentError("DMTGateEvolution requires connector_buffer <= maxdim"))
   return DMTGateEvolution(
     gate,
     Float64(dt),
