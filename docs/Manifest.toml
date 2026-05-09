@@ -878,7 +878,7 @@ version = "1.2.0"
 
 [[deps.MPSToolkit]]
 deps = ["EDKit", "ITensorMPS", "ITensors", "KrylovKit", "LinearAlgebra", "Plots"]
-path = "/Users/ren/Codex/MPSToolkit"
+path = ".."
 uuid = "9fc92dc4-a6d3-4a85-b5fe-6a206e4c3402"
 version = "0.1.0"
 
