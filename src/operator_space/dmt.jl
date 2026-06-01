@@ -101,12 +101,15 @@ function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span
   start >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
   last_site = start + span - 1
   last_site <= length(psi) || throw(ArgumentError("local gate support exceeds chain length"))
+  # Validate Pauli operator-space dimensions for every span, including span == 1, so a
+  # single-site gate on a non-Pauli (non-dimension-4) site is rejected rather than silently
+  # accepted.
+  _validate_pauli_operator_space(psi, start, span)
   span == 1 && return nothing
   start == length(psi) && throw(ArgumentError("periodic boundary DMT is not implemented for local gates"))
   for bond in start:(last_site - 1)
     1 <= bond < length(psi) || throw(ArgumentError("DMT target bonds must lie in 1:length(psi)-1"))
   end
-  _validate_pauli_operator_space(psi, start, span)
   return nothing
 end
 
@@ -128,10 +131,21 @@ Apply the reduced-matrix truncation step used by DMT.
 function _mat_trunc!(matrix_data::AbstractMatrix, χ::Integer; connector_buffer::Integer=8)
   size(matrix_data, 1) < connector_buffer + 1 && return nothing
   χ + connector_buffer >= size(matrix_data, 1) && return nothing
-  matrix_data[1, 1] == 0 && return nothing
 
-  connector = (matrix_data[:, 1:1] * matrix_data[1:1, :]) / matrix_data[1, 1]
-  matrix_data .-= connector
+  # Column/row 1 is the rank-1 identity/trace connector. Subtract it before truncating so the
+  # identity direction is preserved exactly -- but only when it is well-conditioned. A
+  # traceless operator (e.g. a transport current in operator space) has (near) zero identity
+  # overlap, where `matrix_data[1, 1] ≈ 0`; an exact `== 0` guard would then skip truncation
+  # entirely (leaving `maxdim` unenforced) and a tiny-but-nonzero value would blow up the
+  # connector via the `1 / matrix_data[1, 1]` scaling. Use a relative tolerance and, when the
+  # connector is negligible, skip subtracting it but still truncate so `maxdim` is enforced.
+  scale = norm(matrix_data)
+  tolerance = size(matrix_data, 1) * eps(real(eltype(matrix_data))) * scale
+  has_connector = abs(matrix_data[1, 1]) > tolerance
+  if has_connector
+    connector = (matrix_data[:, 1:1] * matrix_data[1:1, :]) / matrix_data[1, 1]
+    matrix_data .-= connector
+  end
 
   trailing = (connector_buffer + 1):size(matrix_data, 1)
   factorization = svd(matrix_data[trailing, trailing])
@@ -139,7 +153,10 @@ function _mat_trunc!(matrix_data::AbstractMatrix, χ::Integer; connector_buffer:
   matrix_data[trailing, trailing] .= factorization.U[:, 1:retained] *
                                      Diagonal(factorization.S[1:retained]) *
                                      factorization.Vt[1:retained, :]
-  matrix_data .+= connector
+
+  if has_connector
+    matrix_data .+= connector
+  end
   return nothing
 end
 
@@ -325,7 +342,10 @@ is (and is not) the appropriate choice.
 - `maxdim`: Target post-truncation bond dimension.
 - `cutoff`: Truncation cutoff used in the final repair SVD.
 - `direction`: Sweep direction, either `:R` or `:L`.
-- `gate_maxdim`: Temporary bond dimension budget used for the raw gate application.
+- `gate_maxdim`: Temporary bond dimension budget used for the raw gate application before DMT
+  truncates the bond back to `maxdim`. A large `gate_maxdim` lets the gate inflate the bond
+  prior to truncation, which can reduce accuracy at small `connector_buffer`; choose it
+  together with `maxdim` and `connector_buffer` rather than independently.
 - `connector_buffer`: Number of protected connector directions.
 
 # Returns
@@ -355,6 +375,28 @@ function dmt_step!(
     connector_buffer=Int(connector_buffer),
   )
   return psi
+end
+
+"""
+    dmt_step!(psi, gate, bond, opts::DMTOptions; direction=:R)
+
+Apply one DMT step using the truncation settings bundled in a [`DMTOptions`](@ref). This is a
+convenience overload of [`dmt_step!`](@ref) that forwards `opts` fields to the keyword form.
+
+# Returns
+- The mutated `psi`.
+"""
+function dmt_step!(psi::MPS, gate::AbstractMatrix, bond, opts::DMTOptions; direction::Symbol=:R)
+  return dmt_step!(
+    psi,
+    gate,
+    bond;
+    maxdim=opts.maxdim,
+    cutoff=opts.cutoff,
+    direction=direction,
+    gate_maxdim=opts.gate_maxdim,
+    connector_buffer=opts.connector_buffer,
+  )
 end
 
 """

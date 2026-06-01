@@ -11,11 +11,14 @@ Return the dense spin-1/2 Pauli matrices.
   included, and `(X, Y, Z)` otherwise.
 
 # Examples
-```julia
-julia> pauli_matrices().Z
-2x2 Matrix{ComplexF64}:
- 1+0im   0+0im
- 0+0im  -1+0im
+```jldoctest
+julia> Z = pauli_matrices().Z;
+
+julia> Z == [1 0; 0 -1]
+true
+
+julia> keys(pauli_matrices(; include_identity=false))
+(:X, :Y, :Z)
 ```
 """
 function pauli_matrices(; include_identity::Bool=true)
@@ -60,6 +63,13 @@ Decompose a `2 x 2` operator into Pauli-basis coefficients.
 # Returns
 - A named tuple of Hilbert-Schmidt coefficients, normalized so that
   `operator == sum(coeffs[name] * pauli_matrices()[name] for name in keys(coeffs))`.
+
+# Notes
+- These coefficients are taken against the **unnormalized** basis `{I, X, Y, Z}`. They are
+  **not** the operator-space state amplitudes produced by [`pauli_basis_state`](@ref) and the
+  other operator-space helpers, which use the normalized basis `σ / √2`. The two conventions
+  differ by a factor of `(√2)^L` over `L` sites, so do not feed `pauli_components` output
+  directly into the operator-space state constructors.
 """
 function pauli_components(operator::AbstractMatrix; include_identity::Bool=true)
   size(operator) == (2, 2) || throw(ArgumentError("Pauli decomposition requires a 2 x 2 operator"))

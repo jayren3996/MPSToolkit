@@ -158,3 +158,27 @@ end
   @test filtered_moments[1] ≈ 0.5 atol=1e-8
   @test filtered_moments ≈ [0.5, 0.0, -0.5, 0.0] atol=1e-8
 end
+
+@testset "chebyshev rescaling helpers" begin
+  # chebyshev_rescaling maps [emin, emax] so the extreme eigenvalues hit ±(1 - margin).
+  r = chebyshev_rescaling(-1.5, 1.5; margin=0.05)
+  @test r.center ≈ 0.0
+  @test r.halfwidth ≈ 1.5 / (1 - 0.05)
+  @test (1.5 - r.center) / r.halfwidth ≈ 0.95
+  @test_throws ArgumentError chebyshev_rescaling(1.0, 1.0)          # emax <= emin
+  @test_throws ArgumentError chebyshev_rescaling(-1.0, 1.0; margin=1.0)
+
+  # rescale_hamiltonian moves the spectrum strictly inside (-1, 1). H = sum Sz_j has
+  # eigenvalues in [-1.5, 1.5] on 3 sites, with |Up,Up,Up> the extreme eigenstate.
+  sites = siteinds("S=1/2", 3)
+  os = OpSum()
+  for j in 1:3
+    os += "Sz", j
+  end
+  H = MPO(os, sites)
+  Hr, rescaling = rescale_hamiltonian(H, -1.5, 1.5; margin=0.05)
+  up = MPS(sites, n -> "Up")
+  @test inner(up', H, up) ≈ 1.5 atol = 1e-10
+  @test inner(up', Hr, up) ≈ 0.95 atol = 1e-8   # extreme maps to 1 - margin
+  @test rescaling.center ≈ 0.0
+end

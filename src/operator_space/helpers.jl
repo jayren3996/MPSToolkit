@@ -16,9 +16,13 @@ Each entry of `labels` may be an integer basis index or one of `"I"`, `"X"`, `"Y
 - A product-state `MPS` in operator space.
 
 # Examples
-```julia
-sites = pauli_siteinds(3)
-rho = pauli_basis_state(sites, [:I, :Z, :I])
+```jldoctest
+julia> sites = pauli_siteinds(3);
+
+julia> rho = pauli_basis_state(sites, [:I, :Z, :I]);
+
+julia> length(rho)
+3
 ```
 """
 function pauli_basis_state(sites, labels::AbstractVector; coefficient::Number=1.0)

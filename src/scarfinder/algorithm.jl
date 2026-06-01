@@ -197,13 +197,20 @@ function _match_energy_dense!(psi, evolution, truncation, target)
   energy_error = _energy_error(psi, target)
   abs(energy_error) < target.tol && return psi
 
+  # Apply the correction once per unique bond (a single first-order Trotter sweep of
+  # exp(-correction_dt * operator)). Reusing the main evolution's full schedule verbatim
+  # would apply the correction once per schedule entry, so a multi-visit schedule (e.g. a
+  # Strang schedule that lists odd bonds twice) would scale the effective imaginary-time
+  # step with the schedule length and make `alpha` schedule-dependent.
+  correction_schedule = isnothing(evolution.schedule) ? evolution.schedule : unique(evolution.schedule)
+
   for _ in 1:target.maxstep
     correction_dt = target.alpha * energy_error
     correction_gate = exp(-correction_dt * target.operator)
     correction_evolution = LocalGateEvolution(
       correction_gate,
       correction_dt;
-      schedule=evolution.schedule,
+      schedule=correction_schedule,
       nstep=1,
       maxdim=truncation.maxdim,
       cutoff=truncation.cutoff,
@@ -213,6 +220,7 @@ function _match_energy_dense!(psi, evolution, truncation, target)
     project!(psi, truncation)
 
     next_error = _energy_error(psi, target)
+    abs(next_error) < target.tol && return psi
     if energy_error * next_error < 0
       mix = abs(next_error) / (abs(energy_error) + abs(next_error))
       rollback_gate = exp(mix * correction_dt * target.operator)
@@ -227,7 +235,7 @@ function _match_energy_dense!(psi, evolution, truncation, target)
       evolve!(psi, rollback_evolution)
       project!(psi, truncation)
       return psi
-    elseif abs(next_error) >= abs(energy_error) - target.tol
+    elseif abs(next_error) >= abs(energy_error)
       rollback_gate = exp(correction_dt * target.operator)
       rollback_evolution = LocalGateEvolution(
         rollback_gate,
@@ -256,10 +264,14 @@ Map an energy error to the signed imaginary-time interval used by an MPO correct
 - `energy_error`: Current signed deviation from the target energy.
 
 # Returns
-- A purely imaginary correction interval proportional to the error.
+- A real correction interval proportional to the error. `tdvp` evolves `exp(t * operator)`,
+  so a real `t = -alpha * energy_error` performs imaginary-time evolution that lowers the
+  energy when it is above target and raises it when below, matching the dense correction
+  gate `exp(-alpha * energy_error * operator)`. A purely imaginary `t` would instead produce
+  norm-preserving real-time evolution that conserves the energy and never converges.
 """
 function _correction_time(target, energy_error)
-  return -1im * target.alpha * energy_error
+  return -target.alpha * energy_error
 end
 
 """
@@ -344,17 +356,25 @@ function _match_energy_mpo!(psi::MPS, evolution, truncation, target)
   energy_error = _energy_error(psi, target)
   abs(energy_error) < target.tol && return psi
 
-  correction_time = _correction_time(target, energy_error)
-  correction_evolution = _tdvp_correction_evolution(target.operator, correction_time, evolution, truncation)
-
   for _ in 1:target.maxstep
+    correction_time = _correction_time(target, energy_error)
+    correction_evolution = _tdvp_correction_evolution(target.operator, correction_time, evolution, truncation)
     evolve!(psi, correction_evolution)
     project!(psi, truncation)
 
     next_error = _energy_error(psi, target)
     abs(next_error) < target.tol && return psi
 
-    if energy_error * next_error < 0 || abs(next_error) > abs(energy_error)
+    if energy_error * next_error < 0
+      # Overshoot: undo only the fraction that overshot so the state lands near the target
+      # instead of bouncing all the way back to the pre-step energy (mirrors the dense path).
+      mix = abs(next_error) / (abs(energy_error) + abs(next_error))
+      rollback_evolution = _tdvp_correction_evolution(target.operator, -mix * correction_time, evolution, truncation)
+      evolve!(psi, rollback_evolution)
+      project!(psi, truncation)
+      return psi
+    elseif abs(next_error) >= abs(energy_error)
+      # No progress: undo the step and stop.
       rollback_evolution = _tdvp_correction_evolution(target.operator, -correction_time, evolution, truncation)
       evolve!(psi, rollback_evolution)
       project!(psi, truncation)
@@ -362,8 +382,6 @@ function _match_energy_mpo!(psi::MPS, evolution, truncation, target)
     end
 
     energy_error = next_error
-    correction_time = _correction_time(target, energy_error)
-    correction_evolution = _tdvp_correction_evolution(target.operator, correction_time, evolution, truncation)
   end
   return psi
 end
@@ -393,6 +411,19 @@ function match_energy!(psi, evolution, truncation, target)
 end
 
 """
+    _selector_prefers(candidate_score, best_score)
+
+Return `true` when a refinement candidate should replace the current best state. Selector
+scores are ranked lowest-first. A `NaN` candidate never wins, a finite candidate always
+replaces a `NaN` incumbent, and otherwise the smaller score wins.
+"""
+function _selector_prefers(candidate_score, best_score)
+  isnan(candidate_score) && return false
+  isnan(best_score) && return true
+  return candidate_score < best_score
+end
+
+"""
     trajectory_refine!(psi, evolution, truncation, selector; kwargs...)
 
 Scan a short projected trajectory and keep the state with the best selector score.
@@ -415,6 +446,9 @@ Scan a short projected trajectory and keep the state with the best selector scor
 - Public `trajectory_refine!` first normalizes the evolution object through the internal
   `_scarfinder_evolution` helper, so the ScarFinder single-step warning rule also applies
   here when the function is called directly.
+- Candidates are ranked lowest-score-first. On a tie the incumbent (earlier) state is kept, so
+  `refine_steps` extra steps never displace an equally good initial state. `NaN` scores are
+  ignored (they never replace the best state) and trigger a warning.
 """
 function _trajectory_refine!(psi, evolution, truncation, selector; kwargs...)
   isnothing(selector) && return psi
@@ -425,15 +459,19 @@ function _trajectory_refine!(psi, evolution, truncation, selector; kwargs...)
   candidate = _clone_state(psi)
   best_state = _clone_state(psi)
   best_score = score(selector, best_state, selector_context)
+  saw_nan = isnan(best_score)
 
   for _ in 1:refine_steps
     _scarfinder_step!(candidate, evolution, truncation; target_energy=target_energy)
     candidate_score = score(selector, candidate, selector_context)
-    if candidate_score < best_score
+    saw_nan |= isnan(candidate_score)
+    if _selector_prefers(candidate_score, best_score)
       best_state = _clone_state(candidate)
       best_score = candidate_score
     end
   end
+
+  saw_nan && @warn "ScarFinder refinement encountered NaN selector scores; such candidates are ignored and the best finite-scoring state is kept. Inspect the selector and candidate states."
 
   _assign_state!(psi, best_state)
   return psi
