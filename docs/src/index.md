@@ -55,8 +55,8 @@ bond_entropy(psi, nothing)      # half-chain entanglement has grown from 0 to �
 
 | If you want to … | Start with |
 |---|---|
-| Build and run a finite-chain TEBD workflow | [Getting Started](getting-started.md) → [TEBD and TDVP](manual/tebd-tdvp.md) |
-| Run MPO-based TDVP on a finite OBC `MPS` | [TEBD and TDVP](manual/tebd-tdvp.md) |
+| Build and run a finite-chain TEBD workflow | [Getting Started](getting-started.md) → [TEBD](manual/tebd.md) |
+| Run MPO-based TDVP on a finite OBC `MPS` | [TDVP](manual/tdvp.md) |
 | Study explicit projection-and-refinement loops | [ScarFinder](manual/scarfinder.md) |
 | Work in Pauli operator space | [Operator Space](manual/operator-space.md) |
 | Truncate or dissipate operator space | [DMT](manual/dmt.md) · [DAOE](manual/daoe.md) |
@@ -81,7 +81,8 @@ manual page.
 
 - [Getting Started](getting-started.md) — minimal setup, installation, and first examples
 - [Architecture](manual/architecture.md) — how the codebase is organized and how the building blocks relate
-- [TEBD and TDVP](manual/tebd-tdvp.md) — dense-gate TEBD helpers and MPO-based TDVP
+- [TEBD](manual/tebd.md) — dense-gate TEBD and explicit schedules
+- [TDVP](manual/tdvp.md) — MPO-based variational time evolution
 - [ScarFinder](manual/scarfinder.md) — explicit projection workflows, selector refinement, and step-count guidance
 - [Operator Space](manual/operator-space.md) — Pauli-basis states, gates, and operator-space evolution
 - [DAOE](manual/daoe.md) — DAOE and FDAOE projector construction

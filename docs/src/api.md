@@ -9,11 +9,12 @@ For most users, the best reading order is:
 
 The workflow-specific manual pages carry most expanded source-backed docstrings:
 
-- [TEBD And TDVP](manual/tebd-tdvp.md)
+- [TEBD](manual/tebd.md)
+- [TDVP](manual/tdvp.md)
 - [ScarFinder](manual/scarfinder.md)
 - [Operator Space](manual/operator-space.md)
-- [DAOE](manual/daoe.md)
 - [DMT](manual/dmt.md)
+- [DAOE](manual/daoe.md)
 - [Chebyshev](manual/chebyshev.md)
 
 ## Dispatch And Shared Entry Points
