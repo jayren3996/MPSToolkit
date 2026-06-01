@@ -11,7 +11,9 @@ Run one TDVP evolution call on a finite OBC `MPS`.
 - The mutated `psi`.
 
 # Notes
-- The effective TDVP step count is `evo.nsteps` if present, otherwise `evo.nsweeps`.
+- The effective TDVP step count is `evo.nsteps` if present, otherwise `evo.nsweeps`. When both
+  are `nothing`, the step count is left to `tdvp`, which derives it from `evo.t` and
+  `evo.time_step`.
 - The underlying `tdvp` call returns a new state, so this wrapper copies the result back
   into the original storage to preserve the package-wide in-place API convention.
 """

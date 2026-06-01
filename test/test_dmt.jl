@@ -327,4 +327,34 @@ end
     evo = DMTGateEvolution((bond, index) -> gate, 0.1; schedule=forward_schedule, reverse_schedule=reverse_schedule, maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
     @test_throws ArgumentError dmt_evolve!(scheduled, evo)
   end
+
+  @testset "reduced-matrix truncation enforces maxdim for traceless operators" begin
+    n = 16
+    cb = 4
+    chi = 4
+    make_block() = ComplexF64[cis(2 * pi * (i - 1) * (j - 1) / n) for i in 1:n, j in 1:n]
+    trailing = (cb + 1):n
+
+    # Zero identity overlap (traceless operator): truncation must still happen so that
+    # maxdim is enforced rather than silently skipped by an exact `== 0` guard.
+    zero_conn = make_block()
+    zero_conn[1, 1] = 0.0 + 0.0im
+    original = copy(zero_conn)
+    MPSToolkit._mat_trunc!(zero_conn, chi; connector_buffer=cb)
+    @test norm(zero_conn - original) > 1e-8
+    @test rank(zero_conn[trailing, trailing]; atol=1e-8) <= chi
+
+    # Near-singular identity overlap must not blow up the rank-1 connector.
+    near_singular = make_block()
+    near_singular[1, 1] = 1e-200 + 0.0im
+    MPSToolkit._mat_trunc!(near_singular, chi; connector_buffer=cb)
+    @test all(isfinite, near_singular)
+    @test norm(near_singular) < 1e3
+
+    # A well-conditioned identity direction is still preserved exactly (unchanged behavior):
+    # the protected connector rows must survive truncation.
+    well = make_block()
+    MPSToolkit._mat_trunc!(well, chi; connector_buffer=cb)
+    @test well[1:cb, :] ≈ make_block()[1:cb, :] atol = 1e-10
+  end
 end

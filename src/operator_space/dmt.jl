@@ -128,10 +128,21 @@ Apply the reduced-matrix truncation step used by DMT.
 function _mat_trunc!(matrix_data::AbstractMatrix, χ::Integer; connector_buffer::Integer=8)
   size(matrix_data, 1) < connector_buffer + 1 && return nothing
   χ + connector_buffer >= size(matrix_data, 1) && return nothing
-  matrix_data[1, 1] == 0 && return nothing
 
-  connector = (matrix_data[:, 1:1] * matrix_data[1:1, :]) / matrix_data[1, 1]
-  matrix_data .-= connector
+  # Column/row 1 is the rank-1 identity/trace connector. Subtract it before truncating so the
+  # identity direction is preserved exactly -- but only when it is well-conditioned. A
+  # traceless operator (e.g. a transport current in operator space) has (near) zero identity
+  # overlap, where `matrix_data[1, 1] ≈ 0`; an exact `== 0` guard would then skip truncation
+  # entirely (leaving `maxdim` unenforced) and a tiny-but-nonzero value would blow up the
+  # connector via the `1 / matrix_data[1, 1]` scaling. Use a relative tolerance and, when the
+  # connector is negligible, skip subtracting it but still truncate so `maxdim` is enforced.
+  scale = norm(matrix_data)
+  tolerance = size(matrix_data, 1) * eps(real(eltype(matrix_data))) * scale
+  has_connector = abs(matrix_data[1, 1]) > tolerance
+  if has_connector
+    connector = (matrix_data[:, 1:1] * matrix_data[1:1, :]) / matrix_data[1, 1]
+    matrix_data .-= connector
+  end
 
   trailing = (connector_buffer + 1):size(matrix_data, 1)
   factorization = svd(matrix_data[trailing, trailing])
@@ -139,7 +150,10 @@ function _mat_trunc!(matrix_data::AbstractMatrix, χ::Integer; connector_buffer:
   matrix_data[trailing, trailing] .= factorization.U[:, 1:retained] *
                                      Diagonal(factorization.S[1:retained]) *
                                      factorization.Vt[1:retained, :]
-  matrix_data .+= connector
+
+  if has_connector
+    matrix_data .+= connector
+  end
   return nothing
 end
 

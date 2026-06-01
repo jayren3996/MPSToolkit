@@ -42,6 +42,7 @@ end
   @test_throws ArgumentError DMTGateEvolution(gate, 0.1; schedule=[1], maxdim=0)
   @test_throws ArgumentError DMTGateEvolution(gate, 0.1; schedule=[1], connector_buffer=-1)
   @test_throws ArgumentError TDVPEvolution(gate, 0.1; nsteps=0)
+  @test_throws ArgumentError TDVPEvolution(gate, 0.1; nsteps=1, solver_kwargs=(reverse_step=false,))
   @test_throws ArgumentError BondDimTruncation(0)
   @test_throws ArgumentError BondDimTruncation(2; cutoff=-1e-3)
   @test_throws ArgumentError EnergyTarget(0.0; maxstep=0)
@@ -92,6 +93,15 @@ MPSToolkit.evolve!(psi::StepCountState, evo::LocalGateEvolution) = (psi.value +=
 MPSToolkit.evolve!(psi::StepCountState, evo::DMTGateEvolution) = (psi.value += evo.nstep; psi)
 MPSToolkit.evolve!(psi::StepCountState, evo::TDVPEvolution) = (psi.value += something(evo.nsteps, evo.nsweeps); psi)
 MPSToolkit.project!(psi::StepCountState, trunc::BondDimTruncation) = psi
+
+mutable struct NaNScoreState
+  value::Int
+end
+
+MPSToolkit.evolve!(psi::NaNScoreState, evo::LocalGateEvolution) = (psi.value += 1; psi)
+MPSToolkit.project!(psi::NaNScoreState, trunc::BondDimTruncation) = psi
+MPSToolkit.score(selector::EntropySelector, psi::NaNScoreState, context::SelectionContext) = NaN
+MPSToolkit._assign_state!(psi::NaNScoreState, updated::NaNScoreState) = (psi.value = updated.value; psi)
 
 @testset "feature namespaces" begin
   @test MPSToolkit.Evolution.LocalGateEvolution === LocalGateEvolution
@@ -176,6 +186,14 @@ end
   @test psi.value == 3
 end
 
+@testset "refinement warns on NaN selector scores" begin
+  psi = NaNScoreState(0)
+  # nstep=10 avoids the unrelated single-step normalization warning, isolating the NaN warning.
+  evo = LocalGateEvolution(reshape(1:4, 2, 2), 0.1; nstep=10)
+  trunc = BondDimTruncation(2)
+  @test_logs (:warn, r"NaN") MPSToolkit.trajectory_refine!(psi, evo, trunc, EntropySelector(); refine_steps=2)
+end
+
 @testset "scarfinder upgrades single-step evolutions" begin
   trunc = BondDimTruncation(2)
 
@@ -220,4 +238,72 @@ end
   normalized_energy = energy_density(psi, h) / final_norm
   @test normalized_energy ≈ 1.0 atol = 1e-10
   @test final_norm ≈ initial_norm atol = 1e-10
+end
+
+@testset "MPO energy matching moves energy toward target" begin
+  sites = siteinds("S=1/2", 4)
+  psi = MPS(sites, n -> isodd(n) ? "Up" : "Dn")
+  os = OpSum()
+  for j in 1:3
+    os += "Sz", j, "Sz", j + 1
+  end
+  for j in 1:4
+    os += 0.9, "Sx", j
+  end
+  H = MPO(os, sites)
+  evo = TDVPEvolution(H, -0.05im; time_step=-0.05im, nsteps=1,
+                      solver_kwargs=(maxdim=16, cutoff=1e-12))
+  trunc = BondDimTruncation(16; cutoff=1e-12)
+
+  e_initial = energy_density(psi, H)
+  target_value = e_initial - 0.1
+  target = EnergyTarget(target_value; operator=H, alpha=1.0, maxstep=40, tol=1e-8)
+
+  MPSToolkit.match_energy!(psi, evo, trunc, target)
+  e_final = energy_density(psi, H)
+
+  # The MPO correction must perform imaginary-time evolution that actually moves
+  # the energy toward the target. A purely-imaginary tdvp time argument would do
+  # unitary (real-time) evolution instead, conserving <H> and freezing the energy.
+  @test abs(e_final - target_value) < abs(e_initial - target_value) - 1e-6
+end
+
+@testset "dense energy matching does not stall on small steps" begin
+  X = ComplexF64[0 1; 1 0]
+  Id = ComplexF64[1 0; 0 1]
+  h = -(kron(X, Id) + kron(Id, X))
+  sites = siteinds("S=1/2", 2)
+  psi = MPS(sites, n -> "Up")
+  evo = LocalGateEvolution(exp(0.0 * h), 0.1; schedule=[1], nstep=1, maxdim=16, cutoff=1e-12)
+  trunc = BondDimTruncation(16; cutoff=1e-12)
+  e_initial = energy_density(psi, h)
+  target_value = e_initial - 0.3
+  # alpha is small enough that one substep improves the error by less than tol; the loop
+  # must accumulate progress over many steps instead of rolling back the first slow step
+  # and returning the state unchanged.
+  target = EnergyTarget(target_value; operator=h, alpha=0.05, maxstep=200, tol=0.05)
+  MPSToolkit.match_energy!(psi, evo, trunc, target)
+  e_final = energy_density(psi, h)
+  @test abs(e_final - target_value) < 0.5 * abs(e_initial - target_value)
+end
+
+@testset "dense energy matching is schedule-duplication independent" begin
+  X = ComplexF64[0 1; 1 0]
+  Id = ComplexF64[1 0; 0 1]
+  h = -(kron(X, Id) + kron(Id, X)) / 2
+  sites = siteinds("S=1/2", 3)
+  make_state() = MPS(sites, n -> "Up")
+  trunc = BondDimTruncation(16; cutoff=1e-12)
+  target_value = energy_density(make_state(), h) - 0.5
+  mk_target() = EnergyTarget(target_value; operator=h, alpha=0.3, maxstep=1, tol=1e-12)
+  gate = exp(0.0 * h)
+  # One correction substep must move the energy by an amount independent of how many times
+  # the schedule happens to list each bond (single pass vs. duplicated pass).
+  evo_single = LocalGateEvolution(gate, 0.1; schedule=[1, 2], nstep=1, maxdim=16, cutoff=1e-12)
+  evo_dup = LocalGateEvolution(gate, 0.1; schedule=[1, 2, 1, 2], nstep=1, maxdim=16, cutoff=1e-12)
+  psi_single = make_state()
+  MPSToolkit.match_energy!(psi_single, evo_single, trunc, mk_target())
+  psi_dup = make_state()
+  MPSToolkit.match_energy!(psi_dup, evo_dup, trunc, mk_target())
+  @test energy_density(psi_single, h) ≈ energy_density(psi_dup, h) atol = 1e-9
 end

@@ -7,6 +7,12 @@ coordinate `x = (ω - center) / halfwidth`.
 # Fields
 - `center`: Physical frequency mapped to `x = 0`.
 - `halfwidth`: Positive scale factor mapping the target energy window to `[-1, 1]`.
+
+# Notes
+- Choose `halfwidth` with a small safety margin (e.g. `(E_max - E_min) / (2 - ε)`) so that
+  every eigenvalue maps strictly inside `(-1, 1)`. Spectral weight that maps to exactly `±1`
+  lands on the band edge, where the Chebyshev measure `1 / (π √(1 - x²))` diverges and the
+  reconstructed [`SpectralFunction`](@ref) returns `0.0`, silently dropping that weight.
 """
 struct ChebyshevRescaling
   center::Float64
@@ -65,6 +71,11 @@ end
     (spectrum::SpectralFunction)(ω)
 
 Evaluate a reconstructed spectral function at one physical frequency `ω`.
+
+# Notes
+- Frequencies that map outside the open interval `(-1, 1)` (i.e. `|x| ≥ 1`, including the band
+  edges `x = ±1`) return `0.0`. Keep the spectrum strictly inside the band through the
+  rescaling (see [`ChebyshevRescaling`](@ref)).
 """
 function (spectrum::SpectralFunction)(ω::Real)
   x = (ω - spectrum.rescaling.center) / spectrum.rescaling.halfwidth

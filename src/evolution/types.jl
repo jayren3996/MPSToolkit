@@ -193,7 +193,10 @@ Construct a [`TDVPEvolution`](@ref) for finite OBC `MPS` states.
 - `updater_backend`: Backend string forwarded to `tdvp`.
 - `updater`: Optional custom updater callback.
 - `normalize`: Whether to normalize the state after evolution.
-- `solver_kwargs`: Additional keyword arguments forwarded to `tdvp`.
+- `solver_kwargs`: Additional keyword arguments forwarded to `tdvp` (e.g. `maxdim`, `cutoff`).
+  Must not contain a key that already has a dedicated argument above (`time_step`, `nsteps`,
+  `reverse_step`, `updater_backend`, `updater`, `normalize`); passing one throws, because it
+  would otherwise be forwarded last and silently override the dedicated argument.
 - `schedule`: Optional metadata used by higher-level workflows.
 
 # Returns
@@ -214,6 +217,10 @@ function TDVPEvolution(
 )
   isnothing(nsteps) || nsteps >= 1 || throw(ArgumentError("TDVPEvolution requires nsteps >= 1 when provided"))
   isnothing(nsweeps) || nsweeps >= 1 || throw(ArgumentError("TDVPEvolution requires nsweeps >= 1 when provided"))
+  reserved_solver_keys = (:time_step, :nsteps, :reverse_step, :updater_backend, :updater, :normalize)
+  conflicting_keys = intersect(keys(solver_kwargs), reserved_solver_keys)
+  isempty(conflicting_keys) ||
+    throw(ArgumentError("TDVPEvolution solver_kwargs must not contain reserved keys $(collect(conflicting_keys)); these are forwarded to `tdvp` last and would silently override the dedicated TDVPEvolution keyword arguments. Set them through the dedicated keyword arguments instead."))
   return TDVPEvolution(
     generator,
     t,

@@ -17,27 +17,27 @@ function _diagonal_values(tensor::ITensor)
 end
 
 """
-    _entropy_from_values(values)
+    _entropy_from_probabilities(probabilities)
 
-Compute the von Neumann entropy from Schmidt values or equivalent amplitudes.
-
-# Arguments
-- `values`: Schmidt coefficients, amplitudes, or any vector whose squared magnitudes should
-  be interpreted as probabilities.
-
-# Returns
-- The Shannon/von-Neumann entropy `-∑ p log(p)` after normalization.
+Compute the von Neumann entropy `-∑ p log(p)` from a vector of (sub)normalized probabilities.
 
 # Notes
-- Zero-probability entries are skipped safely.
+- The probabilities are renormalized to sum to one; zero entries are skipped safely.
 """
-function _entropy_from_values(values)
-  probabilities = abs2.(values)
+function _entropy_from_probabilities(probabilities)
   total = sum(probabilities)
   iszero(total) && return 0.0
   normalized = probabilities ./ total
   return -sum(p -> iszero(p) ? 0.0 : p * log(p), normalized)
 end
+
+"""
+    _entropy_from_values(values)
+
+Compute the von Neumann entropy from Schmidt values or amplitudes, interpreting the squared
+magnitudes as probabilities.
+"""
+_entropy_from_values(values) = _entropy_from_probabilities(abs2.(values))
 
 function _validate_entanglement_bond(psi::MPS, bond_index::Int)
   1 <= bond_index < length(psi) || throw(ArgumentError("entanglement bond must lie in 1:length(psi)-1"))
@@ -57,13 +57,11 @@ Return the bond entropy for a finite `MPS`.
 - The von Neumann entropy associated with the Schmidt values across the selected cut.
 
 # Notes
-- This method delegates spectrum extraction to [`entanglement_spectrum`](@ref) and then
-  converts the normalized Schmidt probabilities back into amplitudes before evaluating the
-  entropy.
+- This method delegates spectrum extraction to [`entanglement_spectrum`](@ref), which already
+  returns normalized Schmidt probabilities, and evaluates the entropy directly from them.
 """
 function bond_entropy(psi::MPS, bond::Union{Nothing,Int})
-  spectrum = entanglement_spectrum(psi, bond)
-  return _entropy_from_values(sqrt.(spectrum))
+  return _entropy_from_probabilities(entanglement_spectrum(psi, bond))
 end
 
 """

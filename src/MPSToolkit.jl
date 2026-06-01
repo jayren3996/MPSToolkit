@@ -24,8 +24,8 @@ include("models/spinhalf.jl")
 include("operator_space/helpers.jl")
 include("operator_space/dmt.jl")
 include("operator_space/daoe.jl")
-include("chebyshev/reconstruction.jl")
 include("chebyshev/types.jl")
+include("chebyshev/reconstruction.jl")
 include("chebyshev/moments.jl")
 
 """
