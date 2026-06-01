@@ -9,6 +9,7 @@ const PRETTY_URLS = get(ENV, "CI", "false") == "true"
 
 makedocs(
   sitename="MPSToolkit.jl",
+  authors="Jie Ren and contributors",
   modules=[MPSToolkit],
   clean=true,
   checkdocs=:none,
@@ -16,6 +17,7 @@ makedocs(
     prettyurls=PRETTY_URLS,
     canonical="https://jayren3996.github.io/MPSToolkit/stable",
     edit_link="main",
+    assets=["assets/favicon.ico"],
   ),
   pages=[
     "Home" => "index.md",
