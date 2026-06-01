@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "5ed021eb700f82151903e0d34285c56a430643dc"
+project_hash = "0b56b2e572552065e0846e3058f4d5433958e09c"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -312,9 +312,9 @@ version = "1.6.0"
 
 [[deps.ITensorMPS]]
 deps = ["Adapt", "Compat", "ITensors", "IsApprox", "KrylovKit", "LinearAlgebra", "NDTensors", "Printf", "Random", "SerializedElementArrays", "TupleTools"]
-git-tree-sha1 = "87f561eba7f138aea267f0f993522f87cc05e58f"
+git-tree-sha1 = "640cd8828719b29895af18eacc8c6a7628285cdd"
 uuid = "0d1a4710-d33b-49a5-8f18-73bdf49b47e2"
-version = "0.3.45"
+version = "0.4.1"
 
     [deps.ITensorMPS.extensions]
     ITensorMPSChainRulesCoreExt = "ChainRulesCore"

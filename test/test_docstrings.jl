@@ -61,6 +61,8 @@ end
     :spinhalf_xyz_bond_hamiltonian,
     :spinhalf_tfim_bond_hamiltonian,
     :ChebyshevRescaling,
+    :chebyshev_rescaling,
+    :rescale_hamiltonian,
     :SpectralFunction,
     :chebyshev_moments,
     Symbol("energy_cutoff!"),
@@ -76,4 +78,16 @@ end
   for name in documented_bindings
     @test _has_binding_doc(MPSToolkit, name)
   end
+end
+
+@testset "docstring examples evaluate correctly" begin
+  # Mirrors the `jldoctest` examples in the docstrings, verified here as robust value checks
+  # (independent of REPL display formatting) so they are exercised by the normal test suite.
+  # pauli_matrices docstring example
+  @test pauli_matrices().Z == ComplexF64[1 0; 0 -1]
+  @test keys(pauli_matrices(; include_identity=false)) == (:X, :Y, :Z)
+  # pauli_basis_state docstring example
+  sites = pauli_siteinds(3)
+  rho = pauli_basis_state(sites, [:I, :Z, :I])
+  @test length(rho) == 3
 end

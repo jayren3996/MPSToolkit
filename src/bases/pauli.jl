@@ -11,11 +11,14 @@ Return the dense spin-1/2 Pauli matrices.
   included, and `(X, Y, Z)` otherwise.
 
 # Examples
-```julia
-julia> pauli_matrices().Z
-2×2 Matrix{ComplexF64}:
- 1.0+0.0im   0.0+0.0im
- 0.0+0.0im  -1.0+0.0im
+```jldoctest
+julia> Z = pauli_matrices().Z;
+
+julia> Z == [1 0; 0 -1]
+true
+
+julia> keys(pauli_matrices(; include_identity=false))
+(:X, :Y, :Z)
 ```
 """
 function pauli_matrices(; include_identity::Bool=true)

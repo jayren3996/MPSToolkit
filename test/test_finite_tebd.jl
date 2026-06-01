@@ -240,3 +240,13 @@ end
   @test bond_entropy(bell, 1) ≈ log(2) atol = 1e-10
   @test sort(entanglement_spectrum(bell, 1)) ≈ [0.5, 0.5] atol = 1e-10
 end
+
+@testset "entanglement_spectrum does not mutate its input" begin
+  sites = siteinds("S=1/2", 5)
+  # A deterministic entangled, non-canonical state so re-gauging would be observable.
+  psi = add(MPS(sites, n -> isodd(n) ? "Up" : "Dn"), MPS(sites, n -> "Up"); cutoff=0.0)
+  snapshot = [copy(psi[n]) for n in 1:length(psi)]
+  spectrum = entanglement_spectrum(psi, 2)
+  @test all(norm(psi[n] - snapshot[n]) < 1e-13 for n in 1:length(psi))
+  @test sum(spectrum) ≈ 1.0
+end

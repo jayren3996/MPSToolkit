@@ -78,13 +78,13 @@ Return the normalized Schmidt probabilities for a finite `MPS`.
 
 # Notes
 - Out-of-range bonds throw an `ArgumentError`.
-- The state is copied before orthogonalization, so the input `psi` is not mutated.
+- The non-mutating `orthogonalize` returns a new state, so the input `psi` is not mutated.
 """
 function entanglement_spectrum(psi::MPS, bond::Union{Nothing,Int})
   bond_index = isnothing(bond) ? max(1, length(psi) ÷ 2) : bond
   _validate_entanglement_bond(psi, bond_index)
 
-  centered = orthogonalize(copy(psi), bond_index)
+  centered = orthogonalize(psi, bond_index)
   left_inds = uniqueinds(centered[bond_index], centered[bond_index + 1])
   _, singular_values, _ = svd(centered[bond_index], left_inds)
   values = abs2.(_diagonal_values(singular_values))

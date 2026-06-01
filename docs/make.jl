@@ -1,6 +1,10 @@
 using Documenter
 using MPSToolkit
 
+# Make the package available inside `jldoctest` blocks so docstring examples are executed
+# and verified during the docs build (`makedocs` runs doctests by default).
+DocMeta.setdocmeta!(MPSToolkit, :DocTestSetup, :(using MPSToolkit); recursive=true)
+
 const PRETTY_URLS = get(ENV, "CI", "false") == "true"
 
 makedocs(
