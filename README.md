@@ -71,8 +71,8 @@ any one without rewriting the others.
 
 | If you want to … | Start with |
 |---|---|
-| Build and run a finite-chain TEBD workflow | [Getting Started](https://jayren3996.github.io/MPSToolkit/dev/getting-started/) → [TEBD and TDVP](https://jayren3996.github.io/MPSToolkit/dev/manual/tebd-tdvp/) |
-| Run MPO-based TDVP on a finite OBC `MPS` | [TEBD and TDVP](https://jayren3996.github.io/MPSToolkit/dev/manual/tebd-tdvp/) |
+| Build and run a finite-chain TEBD workflow | [Getting Started](https://jayren3996.github.io/MPSToolkit/dev/getting-started/) → [TEBD](https://jayren3996.github.io/MPSToolkit/dev/manual/tebd/) |
+| Run MPO-based TDVP on a finite OBC `MPS` | [TDVP](https://jayren3996.github.io/MPSToolkit/dev/manual/tdvp/) |
 | Study explicit projection-and-refinement loops | [ScarFinder](https://jayren3996.github.io/MPSToolkit/dev/manual/scarfinder/) |
 | Work in Pauli operator space | [Operator Space](https://jayren3996.github.io/MPSToolkit/dev/manual/operator-space/) |
 | Truncate or dissipate operator space | [DMT](https://jayren3996.github.io/MPSToolkit/dev/manual/dmt/) · [DAOE](https://jayren3996.github.io/MPSToolkit/dev/manual/daoe/) |

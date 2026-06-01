@@ -1,51 +1,173 @@
 # Operator Space
 
-`MPSToolkit.jl` includes a Pauli-basis operator-space layer for dynamics and open-system workflows.
+*Pauli-basis (vectorized) operator dynamics: the Heisenberg-picture and open-system foundation that DMT, DAOE, and Lindblad TEBD are built on.*
 
-## Basis Helpers
+## Background
 
-The core basis and state helpers are:
+Most of `MPSToolkit.jl` evolves a *state* ``|\psi\rangle`` forward in time. The operator-space layer instead evolves an *operator* — a Heisenberg observable, a density matrix, or a Lindbladian dissipator — by encoding it as an MPS over a four-dimensional local Pauli basis. This makes autocorrelation functions, transport coefficients, and open-system steady states accessible with the same finite-MPS machinery used for pure states.
 
-- `pauli_siteinds`
-- `pauli_basis_state`
-- `pauli_total_sz_state`
-- `pauli_matrices`
-- `pauli_basis`
-- `pauli_components`
+### Heisenberg vs Schrödinger picture
 
-The Pauli basis is the shared foundation for operator-space TEBD, DMT, Lindblad evolution, and DAOE-style projectors. In practice, a typical workflow is:
+In the Schrödinger picture the state carries the time dependence, ``\rho(t) = e^{-iHt}\,\rho(0)\,e^{iHt}``, and observables are fixed. In the Heisenberg picture the roles swap: the state is fixed and an observable ``O`` evolves as
 
-1. build Pauli-basis site indices with `pauli_siteinds`
-2. prepare an operator-state `MPS`
-3. map local Hamiltonians or Lindbladians into Pauli-space gates
-4. run scheduled evolution or projection
+```math
+O(t) = e^{iHt}\,O\,e^{-iHt}, \qquad \dot O = i[H, O].
+```
 
-## Minimal Example
+For computing a single correlator ``\langle A(t)\,B\rangle`` the Heisenberg picture is often the more economical choice — you evolve one operator rather than re-evolving the full state for every observable. The cost is that ``O(t)`` is now an object in operator space, with its own notion of "size" and its own entanglement structure.
+
+### Vectorization
+
+To put an operator inside an MPS we vectorize it. Writing ``\rho \mapsto |\rho\rangle\!\rangle`` for the column-stacking (or, here, Pauli-component) isomorphism between the operator ``\rho`` acting on ``(\mathbb{C}^2)^{\otimes N}`` and a vector in the ``4^N``-dimensional Liouville space, left/right multiplication becomes matrix multiplication on the doubled space:
+
+```math
+A\,\rho\,B \;\mapsto\; (A \otimes B^{\mathsf T})\,|\rho\rangle\!\rangle.
+```
+
+Under vectorization the Heisenberg and Lindblad equations of motion are *linear* in ``|\rho\rangle\!\rangle``, so the generator is an ordinary (super)operator that can be Trotterized into local gates exactly as in state-space TEBD.
+
+### The local Pauli basis ``(I, X, Y, Z)``
+
+Rather than column-stacking, `MPSToolkit.jl` vectorizes each site in the **Pauli basis** with the fixed ordering
+
+```math
+(I, X, Y, Z) \;\longleftrightarrow\; \text{local indices } (1, 2, 3, 4),
+```
+
+normalized as ``\sigma/\sqrt{2}`` so that the single-site operators are orthonormal under the Hilbert–Schmidt inner product, ``\operatorname{tr}\!\big[(\sigma_\alpha/\sqrt2)^\dagger (\sigma_\beta/\sqrt2)\big] = \delta_{\alpha\beta}``. An ``N``-site operator becomes an MPS whose physical leg on each site is a dimension-4 index, and a Pauli string such as ``X_1 Z_3`` is a product state in this basis. This ordering is shared by every operator-space helper on this page (`pauli_siteinds`, `pauli_basis_state`, `pauli_gate`, `pauli_lindblad_generator`, ...), so states and gates are mutually consistent.
+
+!!! note "Two normalizations"
+    `pauli_components` decomposes a ``2\times2`` matrix against the **unnormalized** basis ``\{I, X, Y, Z\}``, whereas the operator-space *state* helpers use the **normalized** basis ``\sigma/\sqrt2``. The two differ by ``(\sqrt2)^N`` over ``N`` sites, so do not feed `pauli_components` output straight into `pauli_basis_state`.
+
+### Operator entanglement and compressibility
+
+The reason this representation is useful is that a vectorized operator has its own bipartite entanglement — the *operator entanglement* — defined through the singular values of ``|O\rangle\!\rangle`` across a cut. A local operator (a short Pauli string) starts with essentially zero operator entanglement. Under chaotic dynamics it spreads, and the operator entanglement generically grows, eventually saturating the available bond dimension. But for many physically important cases — transport of a conserved density, weakly dissipative open systems, short-time autocorrelators — the operator MPS stays compressible far longer than the corresponding Schrödinger-picture state, which is exactly the regime where operator-space TEBD, DMT, and DAOE pay off.
+
+### Open-system Lindblad dynamics
+
+For an open system the density matrix obeys the Lindblad master equation
+
+```math
+\dot\rho = \mathcal{L}\rho = -i[H, \rho] + \sum_j \Big( L_j\,\rho\,L_j^\dagger - \tfrac{1}{2}\{L_j^\dagger L_j,\, \rho\} \Big),
+```
+
+with Hamiltonian ``H`` and jump operators ``L_j``. Vectorized, ``\mathcal{L}`` is a (non-Hermitian) superoperator; the formal solution ``\rho(t) = e^{t\mathcal{L}}\rho(0)`` is again generated by a local object that can be Trotterized. `pauli_lindblad_generator` builds the dense local ``\mathcal{L}`` in the Pauli basis, and `pauli_gate_from_lindbladian` exponentiates it into a single-step gate ``e^{\,dt\,\mathcal{L}}`` ready for the TEBD scheduler. Setting all ``L_j = 0`` recovers the purely Hamiltonian (commutator) generator.
+
+## Basis and state helpers
+
+`pauli_siteinds(N)` builds the `N` dimension-4 site indices that define operator space; everything else is expressed over these indices.
 
 ```julia
 using MPSToolkit
 using ITensors
 using ITensorMPS
 
-nsites = 6
-sites = pauli_siteinds(nsites)
-state = pauli_basis_state(sites, ["Z", "I", "I", "I", "I", "I"])
-
-evolution = tebd_strang_evolution(
-  nsites,
-  0.05;
-  local_hamiltonian=(bond, weight) -> weight * spinhalf_tfim_bond_hamiltonian(nsites, bond; J=1.0, g=0.8),
-  map_hamiltonian=pauli_gate_from_hamiltonian,
-  maxdim=64,
-  cutoff=1e-12,
-)
-
-evolve!(state, evolution)
+sites = pauli_siteinds(4)            # 4 dimension-4 indices, basis (I,X,Y,Z)
+op    = pauli_basis_state(sites, ["I", "X", "I", "Z"])   # the Pauli string X_2 Z_4
 ```
 
-The helper notebooks [operator_tebd_helper_apis.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/operator_tebd_helper_apis.ipynb) and [dmt_scheduler.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/dmt_scheduler.ipynb) show the fuller scheduler-driven workflow.
+`pauli_basis_state(sites, labels; coefficient=1.0)` builds a product-state operator MPS. Each label is `"I"`, `"X"`, `"Y"`, `"Z"` (string or `Symbol`, case-insensitive) or the integer index `1:4`; `coefficient` is an overall scalar stored on the first tensor.
 
-## Basis And Mapping API
+`pauli_total_sz_state(sites; coefficient=nothing)` returns the operator MPS for the global magnetization ``\sum_j S_j^z`` — a uniform sum of single-`Z` strings. It is not a product state but uses bond dimension 2 to encode the sum compactly. Because the basis is normalized as ``\sigma/\sqrt2``, the default per-string coefficient is ``2^{N/2-1}``; pass `coefficient` to override it.
+
+```julia
+sites = pauli_siteinds(6)
+Sz    = pauli_total_sz_state(sites)        # MPS for ∑_j S_j^z, bond dimension 2
+```
+
+The dense single-site primitives back these helpers and are useful for building or inspecting custom local objects:
+
+- `pauli_matrices(; include_identity=true)` — a named tuple of the dense ``2\times2`` Pauli matrices in `(I, X, Y, Z)` order (or `(X, Y, Z)` when the identity is dropped).
+- `pauli_basis(; include_identity=true)` — the same matrices as a vector of `Symbol => Matrix` pairs.
+- `pauli_components(operator; include_identity=true)` — the Hilbert–Schmidt coefficients of a ``2\times2`` `operator` against the **unnormalized** basis, normalized so that `operator == sum(c[name] * pauli_matrices()[name] for name in keys(c))`.
+
+```julia
+mats = pauli_matrices()                       # (I, X, Y, Z)
+c    = pauli_components([0 1; 1 0])           # (I=0, X=1, Y=0, Z=0)  -> X
+```
+
+## Local Hamiltonian and Lindblad maps
+
+These helpers turn a dense *physical-space* operator (acting on one or a few spin-1/2 sites) into the corresponding dense *operator-space* gate in the Pauli basis. The number of sites is inferred from the matrix dimension, so a ``4\times4`` matrix is read as a two-site gate.
+
+- `pauli_gate(unitary)` — the superoperator induced by conjugation, ``G[\alpha,\beta] = \operatorname{tr}\!\big[P_\alpha^\dagger\, U P_\beta U^\dagger\big]`` with normalized Pauli-basis operators ``P_\alpha``. This is the operator-space image of ``\rho \mapsto U\rho U^\dagger``.
+- `pauli_gate_from_hamiltonian(h, dt)` — the conjugation gate for the unitary ``e^{-i\,dt\,h}``, i.e. one Heisenberg/commutator TEBD step. This is the function you pass as `map_hamiltonian` to the TEBD scheduler.
+- `pauli_lindblad_generator(h, jumps)` — the dense local Lindbladian ``\mathcal{L}`` in the Pauli basis for Hamiltonian `h` and jump operator(s) `jumps` (a single matrix or a collection, each matching the dimension of `h`).
+- `pauli_gate_from_lindbladian(h, jumps, dt)` — the dissipative one-step gate ``e^{\,dt\,\mathcal{L}} = e^{\,dt\,\text{pauli\_lindblad\_generator}(h, jumps)}``.
+
+```julia
+using MPSToolkit
+
+# Two-site XXZ bond -> Heisenberg-picture conjugation gate
+h    = spinhalf_xyz_bond_hamiltonian(; Jx=1.0, Jy=1.0, Jz=0.8)
+gate = pauli_gate_from_hamiltonian(h, 0.05)        # 16 x 16 superoperator
+
+# Single-site dephasing channel -> dissipative gate
+sx   = pauli_matrices().X
+sz   = pauli_matrices().Z
+L    = pauli_gate_from_lindbladian(sx, [sqrt(0.3) * sz], 0.05)   # 4 x 4 gate
+```
+
+`pauli_gate_from_hamiltonian` matches the `(h, dt) -> gate` signature expected by `local_gates_from_hamiltonians` and `tebd_strang_evolution`, which is what makes operator-space TEBD a drop-in use of the ordinary scheduler.
+
+## Operator-space TEBD
+
+Operator-space TEBD reuses the entire TEBD scheduler. The only change from state-space TEBD is the `map_hamiltonian` keyword: instead of the default ``h \mapsto e^{-i\,dt\,h}`` state gate, you pass `pauli_gate_from_hamiltonian`, which produces the conjugation superoperator. The scheduler (`tebd_strang_evolution` → `local_gates_from_hamiltonians` → `LocalGateEvolution`) is otherwise identical, so the odd–even–odd Strang schedule, the per-step truncation budget, and the [`evolve!`](@ref) driver all carry over unchanged.
+
+The example below evolves a single-site ``Z`` operator under a transverse-field Ising chain in the Heisenberg picture and reports the growth of bond dimension and operator (bipartite) entanglement.
+
+```julia
+using MPSToolkit
+using ITensors
+using ITensorMPS
+
+nsites = 8
+dt     = 0.05
+
+# Operator-space site indices and an initial local operator: Z on the central site.
+sites  = pauli_siteinds(nsites)
+labels = fill("I", nsites)
+labels[nsites ÷ 2] = "Z"
+op     = pauli_basis_state(sites, labels)
+
+# Strang TEBD over operator space: the ONLY operator-space-specific choice is
+# map_hamiltonian = pauli_gate_from_hamiltonian, which turns each local Hamiltonian
+# into its conjugation (Heisenberg) superoperator instead of a state propagator.
+evolution = tebd_strang_evolution(
+  nsites,
+  dt;
+  local_hamiltonian = (bond, weight) ->
+    weight * spinhalf_tfim_bond_hamiltonian(nsites, bond; J=1.0, g=0.9),
+  map_hamiltonian = pauli_gate_from_hamiltonian,
+  maxdim = 64,
+  cutoff = 1e-12,
+)
+
+# Each evolve! call runs one full Strang sweep (dt). Run several to spread the operator.
+nsweeps = 40
+for sweep in 1:nsweeps
+  evolve!(op, evolution)
+  if sweep % 10 == 0
+    cut = nsites ÷ 2
+    println("sweep $sweep  t = $(round(sweep * dt; digits=3))  ",
+            "maxlinkdim = $(maxlinkdim(op))  ",
+            "S_op(cut=$cut) = $(round(bond_entropy(op, cut); digits=4))")
+  end
+end
+```
+
+`bond_entropy` here is the von Neumann entropy of the *vectorized operator* across the cut — the operator entanglement — so its growth is a direct diagnostic of operator spreading and of how hard the evolution is to compress. Replacing `pauli_gate_from_hamiltonian` with `(h, dt) -> pauli_gate_from_lindbladian(h, jumps, dt)` (for fixed local `jumps`) turns the same scheduler into a Lindblad propagator; see the open-system notebooks below.
+
+## Related operator-space tools
+
+This page covers the generic Pauli-basis representation and operator-space TEBD. Two specialized truncation backends live on their own pages and reuse the same Pauli-basis states and gates:
+
+- **[DMT](dmt.md)** (density matrix truncation) — a *transport-specific* truncation that protects the identity/trace component and short-range reduced-operator data at every bond before discarding long-range correlations. Documented there: `dmt_step!`, `dmt_evolve!`, `DMTGateEvolution`, and `DMTOptions`.
+- **[DAOE](daoe.md)** (dissipation-assisted operator evolution) — diagonal projector MPOs that damp operator components by operator *size* rather than bond dimension. Documented there: `pauli_daoe_projector` (Pauli weight) and `fdaoe_projector` (fermionic weight).
+
+For general operator-space evolution without a transport assumption, prefer plain [`LocalGateEvolution`](@ref) TEBD with the Pauli-basis helpers on this page; DMT's identity-preserving truncation rule is only appropriate when the problem has transport structure.
+
+## API
 
 ```@docs
 pauli_siteinds
@@ -60,34 +182,16 @@ pauli_lindblad_generator
 pauli_gate_from_lindbladian
 ```
 
-## Local Operator And Lindblad Maps
-
-The package exposes helpers for converting local Hamiltonians and Lindbladians into operator-space gates:
-
-- `pauli_gate`
-- `pauli_gate_from_hamiltonian`
-- `pauli_lindblad_generator`
-- `pauli_gate_from_lindbladian`
-
-## DMT And Projectors
-
-Operator-space specific algorithms include:
-
-- `dmt_step!`
-- `dmt_evolve!`
-- `DMTGateEvolution`
-- `pauli_daoe_projector`
-- `fdaoe_projector`
-
-!!! note "DMT is transport-specific"
-    The DMT functions (`dmt_step!`, `dmt_evolve!`, `DMTGateEvolution`) implement a
-    truncation scheme designed specifically for **transport** (e.g. spin or energy diffusion).
-    Their truncation rule preserves the identity component at every bond — an assumption that
-    holds for transport but not for arbitrary operator-space tasks.  For general operator-space
-    TEBD evolution, use [`LocalGateEvolution`](@ref) with the Pauli-basis helpers above.
-
-These tools are intended for explicit operator-space workflows rather than as hidden internals.
-
 ## Examples
 
-For runnable examples, see [Examples](../examples.md), especially the operator-space and open-system notebooks.
+- [examples/operator_space/operator_tebd_helper_apis.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/operator_tebd_helper_apis.ipynb)
+- [examples/operator_space/dmt_scheduler.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/dmt_scheduler.ipynb)
+- [examples/open_systems/pauli_lindblad_tebd.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/open_systems/pauli_lindblad_tebd.ipynb)
+- [examples/open_systems/boundary_driven_xxz_steady_state.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/open_systems/boundary_driven_xxz_steady_state.ipynb)
+
+## References
+
+- Tibor Prosen and Marko Žnidarič, [Matrix product simulations of non-equilibrium steady states of quantum spin chains](https://doi.org/10.1088/1742-5468/2009/02/P02035), J. Stat. Mech. (2009) P02035 — vectorized-MPS treatment of Lindblad dynamics and boundary-driven steady states.
+- Tomaž Prosen and Iztok Pižorn, [Operator space entanglement entropy in a transverse Ising chain](https://doi.org/10.1103/PhysRevA.76.032316), Phys. Rev. A 76, 032316 (2007) — operator entanglement and its growth.
+- Tibor Rakovszky, C. W. von Keyserlingk, and Frank Pollmann, [Dissipation-assisted operator evolution method for capturing hydrodynamic transport](https://arxiv.org/abs/2004.05177) — operator spreading and size-based truncation.
+- Christopher David White, Michael Zaletel, Roger S. K. Mong, and Gil Refael, [Quantum dynamics of thermalizing systems](https://doi.org/10.1103/PhysRevB.97.035127), Phys. Rev. B 97, 035127 (2018) — density matrix truncation in operator space.

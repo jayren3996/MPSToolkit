@@ -63,7 +63,8 @@ evolve!(state, evolution)
 ## Next Steps
 
 - For the package layout and shared algorithm split, see [Architecture](manual/architecture.md).
-- For physical-state evolution, see [TEBD And TDVP](manual/tebd-tdvp.md).
+- For dense-gate time evolution, see [TEBD](manual/tebd.md).
+- For MPO-based variational evolution, see [TDVP](manual/tdvp.md).
 - For projection-and-refinement workflows, see [ScarFinder](manual/scarfinder.md).
 - For operator-space workflows, see [Operator Space](manual/operator-space.md).
 - For operator-space projection MPOs, see [DAOE](manual/daoe.md).
