@@ -101,12 +101,15 @@ function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span
   start >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
   last_site = start + span - 1
   last_site <= length(psi) || throw(ArgumentError("local gate support exceeds chain length"))
+  # Validate Pauli operator-space dimensions for every span, including span == 1, so a
+  # single-site gate on a non-Pauli (non-dimension-4) site is rejected rather than silently
+  # accepted.
+  _validate_pauli_operator_space(psi, start, span)
   span == 1 && return nothing
   start == length(psi) && throw(ArgumentError("periodic boundary DMT is not implemented for local gates"))
   for bond in start:(last_site - 1)
     1 <= bond < length(psi) || throw(ArgumentError("DMT target bonds must lie in 1:length(psi)-1"))
   end
-  _validate_pauli_operator_space(psi, start, span)
   return nothing
 end
 
@@ -339,7 +342,10 @@ is (and is not) the appropriate choice.
 - `maxdim`: Target post-truncation bond dimension.
 - `cutoff`: Truncation cutoff used in the final repair SVD.
 - `direction`: Sweep direction, either `:R` or `:L`.
-- `gate_maxdim`: Temporary bond dimension budget used for the raw gate application.
+- `gate_maxdim`: Temporary bond dimension budget used for the raw gate application before DMT
+  truncates the bond back to `maxdim`. A large `gate_maxdim` lets the gate inflate the bond
+  prior to truncation, which can reduce accuracy at small `connector_buffer`; choose it
+  together with `maxdim` and `connector_buffer` rather than independently.
 - `connector_buffer`: Number of protected connector directions.
 
 # Returns
@@ -369,6 +375,28 @@ function dmt_step!(
     connector_buffer=Int(connector_buffer),
   )
   return psi
+end
+
+"""
+    dmt_step!(psi, gate, bond, opts::DMTOptions; direction=:R)
+
+Apply one DMT step using the truncation settings bundled in a [`DMTOptions`](@ref). This is a
+convenience overload of [`dmt_step!`](@ref) that forwards `opts` fields to the keyword form.
+
+# Returns
+- The mutated `psi`.
+"""
+function dmt_step!(psi::MPS, gate::AbstractMatrix, bond, opts::DMTOptions; direction::Symbol=:R)
+  return dmt_step!(
+    psi,
+    gate,
+    bond;
+    maxdim=opts.maxdim,
+    cutoff=opts.cutoff,
+    direction=direction,
+    gate_maxdim=opts.gate_maxdim,
+    connector_buffer=opts.connector_buffer,
+  )
 end
 
 """

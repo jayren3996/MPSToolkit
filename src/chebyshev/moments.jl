@@ -195,6 +195,15 @@ the Hamiltonian has already been rescaled into the target Chebyshev window.
 
 # Returns
 - The mutated `psi`.
+
+# Notes
+- This filters each site against its **local** effective problem (the single-site effective
+  Hamiltonian from the MPO environment), not the global Hamiltonian spectrum. Out-of-window
+  weight that is delocalized across entangled bonds is therefore only weakly removed, so a
+  strongly entangling state may retain such weight even after many sweeps.
+- `tol` is compared against a heuristic per-sweep convergence estimate (the accumulated
+  relative removed weight), not a calibrated RMS energy error; treat it as a stopping monitor
+  rather than an error bound.
 """
 function energy_cutoff!(
   psi::MPS,
@@ -227,7 +236,8 @@ end
 """
     _energy_cutoff_sweep!(projector, psi; krylovdim, window)
 
-Run one bidirectional energy-cutoff sweep and return its RMS error estimate.
+Run one bidirectional energy-cutoff sweep and return a heuristic convergence estimate (the
+accumulated relative removed weight across the site visits, not a calibrated RMS error).
 """
 function _energy_cutoff_sweep!(projector::ProjMPO, psi::MPS; krylovdim::Integer, window::Real)
   nsites = length(psi)
@@ -286,6 +296,10 @@ Project a local Krylov basis state onto the eigenmodes whose energies lie within
 - `(projected_coefficients, removed_weight)`.
 """
 function _project_energy_window(eigenvalues::AbstractVector, eigenvectors::AbstractMatrix; window::Real=1.0)
+  # The input local state is e_1 in this Krylov basis because `_lanczos_tridiagonal` seeds
+  # `basis[1] = normalize(tensor)`. That invariant is load-bearing here: `coefficients[1] = 1`
+  # represents the (normalized) input state, and `vector[1]` is each eigenmode's overlap with
+  # it. If the Lanczos seed ordering ever changes, this projection must be revisited.
   coefficients = zeros(eltype(eigenvectors), size(eigenvectors, 1))
   coefficients[1] = one(eltype(coefficients))
   removed_weight = 0.0

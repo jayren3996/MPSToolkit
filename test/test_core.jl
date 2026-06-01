@@ -268,6 +268,30 @@ end
   @test abs(e_final - target_value) < abs(e_initial - target_value) - 1e-6
 end
 
+@testset "MPO energy matching recovers from overshoot" begin
+  sites = siteinds("S=1/2", 4)
+  psi = MPS(sites, n -> isodd(n) ? "Up" : "Dn")
+  os = OpSum()
+  for j in 1:3
+    os += "Sz", j, "Sz", j + 1
+  end
+  for j in 1:4
+    os += 0.9, "Sx", j
+  end
+  H = MPO(os, sites)
+  evo = TDVPEvolution(H, -0.05im; time_step=-0.05im, nsteps=1,
+                      solver_kwargs=(maxdim=16, cutoff=1e-12))
+  trunc = BondDimTruncation(16; cutoff=1e-12)
+  e_initial = energy_density(psi, H)
+  target_value = e_initial - 0.02
+  # alpha is large enough that the first cooling step overshoots the small gap; the
+  # proportional rollback must land near the target rather than bouncing back to e_initial.
+  target = EnergyTarget(target_value; operator=H, alpha=8.0, maxstep=12, tol=1e-9)
+  MPSToolkit.match_energy!(psi, evo, trunc, target)
+  e_final = energy_density(psi, H)
+  @test abs(e_final - target_value) < 0.5 * abs(e_initial - target_value)
+end
+
 @testset "dense energy matching does not stall on small steps" begin
   X = ComplexF64[0 1; 1 0]
   Id = ComplexF64[1 0; 0 1]

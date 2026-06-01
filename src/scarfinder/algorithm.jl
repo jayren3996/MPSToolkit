@@ -356,17 +356,25 @@ function _match_energy_mpo!(psi::MPS, evolution, truncation, target)
   energy_error = _energy_error(psi, target)
   abs(energy_error) < target.tol && return psi
 
-  correction_time = _correction_time(target, energy_error)
-  correction_evolution = _tdvp_correction_evolution(target.operator, correction_time, evolution, truncation)
-
   for _ in 1:target.maxstep
+    correction_time = _correction_time(target, energy_error)
+    correction_evolution = _tdvp_correction_evolution(target.operator, correction_time, evolution, truncation)
     evolve!(psi, correction_evolution)
     project!(psi, truncation)
 
     next_error = _energy_error(psi, target)
     abs(next_error) < target.tol && return psi
 
-    if energy_error * next_error < 0 || abs(next_error) > abs(energy_error)
+    if energy_error * next_error < 0
+      # Overshoot: undo only the fraction that overshot so the state lands near the target
+      # instead of bouncing all the way back to the pre-step energy (mirrors the dense path).
+      mix = abs(next_error) / (abs(energy_error) + abs(next_error))
+      rollback_evolution = _tdvp_correction_evolution(target.operator, -mix * correction_time, evolution, truncation)
+      evolve!(psi, rollback_evolution)
+      project!(psi, truncation)
+      return psi
+    elseif abs(next_error) >= abs(energy_error)
+      # No progress: undo the step and stop.
       rollback_evolution = _tdvp_correction_evolution(target.operator, -correction_time, evolution, truncation)
       evolve!(psi, rollback_evolution)
       project!(psi, truncation)
@@ -374,8 +382,6 @@ function _match_energy_mpo!(psi::MPS, evolution, truncation, target)
     end
 
     energy_error = next_error
-    correction_time = _correction_time(target, energy_error)
-    correction_evolution = _tdvp_correction_evolution(target.operator, correction_time, evolution, truncation)
   end
   return psi
 end
@@ -440,6 +446,9 @@ Scan a short projected trajectory and keep the state with the best selector scor
 - Public `trajectory_refine!` first normalizes the evolution object through the internal
   `_scarfinder_evolution` helper, so the ScarFinder single-step warning rule also applies
   here when the function is called directly.
+- Candidates are ranked lowest-score-first. On a tie the incumbent (earlier) state is kept, so
+  `refine_steps` extra steps never displace an equally good initial state. `NaN` scores are
+  ignored (they never replace the best state) and trigger a warning.
 """
 function _trajectory_refine!(psi, evolution, truncation, selector; kwargs...)
   isnothing(selector) && return psi

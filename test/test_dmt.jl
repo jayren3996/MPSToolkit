@@ -80,6 +80,25 @@ end
     @test_throws ArgumentError DMTOptions(gate_maxdim=0)
     @test_throws ArgumentError DMTOptions(connector_buffer=-1)
     @test_throws ArgumentError DMTOptions(maxdim=2, connector_buffer=3)
+
+    # DMTOptions is consumed by dmt_step! and forwards equivalently to the keyword form.
+    sites = pauli_siteinds(4)
+    via_opts = pauli_basis_state(sites, [2, 3, 4, 2])
+    normalize!(via_opts)
+    via_kwargs = pauli_basis_state(sites, [2, 3, 4, 2])
+    normalize!(via_kwargs)
+    gate = _identity_gate(2)
+    step_opts = DMTOptions(maxdim=4, cutoff=1e-12, gate_maxdim=16, connector_buffer=2)
+    dmt_step!(via_opts, gate, 1, step_opts)
+    dmt_step!(via_kwargs, gate, 1; maxdim=4, cutoff=1e-12, gate_maxdim=16, connector_buffer=2)
+    @test _dense_pauli_coefficients(via_opts) ≈ _dense_pauli_coefficients(via_kwargs) atol = 1e-12
+  end
+
+  @testset "DMT validates Pauli dimension for single-site gates" begin
+    sites = siteinds("S=1", 3)   # dim-3 sites are not Pauli operator-space
+    psi = MPS(sites, n -> "Up")
+    gate = Matrix{ComplexF64}(I, 3, 3)
+    @test_throws ArgumentError dmt_step!(psi, gate, 1; maxdim=8, connector_buffer=2)
   end
 
   @testset "identity DMT step preserves a product operator" begin
