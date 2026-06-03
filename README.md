@@ -1,30 +1,47 @@
-<p align="center">
-  <img src="docs/src/assets/logo.svg" width="200" alt="MPSToolkit.jl logo">
-</p>
+<div align="center">
 
-<h1 align="center">MPSToolkit.jl</h1>
+<img src="docs/src/assets/logo.svg" alt="MPSToolkit.jl logo" width="170"/>
 
-<p align="center">
-  <em>Composable finite matrix-product-state algorithms — evolution, projection, operator space, and spectra — in Julia.</em>
-</p>
+# MPSToolkit.jl
 
-<p align="center">
-  <a href="https://jayren3996.github.io/MPSToolkit/dev/"><img src="https://img.shields.io/badge/docs-dev-blue.svg" alt="Documentation"></a>
-  <a href="https://github.com/jayren3996/MPSToolkit/actions/workflows/documentation.yml"><img src="https://github.com/jayren3996/MPSToolkit/actions/workflows/documentation.yml/badge.svg" alt="Docs build"></a>
-  <a href="https://julialang.org/"><img src="https://img.shields.io/badge/made%20with-Julia-9558B2.svg?logo=julia" alt="Julia"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="License: MIT"></a>
-</p>
+**Composable finite matrix-product-state algorithms in Julia.**
+
+Time evolution, projection, operator space, and Chebyshev spectra — explicit building blocks, not one opaque driver.
+
+[![Docs](https://img.shields.io/badge/docs-dev-9558B2.svg)](https://jayren3996.github.io/MPSToolkit/dev/) [![CI](https://github.com/jayren3996/MPSToolkit/actions/workflows/documentation.yml/badge.svg)](https://github.com/jayren3996/MPSToolkit/actions/workflows/documentation.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Julia](https://img.shields.io/badge/Julia-1.10%2B-389826.svg)](https://julialang.org)
+
+</div>
 
 ---
 
-`MPSToolkit.jl` is a finite matrix-product-state (MPS) toolkit built on
+MPSToolkit.jl is a finite matrix-product-state (MPS) toolkit built on
 [`ITensors.jl`](https://itensor.github.io/ITensors.jl/stable/) and
 [`ITensorMPS.jl`](https://github.com/ITensor/ITensorMPS.jl). It is organized around explicit,
-reusable tensor-network building blocks rather than one opaque driver, so time evolution,
-projection, observables, operator-space tools, and spectral routines all stay directly callable
-and recombinable.
+reusable tensor-network building blocks, so time evolution, projection, observables,
+operator-space tools, and spectral routines all stay directly callable and recombinable.
 
-## 60-Second Demo
+## ✨ Features
+
+|  |  |
+| --- | --- |
+| 🧩 **Composable building blocks** | TEBD, TDVP, projection, operator space, and spectra are separate, public objects you recombine — swap any one without rewriting the others. |
+| ⏱ **Dense-gate TEBD** | Explicit odd–even–odd Strang schedules from local Hamiltonians via `tebd_strang_evolution` / `tebd_strang_schedule`. |
+| 🌀 **MPO-based TDVP** | Finite open-boundary `MPS` evolution through `TDVPEvolution`. |
+| 🎯 **ScarFinder workflows** | Explicit projection (`project!`), energy targeting (`match_energy!`), and selector-driven refinement (`scarfinder!`, `trajectory_refine!`). |
+| ⚛️ **Pauli operator space** | States and gates (`pauli_siteinds`, `pauli_basis_state`, `pauli_gate_from_hamiltonian`) for coherent and open-system evolution. |
+| 🧪 **Operator-space truncation** | Density-matrix truncation (DMT) and DAOE / FDAOE dissipative projectors. |
+| 📈 **Chebyshev spectra** | Moments, energy-window cutoff, Jackson damping, and spectral-function reconstruction. |
+| 📐 **Diagnostics** | `energy_density`, `bond_entropy`, `entanglement_spectrum`, and `fidelity_distance`. |
+
+## 📦 Installation
+
+```julia
+pkg> add https://github.com/jayren3996/MPSToolkit.git
+```
+
+Then load it with `using MPSToolkit`.
+
+## 🚀 Quick Start
 
 Build a Strang-split TEBD schedule from a bond Hamiltonian, evolve a Néel state, and read off two
 diagnostics — every ingredient is a separate, public object:
@@ -57,20 +74,10 @@ bond_entropy(psi, nothing)      # half-chain entanglement has grown from 0 to �
 The schedule, the gates, the evolution object, and the diagnostics are all separate pieces — swap
 any one without rewriting the others.
 
-## What You Can Do With MPSToolkit
-
-- **Dense-gate TEBD** from local Hamiltonians, with explicit odd–even–odd Strang schedules via `tebd_strang_evolution` and `tebd_strang_schedule`
-- **MPO-based TDVP** for finite open-boundary `MPS` via `TDVPEvolution`
-- **ScarFinder workflows** — explicit projection (`project!`), energy targeting (`match_energy!`), and selector-driven refinement (`scarfinder!`, `trajectory_refine!`)
-- **Pauli operator space**: states and gates (`pauli_siteinds`, `pauli_basis_state`, `pauli_gate_from_hamiltonian`) for coherent and open-system evolution
-- **Operator-space truncation**: density-matrix truncation (DMT) and DAOE / FDAOE dissipative projectors
-- **Chebyshev spectral tools**: moments, energy-window cutoff, Jackson damping, and spectral-function reconstruction
-- **Diagnostics**: `energy_density`, `bond_entropy`, `entanglement_spectrum`, and `fidelity_distance`
-
-## Choose Your Path
+## 🧭 Choose Your Path
 
 | If you want to … | Start with |
-|---|---|
+| --- | --- |
 | Build and run a finite-chain TEBD workflow | [Getting Started](https://jayren3996.github.io/MPSToolkit/dev/getting-started/) → [TEBD](https://jayren3996.github.io/MPSToolkit/dev/manual/tebd/) |
 | Run MPO-based TDVP on a finite OBC `MPS` | [TDVP](https://jayren3996.github.io/MPSToolkit/dev/manual/tdvp/) |
 | Study explicit projection-and-refinement loops | [ScarFinder](https://jayren3996.github.io/MPSToolkit/dev/manual/scarfinder/) |
@@ -78,24 +85,87 @@ any one without rewriting the others.
 | Truncate or dissipate operator space | [DMT](https://jayren3996.github.io/MPSToolkit/dev/manual/dmt/) · [DAOE](https://jayren3996.github.io/MPSToolkit/dev/manual/daoe/) |
 | Reconstruct spectral functions | [Chebyshev](https://jayren3996.github.io/MPSToolkit/dev/manual/chebyshev/) |
 
-## Installation
+## 🛠 Usage
+
+<details>
+<summary><b>Explicit ScarFinder projection loop</b></summary>
+
+<br>
+
+ScarFinder is a thin wrapper around public building blocks: it alternates a TEBD step with an
+explicit bond-truncation projection. Nothing is hidden — you build the schedule, the truncation,
+and the loop yourself.
 
 ```julia
-using Pkg
-Pkg.add(url = "https://github.com/jayren3996/MPSToolkit.git")
+using MPSToolkit, ITensors, ITensorMPS
+
+sites = siteinds("S=1/2", 10)
+psi   = MPS(sites, n -> isodd(n) ? "Up" : "Dn")
+
+# A periodic odd–even–odd schedule on the 10-site ring; entry `10` is the boundary bond (10, 1).
+schedule = [1, 3, 5, 7, 9, 2, 4, 6, 8, 10, 1, 3, 5, 7, 9]
+weights  = [fill(0.5, 5); fill(1.0, 5); fill(0.5, 5)]   # Strang prefactors
+bond_hamiltonians = [w * spinhalf_xyz_bond_hamiltonian(; Jx = 0.88, Jy = 1.0, Jz = 0.29)
+                     for w in weights]
+
+evolution  = tebd_evolution_from_hamiltonians(bond_hamiltonians, 0.1;
+                                              schedule = schedule, maxdim = 1, cutoff = 1e-12)
+truncation = BondDimTruncation(1; cutoff = 1e-12)       # rank-1 projection on every bond
+
+# 150 projected TEBD sweeps: evolve, then project, repeat.
+scarfinder!(psi, evolution, truncation, 150; refine = false)
+
+bond_entropy(psi, 5)
 ```
 
-Then load it with `using MPSToolkit`.
+</details>
 
-## Repository Map
+<details>
+<summary><b>Operator-space autocorrelator</b></summary>
 
-`MPSToolkit` prefers explicit workflows over hidden orchestration. High-level routines like
+<br>
+
+TEBD runs just as well in Pauli operator space: build the site indices with `pauli_siteinds`,
+map bond Hamiltonians to gates with `pauli_gate_from_hamiltonian`, and record the full
+autocorrelation trace `⟨O(0), O(t)⟩` along the trajectory.
+
+```julia
+using MPSToolkit, ITensors, ITensorMPS
+
+nsites = 8
+sites  = pauli_siteinds(nsites)
+
+# TEBD in Pauli operator space: gates come from the TFIM bond Hamiltonian.
+evolution = tebd_strang_evolution(
+    nsites, 0.04;
+    local_hamiltonian = (bond, weight) ->
+        weight * spinhalf_tfim_bond_hamiltonian(nsites, bond; J = 1.0, g = 1.05),
+    map_hamiltonian   = pauli_gate_from_hamiltonian,
+    maxdim = 96, cutoff = 1e-12,
+)
+
+local_z = pauli_basis_state(sites, ["I", "I", "I", "Z", "I", "I", "I", "I"])
+op      = copy(local_z)
+
+trace = ComplexF64[inner(local_z, op)]
+for _ in 1:10
+    evolve!(op, evolution)
+    push!(trace, inner(local_z, op))   # ⟨O(0), O(t)⟩ at each step
+end
+trace
+```
+
+</details>
+
+## 🗂 Repository Map
+
+MPSToolkit prefers explicit workflows over hidden orchestration. High-level routines like
 ScarFinder are deliberately thin wrappers around public building blocks (`evolve!`, `project!`,
 `match_energy!`, and the selector scoring helpers), and most user-facing routines mutate their
 `MPS`/state argument in place and return it.
 
 | Directory | What lives there |
-|---|---|
+| --- | --- |
 | [`src/evolution/`](src/evolution) | TEBD and TDVP configuration types (`LocalGateEvolution`, `DMTGateEvolution`, `TDVPEvolution`) and the concrete `evolve!` methods. |
 | [`src/scarfinder/`](src/scarfinder) | Projection settings, selector types, the explicit ScarFinder loop, and post-step energy matching. |
 | [`src/observables/`](src/observables) | Energy density, entanglement entropy and spectrum, and fidelity-style diagnostics. |
@@ -107,7 +177,7 @@ The public surface is grouped into feature namespaces — `MPSToolkit.Evolution`
 `.ScarFinder`, `.OperatorSpace`, `.Bases`, `.Models`, and `.Chebyshev` — and every name is also
 exported from the root module.
 
-## Conventions Worth Knowing
+## 📐 Conventions Worth Knowing
 
 - `evolve!`, `project!`, and `energy_density` are **dispatch points** — check the concrete methods before changing behavior.
 - Dense local operators are interpreted through the **local site dimension** of the input `MPS`.
@@ -115,7 +185,22 @@ exported from the root module.
 - **Finite OBC `MPS`** is the main supported state class; periodic behavior is limited to a few helper cases.
 - **ScarFinder step-count guard.** `scarfinder!`, `scarfinder_step!`, and `trajectory_refine!` treat an effective evolution step count of `1` as a misconfiguration: they emit a warning and internally use `10` for that call. This rule is local to ScarFinder — global TEBD, DMT, and TDVP constructors keep their own defaults, and the energy-correction substeps inside `match_energy!` intentionally remain single-step.
 
-## Examples
+### ⚠️ Current limits
+
+- finite OBC `MPS` is the main supported state class
+- periodic chains are not a general supported mode
+- `TDVPEvolution` currently expects MPO generators
+- DMT is currently implemented for operator-space workflows
+
+## 📚 Documentation
+
+Full documentation lives at **[jayren3996.github.io/MPSToolkit](https://jayren3996.github.io/MPSToolkit/dev/)**.
+
+- [Getting Started](https://jayren3996.github.io/MPSToolkit/dev/getting-started/) — the first finite-chain TEBD workflow.
+- [Architecture](https://jayren3996.github.io/MPSToolkit/dev/manual/architecture/) — how the building blocks fit together.
+- [API Reference](https://jayren3996.github.io/MPSToolkit/dev/api/) — signatures and mutation behavior.
+
+## 🗂 Examples
 
 Runnable notebooks and scripts live in [`examples/`](examples):
 
@@ -126,23 +211,9 @@ Runnable notebooks and scripts live in [`examples/`](examples):
 - [`examples/chebyshev/`](examples/chebyshev) — energy-cutoff comparison, two-peak spectra, local spectral functions
 - [`examples/open_systems/`](examples/open_systems) — boundary-driven XXZ steady state, Pauli–Lindblad TEBD
 
-## Current Limits
+## 📝 Citation
 
-- finite OBC `MPS` is the main supported state class
-- periodic chains are not a general supported mode
-- `TDVPEvolution` currently expects MPO generators
-- DMT is currently implemented for operator-space workflows
-
-## Documentation
-
-- [Documentation (dev)](https://jayren3996.github.io/MPSToolkit/dev/) — the main human-facing reference
-- [Getting Started](https://jayren3996.github.io/MPSToolkit/dev/getting-started/)
-- [Architecture](https://jayren3996.github.io/MPSToolkit/dev/manual/architecture/)
-- [API Reference](https://jayren3996.github.io/MPSToolkit/dev/api/)
-
-## Citation
-
-If `MPSToolkit.jl` is useful in your research, please cite it:
+If MPSToolkit.jl is useful in your research, please cite it:
 
 ```bibtex
 @misc{MPSToolkit_jl,
@@ -153,13 +224,13 @@ If `MPSToolkit.jl` is useful in your research, please cite it:
 }
 ```
 
-## Acknowledgements
+## 🙏 Acknowledgements
 
-`MPSToolkit.jl` builds directly on the [ITensor](https://itensor.org/) ecosystem —
+MPSToolkit.jl builds directly on the [ITensor](https://itensor.org/) ecosystem —
 [`ITensors.jl`](https://github.com/ITensor/ITensors.jl) and
 [`ITensorMPS.jl`](https://github.com/ITensor/ITensorMPS.jl) — and on
 [`KrylovKit.jl`](https://github.com/Jutho/KrylovKit.jl).
 
-## License
+## 📄 License
 
-Released under the [MIT License](LICENSE).
+[MIT](LICENSE) © 2026 Jie Ren and contributors.
