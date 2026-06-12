@@ -55,6 +55,34 @@ function _mpo_dense(op::MPO, sites)
   return reshape(permutedims(arr, perm), d, d)
 end
 
+const _PAULI_NORM = [m / sqrt(2) for m in values(pauli_matrices())]
+
+_pauli_string(labels) = foldl(kron, (_PAULI_NORM[l] for l in labels))
+
+# Vectorized Pauli coefficients of a dense operator: c_alpha = tr(P_alpha' * dense).
+function _dense_pauli_amplitude(dense, labels)
+  return tr(_pauli_string(labels)' * dense)
+end
+
+# Random single-site operator-space product MPS together with its dense operator.
+function _random_pauli_product(sites, rng_offset::Int)
+  tensors = ITensor[]
+  dense = Matrix{ComplexF64}(I, 1, 1)
+  for (n, site) in enumerate(sites)
+    coeffs = ComplexF64[sin(0.7 * n + rng_offset) + 0.3im * cos(1.3 * n),
+                        cos(0.4 * n) - 0.2im * sin(n + rng_offset),
+                        0.5 * sin(2.1 * n) + 0.1im,
+                        cos(0.9 * n + 2 * rng_offset)]
+    tensor = ITensor(site)
+    for alpha in 1:4
+      tensor[site => alpha] = coeffs[alpha]
+    end
+    push!(tensors, tensor)
+    dense = kron(dense, sum(coeffs[alpha] * _PAULI_NORM[alpha] for alpha in 1:4))
+  end
+  return MPS(tensors), dense
+end
+
 @testset "PXP model helpers" begin
   @testset "pxp_term_support" begin
     @test pxp_term_support(6, 1) == 1:2
@@ -115,5 +143,109 @@ end
     end
     h = _pxp_dense(nsites)
     @test norm(h * projector - projector * h) ≈ 0 atol = 1e-12
+  end
+end
+
+@testset "Pauli vectorization converters" begin
+  @testset "pauli_state_from_mpo reproduces tr(P_alpha' O)" begin
+    # (a) Hermitian diagonal MPO: the PXP constraint projector on four sites.
+    nsites = 4
+    phys = siteinds("S=1/2", nsites)
+    psites = pauli_siteinds(nsites)
+    projector = pxp_constraint_mpo(phys)
+    dense = _mpo_dense(projector, phys)
+    vectorized = pauli_state_from_mpo(projector, psites)
+    @test length(vectorized) == nsites
+    @test maxlinkdim(vectorized) <= 2
+    for labels in Iterators.product(ntuple(_ -> 1:4, nsites)...)
+      amplitude = inner(pauli_basis_state(psites, collect(labels)), vectorized)
+      @test amplitude ≈ _dense_pauli_amplitude(dense, labels) atol = 1e-12
+    end
+
+    # (b) Non-Hermitian MPO with complex structure.
+    os = OpSum()
+    os += "Sz", 1
+    os += 0.7, "S+", 2
+    os += 0.3im, "Sy", 1, "Sx", 2
+    phys2 = siteinds("S=1/2", 2)
+    psites2 = pauli_siteinds(2)
+    mpo = MPO(os, phys2)
+    dense2 = _mpo_dense(mpo, phys2)
+    vectorized2 = pauli_state_from_mpo(mpo, psites2)
+    for labels in Iterators.product(1:4, 1:4)
+      amplitude = inner(pauli_basis_state(psites2, collect(labels)), vectorized2)
+      @test amplitude ≈ _dense_pauli_amplitude(dense2, labels) atol = 1e-12
+    end
+
+    @test_throws ArgumentError pauli_state_from_mpo(projector, pauli_siteinds(3))
+  end
+
+  @testset "pauli_superoperator_mpo implements rho -> M rho M'" begin
+    # Full dense superoperator oracle on two sites with a non-Hermitian MPO.
+    os = OpSum()
+    os += "Sz", 1
+    os += 0.7, "S+", 2
+    os += 0.4, "Sx", 1, "Sz", 2
+    phys = siteinds("S=1/2", 2)
+    psites = pauli_siteinds(2)
+    mpo = MPO(os, phys)
+    dense = _mpo_dense(mpo, phys)
+    superop = pauli_superoperator_mpo(mpo, psites)
+    for in_labels in Iterators.product(1:4, 1:4)
+      transformed = apply(superop, pauli_basis_state(psites, collect(in_labels)); cutoff=0.0)
+      expected_dense = dense * _pauli_string(in_labels) * dense'
+      for out_labels in Iterators.product(1:4, 1:4)
+        amplitude = inner(pauli_basis_state(psites, collect(out_labels)), transformed)
+        @test amplitude ≈ _dense_pauli_amplitude(expected_dense, out_labels) atol = 1e-10
+      end
+    end
+  end
+
+  @testset "pauli_pxp_constraint_state" begin
+    # tr(P_G) counts allowed configurations: Fibonacci F(nsites + 2).
+    fibonacci = Dict(1 => 2, 2 => 3, 3 => 5, 4 => 8, 5 => 13)
+    for (nsites, count) in fibonacci
+      psites = pauli_siteinds(nsites)
+      state = pauli_pxp_constraint_state(psites)
+      @test maxlinkdim(state) <= 2
+      @test pauli_trace(state) ≈ count atol = 1e-10
+    end
+  end
+
+  @testset "pauli_pxp_constraint_projector acts as P rho P" begin
+    nsites = 3
+    psites = pauli_siteinds(nsites)
+    superop = pauli_pxp_constraint_projector(psites)
+    dense_projector = _pxp_projector_dense(nsites)
+
+    rho, dense_rho = _random_pauli_product(psites, 1)
+    projected = apply(superop, rho; cutoff=0.0)
+    expected_dense = dense_projector * dense_rho * dense_projector
+    for labels in Iterators.product(ntuple(_ -> 1:4, nsites)...)
+      amplitude = inner(pauli_basis_state(psites, collect(labels)), projected)
+      @test amplitude ≈ _dense_pauli_amplitude(expected_dense, labels) atol = 1e-10
+    end
+
+    # Idempotent: applying twice equals applying once.
+    twice = apply(superop, projected; cutoff=0.0)
+    @test inner(twice, twice) + inner(projected, projected) - 2 * real(inner(twice, projected)) ≈ 0 atol = 1e-10
+
+    # Fixes the vectorized constraint projector itself.
+    constraint_state = pauli_pxp_constraint_state(psites)
+    fixed = apply(superop, constraint_state; cutoff=0.0)
+    difference = inner(fixed, fixed) + inner(constraint_state, constraint_state) - 2 * real(inner(fixed, constraint_state))
+    @test difference ≈ 0 atol = 1e-10
+
+    # Annihilates an operator supported entirely on blockade-violating configurations.
+    blocked_labels = [(1, 1), (1, 4), (4, 1), (4, 4)]
+    blocked_signs = Dict(1 => 1.0, 4 => -1.0)
+    psites2 = pauli_siteinds(2)
+    violating = sum(
+      0.5 * blocked_signs[a] * blocked_signs[b] * pauli_basis_state(psites2, [a, b])
+      for (a, b) in blocked_labels
+    )  # |11><11| = (I - Z)/2 ⊗ (I - Z)/2 in normalized Pauli coordinates
+    superop2 = pauli_pxp_constraint_projector(psites2)
+    annihilated = apply(superop2, violating; cutoff=0.0)
+    @test norm(annihilated) ≈ 0 atol = 1e-10
   end
 end
