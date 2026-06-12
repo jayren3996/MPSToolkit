@@ -140,6 +140,17 @@ stays in the constrained sector up to truncation error.
   truncation decision at the checkpoint. Implementation rebuilds a `DMTGateEvolution` with
   `nstep=chunk` from `evo`'s fields per chunk.
 
+  > **Post-validation revision (2026-06-12).** Production runs (N = 64, χ = 48, t ≤ 14)
+  > showed the `gate_maxdim` default makes the inflated bonds dominate total cost
+  > (~`(projector_maxdim/maxdim)^3` per sweep, 2–10× wall-clock) with no measurable
+  > accuracy gain — the checkpoint state is only an O(leakage) ≈ 1e-4 perturbation of the
+  > state DMT just compressed, so immediate plain-SVD recompression perturbs protected
+  > components at the same negligible order. The shipped default is
+  > `projector_maxdim = 2 * evo.maxdim`, A/B-validated at χ = 32. The same runs showed the
+  > per-sweep `normalize!` corrupts unnormalized traces of traceless operators (norm loss
+  > outpaces protected-component loss), so `dmt_evolve!` and `constrained_dmt_evolve!`
+  > gained a `normalize=true|false` keyword.
+
 Alternatives considered: example-script-only loop (not reusable/testable as a unit — the
 user asked for this as functionality) and a new dispatchable evolution type wrapping
 `DMTGateEvolution` (more ceremony than a function warrants today). Chosen: driver function.

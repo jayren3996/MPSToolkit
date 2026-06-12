@@ -470,3 +470,56 @@ end
   @test_throws ArgumentError constrained_dmt_evolve!(evolved, evo, projector; project_every=0)
   @test_throws ArgumentError constrained_dmt_evolve!(evolved, evo, pauli_pxp_constraint_projector(pauli_siteinds(4)))
 end
+
+@testset "constrained evolution with normalize=false preserves absolute scales" begin
+  nsites = 6
+  psites = pauli_siteinds(nsites)
+  terms = _pxp_terms(nsites)
+  weights = [0.4, 0.4, 0.0, 0.0, -0.4, -0.4]
+  rho = pauli_gibbs_state(
+    psites,
+    terms,
+    weights;
+    nsteps=8,
+    maxdim=256,
+    cutoff=0.0,
+    initial_state=pauli_pxp_constraint_state(psites),
+  )
+  gates = [pauli_gate_from_hamiltonian(h, 0.05) for (_, h) in terms]
+  schedule = [start for (start, _) in terms]
+  evo = DMTGateEvolution(
+    gates,
+    0.05;
+    schedule=schedule,
+    reverse_schedule=reverse(schedule),
+    nstep=4,
+    maxdim=64,
+    cutoff=1e-12,
+    gate_maxdim=256,
+    connector_buffer=4,
+  )
+  projector = pauli_pxp_constraint_projector(psites)
+
+  # Unitary evolution preserves tr(rho); at N=6 with maxdim=64 the operator space is exact,
+  # the state stays in-sector, and with normalize=false nothing rescales the operator, so
+  # the absolute trace must be conserved through sweeps + projections.
+  trace0 = pauli_trace(rho)
+  evolved = copy(rho)
+  constrained_dmt_evolve!(evolved, evo, projector; project_every=2, normalize=false)
+  # Conservation up to the cutoff-level truncation of the projector applications (the
+  # normalize=true path would instead rescale the trace by O(1) over a long run).
+  @test pauli_trace(evolved) ≈ trace0 atol = 1e-6 * abs(trace0)
+
+  # The default normalized path rescales the state but leaves ratio observables unchanged:
+  # both paths must produce the same energy profile.
+  normalized = copy(rho)
+  constrained_dmt_evolve!(normalized, evo, projector; project_every=2)
+  profile_free = real.(pauli_expectation_profile(evolved, terms))
+  profile_normalized = real.(pauli_expectation_profile(normalized, terms))
+  @test maximum(abs.(profile_free - profile_normalized)) < 1e-8
+
+  # dmt_evolve! honors normalize=false as well.
+  unnormalized = copy(rho)
+  dmt_evolve!(unnormalized, evo; normalize=false)
+  @test pauli_trace(unnormalized) ≈ trace0 atol = 1e-6 * abs(trace0)
+end

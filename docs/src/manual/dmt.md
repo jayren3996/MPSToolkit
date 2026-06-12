@@ -350,10 +350,26 @@ t^{1/z}`` is fitted on a late window, with the same caveats as the XXZ example p
 the domain-wall quench approaches its hydrodynamic power law *slowly* (quadratic start,
 ballistic-looking middle), so short runs measure an **effective, crossover-bound exponent**
 that overestimates ``1/z`` — the example prints the local log-log slope so the drift toward
-the asymptote is visible. The projector application at a checkpoint is allowed to inflate the
-bond up to `projector_maxdim` (defaulting to `gate_maxdim`), and the *next DMT sweep*
-performs the transport-aware compression — an ordinary SVD never makes the truncation
-decision alone.
+the asymptote is visible. The projector application at a checkpoint compresses back to
+`projector_maxdim` (default `2 * maxdim`) immediately: the projected state is only an
+``O(\text{leakage})`` perturbation of the state DMT just compressed, so this plain-SVD step
+perturbs the protected components at the same negligible order, while letting the bond stay
+inflated until the next sweep adds substantial cost per sweep (measured 1.3–2× at moderate
+``\chi`` and growing with ``\chi``) for no measured accuracy gain.
+
+Two further lessons from production-scale validation runs (``N = 64``, ``\chi = 48``,
+``t \le 14``, correlator protocol):
+
+- **Track unnormalized traces with `normalize=false`.** Truncation sheds Hilbert–Schmidt
+  norm faster than it sheds the DMT-protected components, so the default per-sweep
+  renormalization silently inflates absolute traces of a traceless operator (the conserved
+  ``\mathrm{tr}(H\,O(t))`` grew by tens of percent over a long run while the *ratio*
+  observable ``M_2`` was unaffected). Both `dmt_evolve!` and `constrained_dmt_evolve!`
+  accept `normalize=false` for exactly this workflow.
+- **Profile mirror symmetry is a useful truncation gauge.** For a symmetric setup the
+  profile asymmetry grows with truncation pressure and *shrinks* with increasing ``\chi``
+  (it is truncation noise, not a sweep-direction bias); monitoring it alongside the
+  conserved total gives a cheap convergence diagnostic.
 
 The energy-density measurement `pauli_expectation_profile(rho, terms)` evaluates every
 ``\mathrm{tr}(\rho h_j)/\mathrm{tr}(\rho)`` in one ``O(N)`` pass with cumulative identity

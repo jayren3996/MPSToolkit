@@ -427,7 +427,7 @@ function _reverse_gate_for_step(gate_spec, schedule, reverse_schedule, bond, ind
 end
 
 """
-    dmt_evolve!(psi, evo::DMTGateEvolution)
+    dmt_evolve!(psi, evo::DMTGateEvolution; normalize=true)
 
 Run scheduled operator-space DMT evolution.
 
@@ -439,15 +439,21 @@ This driver is intended for **transport simulations** (e.g. spin or energy diffu
 - `evo`: [`DMTGateEvolution`](@ref) describing the gate specification, schedules, and
   truncation budgets.
 
+# Keyword Arguments
+- `normalize`: If `true` (default), `normalize!(psi)` at the end, the usual convention for
+  trajectories that interpret the state as a normalized vectorized operator. Set `false`
+  when tracking **unnormalized** traces of a traceless operator (e.g. the conserved
+  `tr(H O(t))` of a Heisenberg-evolved energy density): truncation sheds Hilbert-Schmidt
+  norm faster than it sheds the DMT-protected components, so per-step renormalization
+  silently inflates absolute traces over time even though ratio observables are unaffected.
+
 # Returns
-- The mutated and normalized `psi`.
+- The mutated (and, by default, normalized) `psi`.
 
 # Notes
 - One call runs `evo.nstep` complete forward-and-reverse sweeps.
-- `normalize!(psi)` is applied at the end because operator-space trajectories typically
-  interpret the state as a normalized vectorized operator.
 """
-function dmt_evolve!(psi::MPS, evo::DMTGateEvolution)
+function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=true)
   for _ in 1:evo.nstep
     for (index, bond) in pairs(evo.schedule)
       local_gate = _gate_for_step(evo.gate, bond, index)
@@ -476,7 +482,7 @@ function dmt_evolve!(psi::MPS, evo::DMTGateEvolution)
       )
     end
   end
-  normalize!(psi)
+  normalize && normalize!(psi)
   return psi
 end
 
