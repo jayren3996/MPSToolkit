@@ -163,31 +163,52 @@ end
 function _complete_orthonormal_basis(protected::AbstractMatrix, target_dim::Integer=size(protected, 1))
   ambient_dim = size(protected, 1)
   0 <= target_dim <= ambient_dim || throw(ArgumentError("orthonormal basis target dimension must lie in 0:size(protected, 1)"))
-  target_dim == 0 && return zeros(eltype(protected), ambient_dim, 0)
+  element_type = eltype(protected)
+  target_dim == 0 && return zeros(element_type, ambient_dim, 0)
 
-  basis = Matrix{eltype(protected)}(undef, ambient_dim, 0)
+  # Preallocate the whole basis and fill it column by column in place. The leading columns are
+  # the trace/connector-aligned singular vectors of `protected` (in singular-value order, so
+  # column 1 is the dominant connector direction `_mat_trunc!` protects); the remaining columns
+  # complete the space from the standard basis. The column selection and the leading protected
+  # block are identical to the previous per-column Gram-Schmidt sweep, but the orthogonalization
+  # is a single BLAS matrix-vector product against the already-filled block instead of a scalar
+  # loop, and the basis grows in place rather than via repeated `hcat`. That removes the O(d^3)
+  # allocation traffic (`hcat` reallocating the basis and `basis[:, j]` copies every step) that
+  # dominated DMT evolution runtime.
+  basis = Matrix{element_type}(undef, ambient_dim, target_dim)
+  filled = 0
   if size(protected, 2) > 0
     factorization = svd(Matrix(protected))
-    scale = isempty(factorization.S) ? zero(real(float(one(eltype(factorization.S))))) : maximum(factorization.S)
+    scale = isempty(factorization.S) ? zero(real(float(one(element_type)))) : maximum(factorization.S)
     tolerance = max(ambient_dim, size(protected, 2)) * eps(real(float(scale == 0 ? one(scale) : scale))) * max(scale, one(scale))
     protected_rank = min(count(>(tolerance), factorization.S), target_dim)
-    protected_rank > 0 && (basis = factorization.U[:, 1:protected_rank])
+    if protected_rank > 0
+      @views basis[:, 1:protected_rank] .= factorization.U[:, 1:protected_rank]
+      filled = protected_rank
+    end
   end
 
-  for column in 1:ambient_dim
-    size(basis, 2) == target_dim && break
-    candidate = zeros(eltype(protected), ambient_dim)
-    candidate[column] = one(eltype(protected))
-    for basis_column in 1:size(basis, 2)
-      candidate .-= basis[:, basis_column] * (basis[:, basis_column]' * candidate)
+  candidate = Vector{element_type}(undef, ambient_dim)
+  projection = Vector{element_type}(undef, target_dim)
+  column = 0
+  while filled < target_dim && column < ambient_dim
+    column += 1
+    fill!(candidate, zero(element_type))
+    candidate[column] = one(element_type)
+    if filled > 0
+      block = @view basis[:, 1:filled]
+      coefficients = @view projection[1:filled]
+      mul!(coefficients, block', candidate)                                       # coefficients = block' * e_column
+      mul!(candidate, block, coefficients, -one(element_type), one(element_type)) # candidate -= block * coefficients
     end
     candidate_norm = norm(candidate)
     if candidate_norm > ambient_dim * eps(real(float(candidate_norm == 0 ? one(candidate_norm) : candidate_norm)))
-      basis = hcat(basis, candidate / candidate_norm)
+      filled += 1
+      @views basis[:, filled] .= candidate ./ candidate_norm
     end
   end
 
-  size(basis, 2) == target_dim || throw(ArgumentError("could not complete orthonormal DMT basis"))
+  filled == target_dim || throw(ArgumentError("could not complete orthonormal DMT basis"))
   return basis
 end
 
@@ -245,9 +266,12 @@ function _dmt_bond_truncate!(
   right_link = commonind(v, s)
   left_basis = _complete_orthonormal_basis(matrix(left_env * psi[bond], left_link, left_site), dim(left_link))
   right_basis = _complete_orthonormal_basis(matrix(psi[bond + 1] * right_env, right_link, right_site), dim(right_link))
-  singular_values = Matrix(matrix(s, left_link, right_link))
+  # `s` is the diagonal Schmidt matrix from the bond SVD. Fold it into the basis change as a
+  # column scaling (Diagonal) rather than materializing a dense matrix and doing two full
+  # matmuls -- one O(n^3) product per bond becomes an O(n^2) scaling.
+  singular_values = diag(matrix(s, left_link, right_link))
 
-  reduced = left_basis' * singular_values * right_basis
+  reduced = (left_basis' * Diagonal(singular_values)) * right_basis
   _mat_trunc!(reduced, maxdim - connector_buffer; connector_buffer=connector_buffer)
 
   repaired = ITensor(left_basis * reduced * right_basis', left_link, right_link)
@@ -262,65 +286,30 @@ function _dmt_bond_truncate!(
   return psi
 end
 
-function _left_identity_prefixes(psi::MPS)
-  prefixes = Vector{ITensor}(undef, length(psi) + 1)
-  prefixes[1] = ITensor(1.0)
-  for site in 1:length(psi)
-    prefixes[site + 1] = prefixes[site] * _pauli_identity_env(siteind(psi, site)) * psi[site]
-  end
-  return prefixes
-end
-
-function _right_identity_suffixes(psi::MPS)
-  suffixes = Vector{ITensor}(undef, length(psi) + 2)
-  suffixes[length(psi) + 1] = ITensor(1.0)
-  suffixes[length(psi) + 2] = ITensor(1.0)
-  for site in length(psi):-1:1
-    suffixes[site] = suffixes[site + 1] * _pauli_identity_env(siteind(psi, site)) * psi[site]
-  end
-  return suffixes
-end
-
 function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::Integer, cutoff::Real, direction::Symbol, connector_buffer::Integer)
   span <= 1 && return psi
-  bonds = _dmt_truncation_bonds(start, span, direction)
-  isempty(bonds) && return psi
 
-  orthogonalize!(psi, first(bonds))
-  if direction === :R
-    right_suffixes = _right_identity_suffixes(psi)
-    left_env = _left_identity_environment(psi, first(bonds) - 1)
-    for (index, bond) in pairs(bonds)
-      _dmt_bond_truncate!(
-        psi,
-        bond;
-        maxdim=maxdim,
-        cutoff=cutoff,
-        direction=direction,
-        connector_buffer=connector_buffer,
-        left_env=left_env,
-        right_env=right_suffixes[bond + 2],
-        orthogonalize=false,
-      )
-      index < length(bonds) && (left_env = left_env * _pauli_identity_env(siteind(psi, bond)) * psi[bond])
-    end
-  else
-    left_prefixes = _left_identity_prefixes(psi)
-    right_env = _right_identity_environment(psi, first(bonds) + 2)
-    for (index, bond) in pairs(bonds)
-      _dmt_bond_truncate!(
-        psi,
-        bond;
-        maxdim=maxdim,
-        cutoff=cutoff,
-        direction=direction,
-        connector_buffer=connector_buffer,
-        left_env=left_prefixes[bond],
-        right_env=right_env,
-        orthogonalize=false,
-      )
-      index < length(bonds) && (right_env = right_env * _pauli_identity_env(siteind(psi, bond + 1)) * psi[bond + 1])
-    end
+  # Truncate every bond inside the gate window as an independent single-bond DMT update, with
+  # the orthogonality center restored to that bond before truncating it. The
+  # connector-preserving construction in `_dmt_bond_truncate!` assumes a *canonical* gauge: the
+  # bond SVD must return the true Schmidt values and the trace environments must be built from
+  # orthonormal blocks. A multi-bond window cannot satisfy that with a single shared sweep,
+  # because each DMT truncation rewrites the bond tensors and resets the MPS gauge bookkeeping.
+  # Sweeping with cached environments therefore truncates later bonds in a non-canonical gauge:
+  # mildly wrong for a `:R` window, and badly wrong for `:L`, where the orthogonality center
+  # ends up on the wrong site so `svd(psi[bond])` degenerates to `s ≈ I` and the truncation
+  # discards information indiscriminately. Re-gauging per bond keeps a span-`S` window exactly
+  # equal to the verified single-bond path applied to each of its bonds.
+  for bond in _dmt_truncation_bonds(start, span, direction)
+    _dmt_bond_truncate!(
+      psi,
+      bond;
+      maxdim=maxdim,
+      cutoff=cutoff,
+      direction=direction,
+      connector_buffer=connector_buffer,
+      orthogonalize=true,
+    )
   end
   return psi
 end
