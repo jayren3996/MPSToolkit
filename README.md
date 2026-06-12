@@ -169,7 +169,7 @@ ScarFinder are deliberately thin wrappers around public building blocks (`evolve
 | [`src/evolution/`](src/evolution) | TEBD and TDVP configuration types (`LocalGateEvolution`, `DMTGateEvolution`, `TDVPEvolution`) and the concrete `evolve!` methods. |
 | [`src/scarfinder/`](src/scarfinder) | Projection settings, selector types, the explicit ScarFinder loop, and post-step energy matching. |
 | [`src/observables/`](src/observables) | Energy density, entanglement entropy and spectrum, and fidelity-style diagnostics. |
-| [`src/operator_space/`](src/operator_space) | Pauli-basis helpers, DMT, and DAOE / FDAOE projectors. |
+| [`src/operator_space/`](src/operator_space) | Pauli-basis helpers, MPO vectorizers, thermal/domain-wall preparation, expectation sweeps, DMT (plus constraint-checkpointed DMT), and DAOE / FDAOE projectors. |
 | [`src/chebyshev/`](src/chebyshev) | Chebyshev moments, energy-window projection, damping kernels, and spectral reconstruction. |
 | [`src/models/`](src/models), [`src/bases/`](src/bases) | Small dense helper matrices used by examples and constructors. |
 
@@ -206,7 +206,7 @@ Runnable notebooks and scripts live in [`examples/`](examples):
 
 - [`examples/tebd/`](examples/tebd) — XXZ TEBD vs ED, disordered-XXZ MBL dynamics, scheduler patterns, helper APIs
 - [`examples/scarfinder/`](examples/scarfinder) — PXP ScarFinder, XYZ spiral
-- [`examples/operator_space/`](examples/operator_space) — TFIM autocorrelators, operator strings, entanglement, custom Hamiltonians, DMT scheduling
+- [`examples/operator_space/`](examples/operator_space) — TFIM autocorrelators, operator strings, entanglement, custom Hamiltonians, DMT scheduling, XXZ spin-transport exponents, PXP constrained energy transport
 - [`examples/tdvp/`](examples/tdvp) — PBC TDVP vs TEBD
 - [`examples/chebyshev/`](examples/chebyshev) — energy-cutoff comparison, two-peak spectra, local spectral functions
 - [`examples/open_systems/`](examples/open_systems) — boundary-driven XXZ steady state, Pauli–Lindblad TEBD

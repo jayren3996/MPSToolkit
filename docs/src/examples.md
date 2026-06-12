@@ -14,6 +14,8 @@ The example tree is grouped by workflow so related scripts and notebooks stay to
 - [`examples/operator_space/operator_tebd_helper_apis.ipynb`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/operator_tebd_helper_apis.ipynb)
 - [`examples/operator_space/dmt_scheduler.ipynb`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/dmt_scheduler.ipynb)
 - [`examples/operator_space/xxz_transport_regimes.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/xxz_transport_regimes.jl) — ballistic / KPZ / diffusive spin transport and the dynamical exponent ``z``
+- [`examples/operator_space/pxp_energy_correlator.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl) — constrained (PXP) infinite-temperature energy correlator: the efficient route to the superdiffusive exponent, with `normalize=false` conservation diagnostics
+- [`examples/operator_space/pxp_energy_transport.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_transport.jl) — constrained (PXP) energy transport from a ``\beta`` domain wall, with constraint-projection checkpoints
 - [`examples/open_systems/pauli_lindblad_tebd.ipynb`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/open_systems/pauli_lindblad_tebd.ipynb)
 - [`examples/open_systems/boundary_driven_xxz_steady_state.ipynb`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/open_systems/boundary_driven_xxz_steady_state.ipynb)
 

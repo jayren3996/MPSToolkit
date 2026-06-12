@@ -72,6 +72,16 @@ fidelity_distance
 - `pauli_gate_from_hamiltonian`
 - `pauli_lindblad_generator`
 - `pauli_gate_from_lindbladian`
+- `pauli_state_from_mpo`
+- `pauli_superoperator_mpo`
+- `pauli_gate_from_imaginary_time`
+- `pauli_gibbs_state`
+- `pauli_trace`
+- `pauli_expectation`
+- `pauli_expectation_profile`
+- `pauli_pxp_constraint_state`
+- `pauli_pxp_constraint_projector`
+- `constrained_dmt_evolve!`
 - `DMTOptions`
 - `pauli_daoe_projector`
 - `fdaoe_projector`
@@ -83,6 +93,12 @@ spinhalf_matrices
 spinhalf_xyz_bond_hamiltonian
 spinhalf_tfim_bond_hamiltonian
 ```
+
+PXP helpers (documented on the [DMT](manual/dmt.md) page):
+
+- `pxp_term_hamiltonian`
+- `pxp_term_support`
+- `pxp_constraint_mpo`
 
 ## Chebyshev
 
