@@ -301,7 +301,7 @@ constraint MPO `pxp_constraint_mpo`:
    dynamics but that would pollute traces and energy densities.
    `pauli_pxp_constraint_state(sites)` returns the vectorized ``P_G`` as a bond-dimension-2
    operator MPS (built via the generic vectorizer `pauli_state_from_mpo`).
-2. **An energy domain wall on top of it.** The transport initial state
+2. **A sector-respecting initial state.** For a domain-wall quench,
    ``\rho(0) \propto e^{-\beta H_L} \otimes e^{+\beta H_R}`` (left half slightly cold, right
    half slightly hot) is prepared by imaginary-time TEBD in operator space:
    `pauli_gibbs_state(sites, terms, weights; initial_state=pauli_pxp_constraint_state(sites))`
@@ -311,12 +311,72 @@ constraint MPO `pxp_constraint_mpo`:
    choice no term couples the halves and the two exponentials factorize *exactly*. (Assigning
    straddling terms by their center site instead differs only by an ``O(\beta)`` local
    distortion at the wall and gives the same hydrodynamics.) Because each ``h_j`` commutes
-   with ``P_G``, the preparation stays in the constrained sector up to truncation error.
+   with ``P_G``, the preparation stays in the constrained sector up to truncation error. For
+   a correlator run the initial state is instead a sector-projected local energy density,
+   built by vectorizing the term's MPO and applying the constraint projector once.
 3. **Constraint checkpoints during evolution.** Exact gates commute with ``P_G``, but DMT (or
    any) truncation leaks weight out of the sector. The operator-space projector MPO
    ``\rho \mapsto P_G \rho P_G`` — `pauli_pxp_constraint_projector(sites)`, bond dimension 4,
    built by the generic `pauli_superoperator_mpo` — removes the leaked weight, and
-   `constrained_dmt_evolve!` interleaves it with the DMT sweeps:
+   `constrained_dmt_evolve!` interleaves it with the DMT sweeps.
+
+Two ready-made protocols use these ingredients; both ship as full scripts under
+[`examples/operator_space/`](https://github.com/jayren3996/MPSToolkit/tree/main/examples/operator_space).
+
+### Protocol 1 — infinite-temperature energy correlator (the efficient exponent route)
+
+Heisenberg-evolve a single **sector-projected local energy density**,
+``O(0) \propto P_G h_c P_G``, and watch it spread: the profile
+``C(x, t) = \mathrm{tr}(P_G h_x O(t))`` is the constrained infinite-temperature
+energy-energy correlator, and its second moment grows as
+``M_2(t) \sim t^{2/z}`` — asymptotic log-log slope ``4/3`` for ``z = 3/2``. This is the
+protocol of PRX **13**, 011033, condensed from
+[`examples/operator_space/pxp_energy_correlator.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl):
+
+```julia
+using MPSToolkit, ITensors, ITensorMPS
+
+nsites, c, chi, dt = 48, 24, 32, 0.1
+sites = pauli_siteinds(nsites)
+terms = [(first(pxp_term_support(nsites, j)), pxp_term_hamiltonian(nsites, j)) for j in 1:nsites]
+projector = pauli_pxp_constraint_projector(sites)
+
+phys = siteinds("S=1/2", nsites)                  # O(0) = P_G h_c P_G, vectorized
+os = OpSum(); os += "ProjUp", c - 1, "X", c, "ProjUp", c + 1   # "Up" = our |0>
+O = pauli_state_from_mpo(MPO(os, phys), sites)
+O = apply(projector, O; maxdim=4chi, cutoff=1e-12); normalize!(O)
+
+gates = [pauli_gate_from_hamiltonian(h, dt) for (_, h) in terms]
+schedule = [start for (start, _) in terms]
+evo = DMTGateEvolution(gates, dt; schedule, reverse_schedule=reverse(schedule),
+    nstep=1, maxdim=chi, cutoff=1e-12, gate_maxdim=4chi, connector_buffer=8)
+
+M2 = Float64[]
+for k in 1:60                                     # one call advances t by 2*dt
+    constrained_dmt_evolve!(O, evo, projector; project_every=1, normalize=false)
+    p = real.(pauli_expectation_profile(O, terms; normalize=false))  # traceless: unnormalized
+    push!(M2, sum((j - c)^2 * p[j] for j in 1:nsites) / sum(p))
+end
+```
+
+Two conventions in this snippet are load-bearing for a **traceless** operator:
+`normalize=false` in the evolution (truncation sheds Hilbert–Schmidt norm faster than the
+DMT-protected components, so the default per-sweep renormalization silently inflates
+absolute traces — and with it the conserved total ``\sum_x C(x,t) = \mathrm{tr}(P_G H\,
+O(t))``, which with `normalize=false` becomes the run's truncation error bar), and
+`normalize=false` in the profile measurement (the trace it would divide by vanishes).
+Production-validated reference points for the crossover (``N = 64``): the local ``M_2``
+slope plateaus at **1.46–1.49 over** ``t = 8\!-\!14`` at ``\chi = 48`` (χ-converged to
+1–6%, still descending toward ``4/3`` from above), while ``\chi = 32`` reads **1.32–1.38**
+— truncation suppresses ``M_2`` growth and pulls the slope *down*, so an undershooting
+slope near the target can be a truncation artifact rather than convergence. Raise `maxdim`
+until the slope stops moving up, then extend in time.
+
+### Protocol 2 — energy domain-wall melt
+
+The quench protocol: prepare ``\rho(0) \propto e^{-\beta H_L} \otimes e^{+\beta H_R}`` and
+track the transferred energy. From
+[`examples/operator_space/pxp_energy_transport.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_transport.jl):
 
 ```julia
 using MPSToolkit, ITensors, ITensorMPS
@@ -357,26 +417,21 @@ perturbs the protected components at the same negligible order, while letting th
 inflated until the next sweep adds substantial cost per sweep (measured 1.3–2× at moderate
 ``\chi`` and growing with ``\chi``) for no measured accuracy gain.
 
-Two further lessons from production-scale validation runs (``N = 64``, ``\chi = 48``,
-``t \le 14``, correlator protocol):
+One further lesson from the production-scale validation runs: **profile mirror symmetry is
+a useful truncation gauge**. Both protocols are mirror-symmetric setups, so the profile
+asymmetry should vanish in exact arithmetic; in practice it grows with truncation pressure
+and *shrinks* with increasing ``\chi`` (it is truncation noise, not a sweep-direction bias).
+Monitoring it alongside the conserved total gives a cheap convergence diagnostic.
 
-- **Track unnormalized traces with `normalize=false`.** Truncation sheds Hilbert–Schmidt
-  norm faster than it sheds the DMT-protected components, so the default per-sweep
-  renormalization silently inflates absolute traces of a traceless operator (the conserved
-  ``\mathrm{tr}(H\,O(t))`` grew by tens of percent over a long run while the *ratio*
-  observable ``M_2`` was unaffected). Both `dmt_evolve!` and `constrained_dmt_evolve!`
-  accept `normalize=false` for exactly this workflow.
-- **Profile mirror symmetry is a useful truncation gauge.** For a symmetric setup the
-  profile asymmetry grows with truncation pressure and *shrinks* with increasing ``\chi``
-  (it is truncation noise, not a sweep-direction bias); monitoring it alongside the
-  conserved total gives a cheap convergence diagnostic.
-
-The energy-density measurement `pauli_expectation_profile(rho, terms)` evaluates every
-``\mathrm{tr}(\rho h_j)/\mathrm{tr}(\rho)`` in one ``O(N)`` pass with cumulative identity
-environments, mixed window sizes included. The full script — with the constraint-leakage
-diagnostic (residual leakage after projection vs. leakage accrued by one unprojected sweep)
-and the exponent fit — is
-[`examples/operator_space/pxp_energy_transport.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_transport.jl).
+In both protocols the measurement is `pauli_expectation_profile(rho, terms)`, which
+evaluates every ``\mathrm{tr}(\rho h_j)`` (over ``\mathrm{tr}(\rho)`` when normalized) in
+one ``O(N)`` pass with cumulative identity environments, mixed window sizes included. The
+full scripts add the diagnostics discussed above — the local-slope crossover column, the
+conserved-total drift, and the constraint-leakage probe (residual leakage after projection
+vs. leakage accrued by one unprojected sweep):
+[`pxp_energy_correlator.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl)
+and
+[`pxp_energy_transport.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_transport.jl).
 
 !!! tip "The checkpoint pattern is generic"
     Nothing in `constrained_dmt_evolve!` is PXP-specific: it interleaves DMT sweeps with any
@@ -451,6 +506,7 @@ pauli_pxp_constraint_projector
 
 - [examples/operator_space/dmt_scheduler.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/dmt_scheduler.ipynb)
 - [examples/operator_space/xxz_transport_regimes.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/xxz_transport_regimes.jl)
+- [examples/operator_space/pxp_energy_correlator.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl)
 - [examples/operator_space/pxp_energy_transport.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_transport.jl)
 - [examples/open_systems/pauli_lindblad_tebd.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/open_systems/pauli_lindblad_tebd.ipynb)
 
