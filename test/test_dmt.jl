@@ -192,6 +192,27 @@ end
     @test repaired ≈ singular_data atol = 1e-12
   end
 
+  @testset "orthonormal basis completion is orthonormal and span-preserving (large ambient)" begin
+    # Guards the allocation-free BLAS Gram-Schmidt path used at the bond dimensions that dominate
+    # DMT runtime. The completion must (1) be orthonormal, (2) keep col(protected) inside its
+    # span with the connector direction first, and (3) leave a full square basis a unitary that
+    # round-trips any operator exactly.
+    for (ambient, ncol, target) in ((64, 3, 64), (128, 4, 40), (32, 0, 32), (48, 5, 20))
+      protected = ncol == 0 ? zeros(ComplexF64, ambient, 0) : randn(ComplexF64, ambient, ncol)
+      basis = MPSToolkit._complete_orthonormal_basis(protected, target)
+      @test size(basis) == (ambient, target)
+      @test basis' * basis ≈ Matrix{ComplexF64}(I, target, target) atol = 1e-10
+      if ncol > 0 && target >= min(ncol, ambient)
+        # Every protected column lies in the span of the returned basis.
+        @test norm(protected - basis * (basis' * protected)) < 1e-10
+      end
+      if target == ambient
+        x = randn(ComplexF64, ambient, ambient)
+        @test basis * (basis' * x * basis) * basis' ≈ x atol = 1e-10
+      end
+    end
+  end
+
   @testset "DMT truncates every internal bond of wider update windows" begin
     for span in (1, 2, 3, 4, 5)
       nsites = span + 3
@@ -375,5 +396,41 @@ end
     well = make_block()
     MPSToolkit._mat_trunc!(well, chi; connector_buffer=cb)
     @test well[1:cb, :] ≈ make_block()[1:cb, :] atol = 1e-10
+  end
+
+  @testset "multi-bond DMT window matches single-bond sequence (canonical gauge)" begin
+    # A span-S gate window truncates its S-1 internal bonds. The faithful DMT result is each of
+    # those bonds truncated as an independent single-bond (span-2) DMT update in canonical
+    # gauge. This is a regression guard for a gauge bug in which the multi-bond window reused
+    # cached environments and truncated later bonds with the orthogonality center left on the
+    # wrong site -- mildly wrong for the :R forward sweep and severely wrong for the :L reverse
+    # sweep, where the bond SVD degenerated to s ≈ I and the truncation discarded information
+    # indiscriminately. random_mps gives generic (high operator-entanglement) states where the
+    # bug is visible; simple low-rank states are not a sufficient discriminator.
+    function _single_bond_sequence!(psi, start, span, direction; maxdim, cutoff, connector_buffer)
+      bonds = collect(start:(start + span - 2))
+      direction === :L && (bonds = reverse(bonds))
+      for bond in bonds
+        MPSToolkit._dmt_window_truncate!(psi, bond, 2; maxdim=maxdim, cutoff=cutoff,
+          direction=direction, connector_buffer=connector_buffer)
+      end
+      return psi
+    end
+
+    for direction in (:R, :L), span in (3, 4, 5)
+      nsites = span + 3
+      sites = pauli_siteinds(nsites)
+      psi = random_mps(ComplexF64, sites; linkdims=24)
+      normalize!(psi)
+
+      windowed = copy(psi)
+      MPSToolkit._dmt_window_truncate!(windowed, 2, span; maxdim=6, cutoff=1e-12,
+        direction=direction, connector_buffer=2)
+
+      sequential = copy(psi)
+      _single_bond_sequence!(sequential, 2, span, direction; maxdim=6, cutoff=1e-12, connector_buffer=2)
+
+      @test abs(inner(windowed, sequential)) / (norm(windowed) * norm(sequential)) ≈ 1.0 atol = 1e-10
+    end
   end
 end

@@ -172,6 +172,109 @@ To run a single update by hand instead of a full sweep, call `dmt_step!` directl
 `dmt_step!(state, gate, 1, DMTOptions(maxdim=16, cutoff=1e-10); direction=:R)`. The scheduled
 driver is simply this step repeated over the forward and reverse schedules.
 
+## Worked example: transport exponents in the XXZ chain
+
+The headline application of DMT is reading off a transport coefficient or dynamical exponent. The
+spin-1/2 XXZ chain
+
+```math
+H = \sum_j \left( S^x_j S^x_{j+1} + S^y_j S^y_{j+1} + \Delta\, S^z_j S^z_{j+1} \right)
+```
+
+has three infinite-temperature spin-transport regimes set by the anisotropy ``\Delta``,
+distinguished by the dynamical exponent ``z`` in ``\langle x^2 \rangle(t) \sim t^{2/z}``:
+
+| ``\Delta``     | regime               | ``z``   |
+|:---------------|:---------------------|:--------|
+| ``\Delta < 1`` | ballistic            | ``1``   |
+| ``\Delta = 1`` | superdiffusive (KPZ) | ``3/2`` |
+| ``\Delta > 1`` | diffusive            | ``2``   |
+
+Heisenberg-evolve the local operator ``O(0) = \sigma^z`` at the chain center in Pauli operator
+space with the DMT backend, and read off the infinite-temperature autocorrelation profile
+``p(x, t) = \langle \sigma^z_x \mid O(t) \rangle`` — the coefficient of the single-``Z`` string on
+each site. Its second moment ``M_2(t) = \sum_x (x - x_0)^2\, p(x, t) / \sum_x p(x, t) \sim t^{2/z}``
+gives ``z``. Forming ``M_2`` as a ratio makes it invariant to the `normalize!` rescaling that
+`dmt_evolve!` applies, and the profile is computed in one ``O(N)`` sweep with cumulative identity
+(trace) environments — the same contraction DMT uses internally — rather than ``N`` separate inner
+products:
+
+```julia
+using MPSToolkit, ITensors, ITensorMPS
+
+nsites, maxdim, dt, ncall = 30, 24, 0.1, 34   # one evolve! call advances t by 2*dt
+center = (nsites + 1) ÷ 2
+
+# coefficient of the single-Z string on every site, in one O(N) sweep
+function single_z_profile(state)
+    n = length(state)
+    cap(s, k) = (t = ITensor(s); t[s => k] = 1.0; t)   # k = 1 -> identity, k = 4 -> single Z
+    right = Vector{ITensor}(undef, n + 1); right[n + 1] = ITensor(1.0)
+    for s in n:-1:1
+        right[s] = right[s + 1] * cap(siteind(state, s), 1) * state[s]
+    end
+    left = ITensor(1.0); p = Vector{Float64}(undef, n)
+    for x in 1:n
+        p[x] = real(scalar(left * (cap(siteind(state, x), 4) * state[x]) * right[x + 1]))
+        left = left * cap(siteind(state, x), 1) * state[x]
+    end
+    return p
+end
+
+function transport_trace(Delta)
+    sites = pauli_siteinds(nsites)
+    O = pauli_basis_state(sites, [j == center ? "Z" : "I" for j in 1:nsites])
+    gate = pauli_gate_from_hamiltonian(
+        spinhalf_xyz_bond_hamiltonian(; Jx=1.0, Jy=1.0, Jz=Delta), dt)
+    schedule = collect(1:(nsites - 1))
+    evo = DMTGateEvolution(gate, dt; schedule, reverse_schedule=reverse(schedule),
+        maxdim, cutoff=1e-10, gate_maxdim=4 * maxdim, connector_buffer=4)
+    width2(state) = (p = single_z_profile(state);
+        sum((x - center)^2 * p[x] for x in 1:nsites) / sum(p))
+    times = [0.0]; M2 = [width2(O)]
+    for _ in 1:ncall
+        evolve!(O, evo); push!(times, times[end] + 2dt); push!(M2, width2(O))
+    end
+    return times, M2
+end
+```
+
+Extract ``z`` by fitting a log-log slope of ``M_2(t)`` — but fit an **intermediate** time window,
+not the whole trace:
+
+```julia
+function fit_z(times, M2, (tmin, tmax))
+    idx = findall(i -> tmin <= times[i] <= tmax && M2[i] > 0, eachindex(times))
+    lt, lm = log.(times[idx]), log.(M2[idx])
+    n, sx, sy = length(lt), sum(lt), sum(lm)
+    slope = (n * sum(lt .* lm) - sx * sy) / (n * sum(lt .^ 2) - sx^2)
+    return 2 / slope
+end
+
+for Delta in (0.5, 1.0, 2.0)
+    times, M2 = transport_trace(Delta)
+    println(Delta, "  ->  z = ", round(fit_z(times, M2, (3.0, 6.5)); digits=3))
+end
+# 0.5  ->  z = 1.09    (ballistic,            z = 1)
+# 1.0  ->  z = 1.45    (superdiffusive / KPZ, z = 3/2)
+# 2.0  ->  z = 1.90    (diffusive,            z = 2)
+```
+
+!!! tip "Fit the intermediate plateau, not the tail"
+    A single power-law fit over the whole trace is biased two ways. At **early** times every
+    ``\Delta`` spreads at the Lieb-Robinson speed, so the effective exponent looks ballistic
+    (``z \to 1``). At **late** times the conserved-charge tail outgrows the kept bond dimension
+    `maxdim`, DMT truncates it, and ``M_2`` growth is artificially suppressed — the effective
+    exponent stops being a clean power law and breaks down. Between them is a plateau where the
+    hydrodynamic scaling is visible and the bond dimension is still adequate; fitting there (here
+    ``t \in [3, 6.5]``) recovers all three exponents from one short run. Extrapolating the
+    corrupted late-time tail would push ``z`` the *wrong* way. Widen the window and raise
+    `nsites`/`maxdim` to sharpen the values further, at higher cost.
+
+The full script — with a boundary-contamination guard that drops any fit time at which the
+spreading front has reached the chain edge — is
+[`examples/operator_space/xxz_transport_regimes.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/xxz_transport_regimes.jl).
+
 ## Relation to TEBD
 
 DMT and TEBD share one scheduling abstraction and differ only in the truncation kernel:
