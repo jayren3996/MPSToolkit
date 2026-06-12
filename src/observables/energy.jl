@@ -50,11 +50,22 @@ function energy_density(psi::MPS, op::AbstractMatrix; span::Int=_operator_span(p
   norm2 = real(inner(psi, psi))
   norm2 > 0 || throw(ArgumentError("energy_density requires a nonzero-norm MPS"))
   last_start = length(psi) - span + 1
+  # Sweep the orthogonality center along a single working copy rather than re-orthogonalizing
+  # (and copying) the whole MPS at every window. Visiting starts in increasing order moves the
+  # center one site at a time, so the cost is O(N) center moves instead of O(N^2). With the
+  # center at `start` the block theta = work[start..start+span-1] carries the full norm (the rest
+  # is left/right orthonormal), so <theta|op|theta> is the windowed expectation -- identical to
+  # the per-window orthogonalize the previous implementation performed.
+  work = orthogonalize(psi, 1)
   total = 0.0
   for start in 1:last_start
-    sites = [siteind(psi, n) for n in start:(start + span - 1)]
+    orthogonalize!(work, start)
+    sites = [siteind(work, n) for n in start:(start + span - 1)]
     op_tensor = _dense_local_operator(sites, op)
-    theta = _finite_local_wavefunction(psi, start, span)
+    theta = work[start]
+    for n in (start + 1):(start + span - 1)
+      theta *= work[n]
+    end
     total += real(inner(theta, apply(op_tensor, theta)))
   end
   return total / (norm2 * length(psi))
