@@ -158,6 +158,14 @@ end
 
 `bond_entropy` here is the von Neumann entropy of the *vectorized operator* across the cut — the operator entanglement — so its growth is a direct diagnostic of operator spreading and of how hard the evolution is to compress. Replacing `pauli_gate_from_hamiltonian` with `(h, dt) -> pauli_gate_from_lindbladian(h, jumps, dt)` (for fixed local `jumps`) turns the same scheduler into a Lindblad propagator; see the open-system notebooks below.
 
+## Vectorizing operators, thermal states, and expectations
+
+Three families of helpers connect physical-space operators to the Pauli-basis representation:
+
+- **Vectorizers.** `pauli_state_from_mpo(op, sites)` turns any spin-1/2 `MPO` into the operator MPS with amplitudes ``\mathrm{tr}(P_\alpha^\dagger O)`` (bond dimension preserved), and `pauli_superoperator_mpo(op, sites)` lifts an MPO ``M`` to the operator-space MPO implementing the sandwich ``\rho \mapsto M \rho M^\dagger`` (bond dimension squared). The PXP constraint objects `pauli_pxp_constraint_state` and `pauli_pxp_constraint_projector` are one-line applications of these — see [DMT](dmt.md) for the constrained-transport workflow.
+- **Imaginary-time preparation.** `pauli_gate_from_imaginary_time(h, dbeta)` builds the two-sided slice ``\rho \mapsto e^{-(d\beta/2)h} \rho\, e^{-(d\beta/2)h}``, and `pauli_gibbs_state(sites, terms, weights; ...)` Trotterizes ``\rho \propto e^{-K/2} \rho_0 e^{-K/2}`` with ``K = \sum_j w_j h_j`` — uniform weights give Gibbs states, sign-split weights give the energy domain walls used in transport runs.
+- **Expectations.** `pauli_trace(rho)`, `pauli_expectation(rho, op, start)`, and the ``O(N)`` batched `pauli_expectation_profile(rho, terms)` evaluate ``\mathrm{tr}(\rho O)/\mathrm{tr}(\rho)`` for dense local windows directly from the operator MPS with cumulative identity environments.
+
 ## Related operator-space tools
 
 This page covers the generic Pauli-basis representation and operator-space TEBD. Two specialized truncation backends live on their own pages and reuse the same Pauli-basis states and gates:
@@ -180,6 +188,13 @@ pauli_gate
 pauli_gate_from_hamiltonian
 pauli_lindblad_generator
 pauli_gate_from_lindbladian
+pauli_state_from_mpo
+pauli_superoperator_mpo
+pauli_gate_from_imaginary_time
+pauli_gibbs_state
+pauli_trace
+pauli_expectation
+pauli_expectation_profile
 ```
 
 ## Examples

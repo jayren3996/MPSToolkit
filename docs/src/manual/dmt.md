@@ -275,6 +275,100 @@ The full script — with a boundary-contamination guard that drops any fit time 
 spreading front has reached the chain edge — is
 [`examples/operator_space/xxz_transport_regimes.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/xxz_transport_regimes.jl).
 
+## Worked example: constrained energy transport in the PXP chain
+
+The PXP chain — the effective model of a Rydberg-blockaded atom array —
+
+```math
+H = \Omega \left[ X_1 P_2 + \sum_{j=2}^{N-1} P_{j-1} X_j P_{j+1} + P_{N-1} X_N \right],
+\qquad P = |0\rangle\langle 0| ,
+```
+
+flips a site only when both neighbors are in the ground state. Every term therefore commutes
+with the global constraint projector ``P_G = \prod_j (1 - n_j n_{j+1})``: dynamics never
+connects the constrained sector (no adjacent excitations) to blockade-violating
+configurations. Energy is the only local conserved density, and its high-temperature
+transport is *superdiffusive*, with dynamical exponent ``z = 3/2`` in the KPZ universality
+class (Ljubotina, Desaules, Serbyn, Abanin, PRX **13**, 011033 (2023)).
+
+Simulating this with DMT needs three constraint-aware ingredients beyond the XXZ workflow
+above, all built from the model helpers `pxp_term_hamiltonian` / `pxp_term_support` and the
+constraint MPO `pxp_constraint_mpo`:
+
+1. **The right infinite-temperature state.** The reference state of the constrained sector is
+   ``\rho_\infty \propto P_G``, *not* the identity: the identity carries weight on
+   blockade-violating configurations that the PXP Hamiltonian never mixes with physical
+   dynamics but that would pollute traces and energy densities.
+   `pauli_pxp_constraint_state(sites)` returns the vectorized ``P_G`` as a bond-dimension-2
+   operator MPS (built via the generic vectorizer `pauli_state_from_mpo`).
+2. **An energy domain wall on top of it.** The transport initial state
+   ``\rho(0) \propto e^{-\beta H_L} \otimes e^{+\beta H_R}`` (left half slightly cold, right
+   half slightly hot) is prepared by imaginary-time TEBD in operator space:
+   `pauli_gibbs_state(sites, terms, weights; initial_state=pauli_pxp_constraint_state(sites))`
+   Trotterizes ``\rho \propto e^{-K/2}\, \rho_0\, e^{-K/2}`` with ``K = \sum_j w_j h_j``.
+   The wall is encoded entirely in the `weights`: ``+\beta`` for terms supported in the left
+   half, ``-\beta`` in the right half, and ``0`` for the two wall-straddling terms — with that
+   choice no term couples the halves and the two exponentials factorize *exactly*. (Assigning
+   straddling terms by their center site instead differs only by an ``O(\beta)`` local
+   distortion at the wall and gives the same hydrodynamics.) Because each ``h_j`` commutes
+   with ``P_G``, the preparation stays in the constrained sector up to truncation error.
+3. **Constraint checkpoints during evolution.** Exact gates commute with ``P_G``, but DMT (or
+   any) truncation leaks weight out of the sector. The operator-space projector MPO
+   ``\rho \mapsto P_G \rho P_G`` — `pauli_pxp_constraint_projector(sites)`, bond dimension 4,
+   built by the generic `pauli_superoperator_mpo` — removes the leaked weight, and
+   `constrained_dmt_evolve!` interleaves it with the DMT sweeps:
+
+```julia
+using MPSToolkit, ITensors, ITensorMPS
+
+nsites, wall, beta, dt = 40, 20, 0.25, 0.1
+sites = pauli_siteinds(nsites)
+terms = [(first(pxp_term_support(nsites, j)), pxp_term_hamiltonian(nsites, j)) for j in 1:nsites]
+weight(j) = (s = pxp_term_support(nsites, j);
+             last(s) <= wall ? beta : first(s) > wall ? -beta : 0.0)
+
+rho = pauli_gibbs_state(sites, terms, [weight(j) for j in 1:nsites];
+    nsteps=6, maxdim=64, initial_state=pauli_pxp_constraint_state(sites))
+
+gates = [pauli_gate_from_hamiltonian(h, dt) for (_, h) in terms]
+schedule = [start for (start, _) in terms]     # 3-site bulk gates, 2-site edge gates
+evo = DMTGateEvolution(gates, dt; schedule, reverse_schedule=reverse(schedule),
+    nstep=1, maxdim=32, cutoff=1e-12, gate_maxdim=128, connector_buffer=8)
+projector = pauli_pxp_constraint_projector(sites)
+
+profile(state) = real.(pauli_expectation_profile(state, terms))   # e_j = tr(rho h_j)/tr(rho)
+e0 = profile(rho)
+dE = Float64[]
+for k in 1:50                                   # one call advances t by 2*dt
+    constrained_dmt_evolve!(rho, evo, projector; project_every=1)
+    push!(dE, sum(profile(rho)[(wall + 1):end] - e0[(wall + 1):end]))
+end
+```
+
+The transferred energy ``\Delta E(t) = \sum_{j > \mathrm{wall}} [e_j(t) - e_j(0)] \sim
+t^{1/z}`` is fitted on a late window, with the same caveats as the XXZ example plus one more:
+the domain-wall quench approaches its hydrodynamic power law *slowly* (quadratic start,
+ballistic-looking middle), so short runs measure an **effective, crossover-bound exponent**
+that overestimates ``1/z`` — the example prints the local log-log slope so the drift toward
+the asymptote is visible. The projector application at a checkpoint is allowed to inflate the
+bond up to `projector_maxdim` (defaulting to `gate_maxdim`), and the *next DMT sweep*
+performs the transport-aware compression — an ordinary SVD never makes the truncation
+decision alone.
+
+The energy-density measurement `pauli_expectation_profile(rho, terms)` evaluates every
+``\mathrm{tr}(\rho h_j)/\mathrm{tr}(\rho)`` in one ``O(N)`` pass with cumulative identity
+environments, mixed window sizes included. The full script — with the constraint-leakage
+diagnostic (residual leakage after projection vs. leakage accrued by one unprojected sweep)
+and the exponent fit — is
+[`examples/operator_space/pxp_energy_transport.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_transport.jl).
+
+!!! tip "The checkpoint pattern is generic"
+    Nothing in `constrained_dmt_evolve!` is PXP-specific: it interleaves DMT sweeps with any
+    operator-space MPO. Other kinetically constrained models need only their own constraint
+    MPO — build it in physical space (cf. `pxp_constraint_mpo`) and lift it with
+    `pauli_superoperator_mpo`. The same pattern also fits DAOE-style projectors
+    ([DAOE](daoe.md)).
+
 ## Relation to TEBD
 
 DMT and TEBD share one scheduling abstraction and differ only in the truncation kernel:
@@ -324,11 +418,24 @@ DMTOptions
 DMTGateEvolution
 dmt_step!
 dmt_evolve!
+constrained_dmt_evolve!
+```
+
+PXP model and constraint helpers used by the constrained-transport workflow:
+
+```@docs
+pxp_term_hamiltonian
+pxp_term_support
+pxp_constraint_mpo
+pauli_pxp_constraint_state
+pauli_pxp_constraint_projector
 ```
 
 ## Examples
 
 - [examples/operator_space/dmt_scheduler.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/dmt_scheduler.ipynb)
+- [examples/operator_space/xxz_transport_regimes.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/xxz_transport_regimes.jl)
+- [examples/operator_space/pxp_energy_transport.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_transport.jl)
 - [examples/open_systems/pauli_lindblad_tebd.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/open_systems/pauli_lindblad_tebd.ipynb)
 
 ## References
@@ -336,3 +443,4 @@ dmt_evolve!
 - C. David White, Michael Zaletel, Roger S. K. Mong, and Gil Refael, [Quantum dynamics of thermalizing systems](https://arxiv.org/abs/1707.01506)
 - Stuart Yi-Thomas, Brayden Ware, Jay D. Sau, and Christopher David White, [Comparing numerical methods for hydrodynamics in a one-dimensional lattice spin model](https://arxiv.org/abs/2310.06886)
 - En-Jui Kuo, Brayden Ware, Peter Lunts, Mohammad Hafezi, and Christopher David White, [Energy diffusion in weakly interacting chains with fermionic dissipation-assisted operator evolution](https://arxiv.org/abs/2311.17148)
+- Marko Ljubotina, Jean-Yves Desaules, Maksym Serbyn, and Dmitry A. Abanin, [Superdiffusive energy transport in kinetically constrained models](https://doi.org/10.1103/PhysRevX.13.011033), Phys. Rev. X 13, 011033 (2023) — PXP energy transport and the KPZ exponent.
