@@ -249,3 +249,60 @@ end
     @test norm(annihilated) ≈ 0 atol = 1e-10
   end
 end
+
+@testset "operator-space expectations" begin
+  nsites = 4
+  psites = pauli_siteinds(nsites)
+  rho, dense_rho = _random_pauli_product(psites, 3)
+
+  # Make the operator Hermitian so normalized expectations are real diagnostics, but keep the
+  # state generic (non-Hermitian) to exercise the full complex path.
+  _random_hermitian(span, seed) = begin
+    raw = ComplexF64[
+      sin(0.31 * seed * (i + 2j)) + 1im * cos(0.17 * seed * (2i + j)) for i in 1:(2^span), j in 1:(2^span)
+    ]
+    raw + raw'
+  end
+
+  @testset "pauli_trace matches the dense trace" begin
+    @test pauli_trace(rho) ≈ tr(dense_rho) atol = 1e-10
+  end
+
+  @testset "pauli_expectation matches dense traces" begin
+    cases = [(1, _random_hermitian(2, 1)), (2, _random_hermitian(2, 2)), (3, _random_hermitian(1, 3)),
+             (1, _random_hermitian(3, 4)), (2, _random_hermitian(3, 5)), (4, _random_hermitian(1, 6))]
+    for (start, op) in cases
+      embedded = _embed_term(op, start, nsites)
+      expected = tr(dense_rho * embedded) / tr(dense_rho)
+      @test pauli_expectation(rho, op, start) ≈ expected atol = 1e-10
+      @test pauli_expectation(rho, op, start; normalize=false) ≈ tr(dense_rho * embedded) atol = 1e-10
+    end
+    @test_throws ArgumentError pauli_expectation(rho, _random_hermitian(3, 7), 3)
+    @test_throws ArgumentError pauli_expectation(rho, ones(ComplexF64, 3, 3), 1)
+  end
+
+  @testset "pauli_expectation_profile equals per-term expectations" begin
+    terms = [(first(pxp_term_support(nsites, j)), pxp_term_hamiltonian(nsites, j)) for j in 1:nsites]
+    profile = pauli_expectation_profile(rho, terms)
+    for (k, (start, op)) in enumerate(terms)
+      @test profile[k] ≈ pauli_expectation(rho, op, start) atol = 1e-12
+    end
+    # Unsorted input keeps input ordering of outputs.
+    shuffled = reverse(terms)
+    reversed_profile = pauli_expectation_profile(rho, shuffled)
+    @test reversed_profile ≈ reverse(profile) atol = 1e-12
+    # Unnormalized variant scales by the trace.
+    raw_profile = pauli_expectation_profile(rho, terms; normalize=false)
+    @test raw_profile ≈ profile .* tr(dense_rho) atol = 1e-9
+  end
+
+  @testset "Hermitian state gives real energies" begin
+    psites2 = pauli_siteinds(2)
+    hermitian_rho = sum(
+      0.5 * coeff * pauli_basis_state(psites2, collect(labels)) for
+      (coeff, labels) in zip((1.0, 0.3, 0.3, 0.7), ((1, 1), (1, 4), (4, 1), (4, 4)))
+    )
+    value = pauli_expectation(hermitian_rho, Matrix(pxp_term_hamiltonian(2, 1)), 1)
+    @test abs(imag(value)) < 1e-12
+  end
+end
