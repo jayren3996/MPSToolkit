@@ -408,3 +408,65 @@ _pxp_terms(nsites; omega=1.0) =
     @test_throws ArgumentError pauli_gibbs_state(psites, terms, fill(beta, nsites); nsteps=0)
   end
 end
+
+@testset "constrained DMT evolution" begin
+  nsites = 6
+  beta = 0.4
+  dt = 0.05
+  nstep = 5     # one sweep advances 2*dt -> t_total = 0.5
+  psites = pauli_siteinds(nsites)
+  terms = _pxp_terms(nsites)
+  # Wall between sites 3 and 4: terms fully inside a half keep +/- beta, straddlers get 0.
+  weights = [beta, beta, 0.0, 0.0, -beta, -beta]
+
+  rho = pauli_gibbs_state(
+    psites,
+    terms,
+    weights;
+    nsteps=12,
+    maxdim=256,
+    cutoff=0.0,
+    initial_state=pauli_pxp_constraint_state(psites),
+  )
+
+  # Dense reference: rho(t) = e^{-iHt} rho_0 e^{+iHt}.
+  k_dense = _dense_weighted_pxp(nsites, weights)
+  rho_dense = exp(-Matrix(k_dense) / 2) * _pxp_projector_dense(nsites) * exp(-Matrix(k_dense) / 2)
+  h_dense = _pxp_dense(nsites)
+  t_total = 2 * dt * nstep
+  u_dense = exp(-1im * Matrix(h_dense) * t_total)
+  rho_dense_t = u_dense * rho_dense * u_dense'
+  expected_profile = _dense_pxp_profile(rho_dense_t, nsites)
+
+  gates = [pauli_gate_from_hamiltonian(h, dt) for (_, h) in terms]
+  schedule = [start for (start, _) in terms]
+  evo = DMTGateEvolution(
+    gates,
+    dt;
+    schedule=schedule,
+    reverse_schedule=reverse(schedule),
+    nstep=nstep,
+    maxdim=64,
+    cutoff=1e-12,
+    gate_maxdim=256,
+    connector_buffer=4,
+  )
+  projector = pauli_pxp_constraint_projector(psites)
+
+  evolved = copy(rho)
+  constrained_dmt_evolve!(evolved, evo, projector; project_every=2)
+  profile = real.(pauli_expectation_profile(evolved, terms))
+  @test maximum(abs.(profile - expected_profile)) < 5e-3
+
+  # The state stays in the constrained sector: P rho P = rho up to numerical error.
+  projected = apply(projector, evolved; maxdim=256, cutoff=0.0)
+  overlap = inner(projected, projected) + inner(evolved, evolved) - 2 * real(inner(projected, evolved))
+  @test overlap ≈ 0 atol = 1e-8
+
+  # Total energy is conserved by the evolution (and matches the dense value).
+  expected_total = real(tr(rho_dense * h_dense) / tr(rho_dense))
+  @test sum(profile) ≈ expected_total atol = 5e-3
+
+  @test_throws ArgumentError constrained_dmt_evolve!(evolved, evo, projector; project_every=0)
+  @test_throws ArgumentError constrained_dmt_evolve!(evolved, evo, pauli_pxp_constraint_projector(pauli_siteinds(4)))
+end
