@@ -306,3 +306,105 @@ end
     @test abs(imag(value)) < 1e-12
   end
 end
+
+# Dense K = sum_j w_j h_j for the PXP term list.
+function _dense_weighted_pxp(nsites, weights; omega=1.0)
+  return sum(
+    weights[j] * _embed_term(
+      pxp_term_hamiltonian(nsites, j; omega=omega),
+      first(pxp_term_support(nsites, j)),
+      nsites,
+    ) for j in 1:nsites
+  )
+end
+
+function _dense_pxp_profile(rho_dense, nsites)
+  return [
+    real(
+      tr(rho_dense * _embed_term(
+        pxp_term_hamiltonian(nsites, j),
+        first(pxp_term_support(nsites, j)),
+        nsites,
+      )) / tr(rho_dense),
+    ) for j in 1:nsites
+  ]
+end
+
+_pxp_terms(nsites; omega=1.0) =
+  [(first(pxp_term_support(nsites, j)), pxp_term_hamiltonian(nsites, j; omega=omega)) for j in 1:nsites]
+
+@testset "imaginary-time thermal preparation" begin
+  @testset "pauli_gate_from_imaginary_time" begin
+    h = Matrix(pxp_term_hamiltonian(4, 2))
+    dbeta = 0.37
+    @test pauli_gate_from_imaginary_time(h, dbeta) ≈ pauli_gate(exp(-(dbeta / 2) * h)) atol = 1e-12
+    @test pauli_gate_from_imaginary_time(h, 0.0) ≈ Matrix{ComplexF64}(I, 4^3, 4^3) atol = 1e-12
+    @test_throws ArgumentError pauli_gate_from_imaginary_time(ones(2, 3), 0.1)
+  end
+
+  nsites = 4
+  beta = 0.6
+  psites = pauli_siteinds(nsites)
+  terms = _pxp_terms(nsites)
+  projector_dense = _pxp_projector_dense(nsites)
+
+  function _mps_profile(state)
+    return real.(pauli_expectation_profile(state, terms))
+  end
+
+  @testset "uniform-beta constrained Gibbs state matches ED" begin
+    weights = fill(beta, nsites)
+    k_dense = _dense_weighted_pxp(nsites, weights)
+    rho_dense = exp(-Matrix(k_dense) / 2) * projector_dense * exp(-Matrix(k_dense) / 2)
+    expected = _dense_pxp_profile(rho_dense, nsites)
+
+    errors = Float64[]
+    for nsteps in (3, 20)
+      state = pauli_gibbs_state(
+        psites,
+        terms,
+        weights;
+        nsteps=nsteps,
+        maxdim=256,
+        cutoff=0.0,
+        initial_state=pauli_pxp_constraint_state(psites),
+      )
+      push!(errors, maximum(abs.(_mps_profile(state) - expected)))
+    end
+    @test errors[end] < 1e-3
+    @test errors[1] > errors[end]   # Trotter convergence with nsteps
+  end
+
+  @testset "domain-wall weights match the factorized dense state" begin
+    weights = [beta, 0.0, 0.0, -beta]
+    k_dense = _dense_weighted_pxp(nsites, weights)
+    rho_dense = exp(-Matrix(k_dense) / 2) * projector_dense * exp(-Matrix(k_dense) / 2)
+    expected = _dense_pxp_profile(rho_dense, nsites)
+
+    state = pauli_gibbs_state(
+      psites,
+      terms,
+      weights;
+      nsteps=16,
+      maxdim=256,
+      cutoff=0.0,
+      initial_state=pauli_pxp_constraint_state(psites),
+    )
+    @test maximum(abs.(_mps_profile(state) - expected)) < 1e-3
+  end
+
+  @testset "identity default initial state" begin
+    weights = [beta, 0.0, 0.0, -beta]
+    k_dense = _dense_weighted_pxp(nsites, weights)
+    rho_dense = exp(-Matrix(k_dense))   # e^{-K/2} * I * e^{-K/2}
+    expected = _dense_pxp_profile(rho_dense, nsites)
+
+    state = pauli_gibbs_state(psites, terms, weights; nsteps=16, maxdim=256, cutoff=0.0)
+    @test maximum(abs.(_mps_profile(state) - expected)) < 1e-3
+  end
+
+  @testset "argument validation" begin
+    @test_throws ArgumentError pauli_gibbs_state(psites, terms, fill(beta, nsites - 1))
+    @test_throws ArgumentError pauli_gibbs_state(psites, terms, fill(beta, nsites); nsteps=0)
+  end
+end
