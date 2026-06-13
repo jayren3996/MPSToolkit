@@ -236,10 +236,6 @@ Perform one DMT-preserving bond truncation step.
   `bond` before truncating, as the connector-preserving construction requires. Set to `false`
   only when the center is already known to be at `bond`; otherwise the bond SVD no longer
   returns the true Schmidt values and the truncation is invalid.
-- `left_env`, `right_env`: Optional precomputed identity/trace environments. When `nothing`
-  (default) they are built from the current canonical gauge. If supplied, they MUST match the
-  gauge at `bond` (e.g. as produced by `orthogonalize!(psi, bond)`); a stale environment
-  silently yields an invalid truncation.
 
 # Returns
 - The mutated `psi`.
@@ -251,8 +247,6 @@ function _dmt_bond_truncate!(
   cutoff::Real,
   direction::Symbol=:R,
   connector_buffer::Integer=8,
-  left_env=nothing,
-  right_env=nothing,
   orthogonalize::Bool=true,
 )
   maxdim > 0 || return psi
@@ -267,8 +261,13 @@ function _dmt_bond_truncate!(
   left_site = siteind(psi, bond)
   right_site = siteind(psi, bond + 1)
 
-  isnothing(left_env) && (left_env = _left_identity_environment(psi, bond - 1))
-  isnothing(right_env) && (right_env = _right_identity_environment(psi, bond + 2))
+  # The identity/trace environments are rebuilt from the canonical gauge on every call -- the
+  # dominant per-sweep cost (see the O(N^2) note on `_dmt_window_truncate!`). A cached/threaded
+  # environment was deliberately *not* exposed here: supplying a stale env silently produces an
+  # invalid truncation, and a correct threaded sweep needs gauge control the gate primitive
+  # (`tebd_evolve!` -> ITensorMPS `product`) does not provide. See that note for the design.
+  left_env = _left_identity_environment(psi, bond - 1)
+  right_env = _right_identity_environment(psi, bond + 2)
 
   previous_link = linkind(psi, bond - 1)
   left_inds = isnothing(previous_link) ? (left_site,) : (previous_link, left_site)
@@ -314,6 +313,42 @@ function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::
   # ends up on the wrong site so `svd(psi[bond])` degenerates to `s ≈ I` and the truncation
   # discards information indiscriminately. Re-gauging per bond keeps a span-`S` window exactly
   # equal to the verified single-bond path applied to each of its bonds.
+  #
+  # PERFORMANCE (known, deferred -- see perf-1 in the operator-space audit). Each
+  # `_dmt_bond_truncate!` rebuilds both identity/trace environments from scratch
+  # (`_left_identity_environment` over sites `1:bond-1`, `_right_identity_environment` over
+  # `bond+2:N`), so a full schedule sweep of ~N bonds costs O(N^2 * chi^2) -- the dominant term
+  # for long chains at moderate chi (the regime reached when pushing PXP runs to the times
+  # needed for the asymptotic z=3/2).
+  #
+  # The textbook fix is a moving-orthogonality-center sweep that threads one running
+  # environment (left for a :R sweep, right for :L) and precomputes the other once, amortizing
+  # the per-bond cost to O(1) -> O(N * chi^2) per sweep. It was deferred, not done, because a
+  # *correct* implementation must solve three coupled problems:
+  #   1. Gauge consistency: each environment must match the post-`orthogonalize!(psi, bond)`
+  #      canonical gauge. A naive cache truncates later bonds in a non-canonical gauge -- the
+  #      bug described above ("badly wrong for :L"). The threading is only valid because a
+  #      monotonic sweep freezes the left-canonical prefix / right-canonical suffix.
+  #   2. The gate primitive: `tebd_evolve!` applies gates via ITensorMPS `product`, which
+  #      re-gauges opaquely and replaces every tensor object. A threaded sweep needs explicit
+  #      gauge control the primitive does not expose, i.e. it must be rebuilt alongside.
+  #   3. Schedule shape: the PXP energy-transport schedule is non-monotonic (boundary terms
+  #      revisit bond 1), mixed-span (2 and 3), and produces overlapping multi-bond windows, so
+  #      the clean monotonic-sweep assumptions do not hold for the primary use case; it needs
+  #      per-site last-touch finalization plus on-the-fly recompute where a span-3 gate reaches
+  #      into the precomputed region.
+  # A safe rollout would gate the threaded path behind a per-bond bit-for-bit assertion against
+  # this rebuild path (toggled across the full ED-oracle suite) before trusting it.
+  #
+  # Prototype findings (a threaded sweep was built and validated against this path, then shelved):
+  # the cache invalidation must drop entries one site *beyond* the changed range on each side,
+  # because a left env over `1:k` opens on `link(k)` and a right env over `k:N` on `link(k-1)`, so
+  # modifying site m staleness the env whose open *index* touches an adjacent bond even when its
+  # *sites* are untouched. With that fixed, the forward sweep matched the rebuild exactly and the
+  # reverse sweep matched on clean input -- but the threaded forward left redundant near-zero bond
+  # dimensions (gauge/roundoff artifact of pinning the center per gate) that the reverse sweep then
+  # mishandled. A correct version must reproduce this path's *canonical-form output* (trimmed
+  # bonds), not merely its physical state; that is the open problem for a future dedicated effort.
   for bond in _dmt_truncation_bonds(start, span, direction)
     _dmt_bond_truncate!(
       psi,
