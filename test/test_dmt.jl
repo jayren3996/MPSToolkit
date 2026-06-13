@@ -74,6 +74,8 @@ end
     @test opts.cutoff == 1e-12
     @test opts.gate_maxdim == 480
     @test opts.connector_buffer == 8
+    # gate_maxdim default follows the maxdim*16 formula shared with dmt_step!/DMTGateEvolution.
+    @test DMTOptions(maxdim=8).gate_maxdim == max(8 * 16, 64)
 
     @test_throws ArgumentError DMTOptions(maxdim=0)
     @test_throws ArgumentError DMTOptions(cutoff=-1e-12)
@@ -132,6 +134,7 @@ end
 
     _, psi = _dmt_test_state(3)
     @test_throws ArgumentError dmt_step!(psi, _identity_gate(2), 1; maxdim=2, connector_buffer=3)
+    @test_throws ArgumentError dmt_step!(psi, _identity_gate(2), 1; maxdim=0)
   end
 
   @testset "DMT completes protected bases beyond local Pauli dimension" begin

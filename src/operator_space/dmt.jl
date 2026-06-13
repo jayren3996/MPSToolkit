@@ -1,5 +1,5 @@
 """
-    DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=480, connector_buffer=8)
+    DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=max(maxdim * 16, 64), connector_buffer=8)
 
 Options controlling operator-space density matrix truncation (DMT).
 
@@ -32,7 +32,7 @@ struct DMTOptions
     return new(Int(maxdim), Float64(cutoff), Int(gate_maxdim), Int(connector_buffer))
   end
 
-  function DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=480, connector_buffer=8)
+  function DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=max(maxdim * 16, 64), connector_buffer=8)
     return DMTOptions(maxdim, cutoff, gate_maxdim, connector_buffer)
   end
 end
@@ -95,9 +95,9 @@ end
 
 function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span::Integer, direction::Symbol, maxdim::Integer, connector_buffer::Integer)
   direction === :R || direction === :L || throw(ArgumentError("DMT direction must be :R or :L"))
-  maxdim >= 0 || throw(ArgumentError("DMT maxdim must be nonnegative"))
+  maxdim >= 1 || throw(ArgumentError("DMT maxdim must be >= 1"))
   connector_buffer >= 0 || throw(ArgumentError("DMT connector_buffer must be nonnegative"))
-  maxdim == 0 || connector_buffer <= maxdim || throw(ArgumentError("DMT connector_buffer must be <= maxdim"))
+  connector_buffer <= maxdim || throw(ArgumentError("DMT connector_buffer must be <= maxdim"))
   start >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
   last_site = start + span - 1
   last_site <= length(psi) || throw(ArgumentError("local gate support exceeds chain length"))
