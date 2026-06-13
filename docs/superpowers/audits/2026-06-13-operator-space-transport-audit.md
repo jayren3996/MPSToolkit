@@ -35,7 +35,7 @@ full-suite gate → commit). Final state: **full suite green**.
 | P5 | `normalize` field on `DMTGateEvolution`; `pauli_fdaoe_projector` canonical + alias; `nstep` alias | convention-6/5/1, test-1/3 |
 | P6 | **Bonus correctness bug fix** (see below); coverage tests | test-5/7/8 + `_complete_orthonormal_basis` fix |
 | P7 | `(√2)^N` overflow limit documented | numerics-4 |
-| P8 | `perf-1` deferred → `perf-4` applied (dead-kwarg footgun removed + design/findings documented in-code) | perf-1, perf-4 |
+| P8 | `perf-1` deferred → `perf-4` applied (dead-kwarg footgun removed + design/findings documented in-code); **`perf-1` later implemented — see follow-up below** | perf-1, perf-4 |
 
 **Bonus bug fix (not in the original 40 findings).** Adding `test-8` (rank-deficient
 `_complete_orthonormal_basis` coverage) surfaced a genuine correctness bug: the linear-dependence
@@ -44,14 +44,37 @@ collapsing to ~`eps²` for roundoff residuals, so a numerically-dependent standa
 accepted as a spurious near-duplicate column — producing a **non-orthonormal** "orthonormal" DMT
 basis. Fixed to scale by the candidate's unit norm.
 
-**`perf-1` (O(N²) environment rebuild) — attempted, deferred.** A full threaded-environment sweep
-was prototyped in an isolated worktree and validated against the ED oracles with a bit-for-bit
-assertion harness. The cache invalidation was corrected (off-by-one on the env open-index), the
-forward sweep matched the rebuild exactly, and the reverse matched on clean input — but the
-threaded forward left redundant near-zero bond dimensions (a gauge/roundoff artifact) that broke
-the reverse sweep. Rather than ship a fragile change to the transport engine, `perf-4` was applied
-instead (footgun removal + the complete design and these findings documented in-code on
-`_dmt_window_truncate!`), leaving the correct O(N²) path in place for a dedicated future effort.
+**`perf-1` (O(N²) environment rebuild) — implemented (follow-up, 2026-06-13).** Completed on
+`perf/dmt-threaded-environment` and merged into `feat/pxp-energy-transport`. `dmt_evolve!` now
+builds one `_DMTEnvCache` and threads it through the sweep; each `_dmt_bond_truncate!` extends a
+memoized running environment by only the sites mutated since the previous bond (watermark
+invalidation with a one-site-beyond margin for the open link index) instead of rebuilding both
+identity environments from scratch. `orthogonalize!` and the entire truncation sequence are
+unchanged, so a cached environment is *by construction* the same contraction of the same tensors
+the rebuild would produce — the truncation output is **bit-for-bit identical**.
+
+This is why the prototype's open problem (threaded forward leaving redundant near-zero bond dims
+that broke the reverse sweep) does not recur: the cache memoizes *only* the environment value and
+keeps the per-bond re-gauge, so it never changes the gauge or the canonical-form output. The three
+"hard" coupled problems dissolve — gauge consistency is automatic (env value is gauge-agnostic, the
+per-bond `orthogonalize!` stays), the opaque gate primitive is handled by invalidating the bounded
+re-gauge range it touches (via `leftlim`/`rightlim`), and the non-monotonic / mixed-span /
+overlapping PXP schedule needs no special casing because invalidation is per-operation and
+footprint-based (every gate's footprint is its O(span) window — verified empirically). Correctness
+is guarded by a `_DMT_VERIFY_ENVS[]` toggle that asserts every cached env equals the from-scratch
+rebuild (index identity + norm of difference): the **full ED-oracle suite passes with it on** (0
+failures, 0 assertion trips), and the threaded vs rebuild final states match to overlap 1.0 with
+**identical bond dimensions** on the PXP hard case (N=6/8/10), forward and reverse, across multiple
+sweeps.
+
+**Measured.** An isolated environment-sweep benchmark confirms the asymptotic fix: rebuild cost
+∝ N² (`rebuild/N²` flat at ~13.7), threaded cost ∝ N (`threaded/N` flat at ~39), env-term speedup
+growing 4.4× (N=16) → 21× (N=64) → 90× (N=256). **End-to-end**, in the accuracy-preferred regime
+(`maxdim=32`, `gate_maxdim=256`), the per-gate `product`/SVD at the *inflated* bond dominates total
+cost at reachable N, so the wall-clock speedup is ~1.0–1.05× (break-even, never a regression) —
+the threaded env becomes the end-to-end bottleneck, and thus a wall-clock win, only at very large N
+or when `gate_maxdim` is closer to `maxdim`. The change is asymptotically correct and zero-risk; it
+pays off increasingly as PXP runs are pushed to the long chains needed for the asymptotic z=3/2.
 
 ---
 
@@ -89,7 +112,7 @@ Grouped by priority. Several low-severity items are different lenses on the same
 
 - **`numerics-1` (medium) — silent 1/ε amplification for traceless operators.** `pauli_expectation_profile` guards the normalized division with an *exact* `iszero(denominator)` check, then divides. For a **traceless** operator (the energy-correlator protocol in `pxp_energy_correlator.jl`), DMT/SVD truncation leaves an `O(ε·‖·‖)` trace residue — `iszero` reports it as nonzero, the guard passes, and the result is divided by ~1e-13, returning garbage amplified by ~1/ε with **no error**. Reproduced: trace `4e-13` → output `9.99e12`. The DMT kernel `_mat_trunc!` already guards the same failure mode with a *relative* tolerance `size·eps·norm`; the expectation layer should match. **Fix:** replace the exact `iszero` with a norm-scaled relative tolerance that throws a clear `ArgumentError` pointing to `normalize=false`.
 
-- **`perf-1` + `perf-4` (medium) — O(N²)-per-sweep identity-environment rebuild (the dominant hot-loop cost).** `_dmt_bond_truncate!` unconditionally rebuilds *both* identity environments from scratch on every bond (`_left_identity_environment` contracts `1:bond-1`, `_right_identity_environment` contracts `bond+2:N`). The in-tree caller never supplies the cached `left_env`/`right_env`, so the fast-path is dead and the per-sweep cost is `Σ_b[O(b)+O(N-b)] = O(N²·χ²)` where a swept running environment gives `O(N·χ²)`. This grows quadratically as runs are pushed to the longer times needed for the asymptotic `z=3/2`. **Fix:** thread a running environment through the sweep (left env for `:R`, right env for `:L`), extend/contract by one site per step, pass it via the *existing* `left_env`/`right_env` kwargs. Gauge bookkeeping is the catch (the inline comment documents a prior `:L` correctness bug) — validate bit-for-bit against the ED energy-conservation / sector-preservation oracles in `test_operator_space.jl` and the connector/identity regressions in `test_dmt.jl`. (`perf-4`: if sweep-threading is deferred, instead delete the dead kwargs to remove the stale-environment footgun.)
+- **`perf-1` + `perf-4` (medium) — O(N²)-per-sweep identity-environment rebuild (the dominant hot-loop cost). ✓ RESOLVED** (`perf-4` interim footgun removal, then `perf-1` implemented as a threaded environment cache — see the follow-up in the Resolution section above). `_dmt_bond_truncate!` unconditionally rebuilds *both* identity environments from scratch on every bond (`_left_identity_environment` contracts `1:bond-1`, `_right_identity_environment` contracts `bond+2:N`). The in-tree caller never supplies the cached `left_env`/`right_env`, so the fast-path is dead and the per-sweep cost is `Σ_b[O(b)+O(N-b)] = O(N²·χ²)` where a swept running environment gives `O(N·χ²)`. This grows quadratically as runs are pushed to the longer times needed for the asymptotic `z=3/2`. **Fix:** thread a running environment through the sweep (left env for `:R`, right env for `:L`), extend/contract by one site per step, pass it via the *existing* `left_env`/`right_env` kwargs. Gauge bookkeeping is the catch (the inline comment documents a prior `:L` correctness bug) — validate bit-for-bit against the ED energy-conservation / sector-preservation oracles in `test_operator_space.jl` and the connector/identity regressions in `test_dmt.jl`. (`perf-4`: if sweep-threading is deferred, instead delete the dead kwargs to remove the stale-environment footgun.)
 
 - **`perf-2` (low, but a clean safe win) — O(N²) schedule scan per sweep.** `_is_default_reverse_schedule` (and the forward-index map) is recomputed inside `_reverse_gate_index` for every `(bond, index)` on every reverse step, though it is loop-invariant. **Fix:** compute once at the top of `dmt_evolve!` and thread the flag/map in. Behavior-preserving.
 

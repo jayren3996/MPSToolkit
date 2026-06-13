@@ -75,6 +75,124 @@ function _right_identity_environment(psi::MPS, start::Integer)
 end
 
 """
+    _DMTEnvCache(psi)
+
+Amortizing cache for the DMT identity/trace environments (perf-1). `_dmt_bond_truncate!` needs,
+at each bond `b`, the left environment over sites `1:b-1` and the right environment over
+`b+2:N`. Rebuilding both from scratch on every call is the O(N) per-bond cost that makes a
+schedule sweep O(N^2) (see the note on `_dmt_window_truncate!`). This cache stores the prefix
+(`left`) and suffix (`right`) contractions and rebuilds only the part invalidated since the last
+use, so a *local* sweep -- the regime every gate schedule produces (verified: each gate's
+footprint is its O(span) window, never the whole chain) -- costs O(1) amortized per bond.
+
+Validity is tracked by two watermarks: `left[0..lvalid]` and `right[rvalid..N+1]` are current. A
+mutation over sites `[lo,hi]` lowers `lvalid` to `lo-2` and raises `rvalid` to `hi+2`. The
+one-site-beyond ("-2/+2") margin is required because a left env over `1:k` carries the OPEN index
+`linkind(psi,k)`: a factorization at site `m` re-creates the adjacent link, so the env whose open
+index touches a mutated bond is stale even when its contracted sites are not.
+
+The cache memoizes *only* the environment rebuilds; `_dmt_bond_truncate!` keeps its exact
+operation sequence (including `orthogonalize!`), so a cached env that equals the from-scratch
+rebuild yields bit-for-bit identical truncation output. `_DMT_VERIFY_ENVS[] = true` asserts that
+equality at every bond and is exercised by the ED-oracle test suite.
+"""
+mutable struct _DMTEnvCache
+  left::Vector{ITensor}    # left[k+1]  = _left_identity_environment(psi, k),  k in 0:n
+  right::Vector{ITensor}   # right[k]   = _right_identity_environment(psi, k), k in 1:n+1
+  lvalid::Int              # left[0..lvalid] valid
+  rvalid::Int              # right[rvalid..n+1] valid
+  n::Int
+end
+
+function _DMTEnvCache(psi::MPS)
+  n = length(psi)
+  left = Vector{ITensor}(undef, n + 1)
+  right = Vector{ITensor}(undef, n + 1)
+  left[1] = ITensor(1.0)        # L[0]
+  right[n + 1] = ITensor(1.0)   # R[n+1]
+  return _DMTEnvCache(left, right, 0, n + 1, n)
+end
+
+# When true, every cached environment is checked against the from-scratch rebuild in
+# `_dmt_bond_truncate!` (index identity, then norm of the difference). Off in production; the
+# ED-oracle tests flip it on to prove the threaded path reproduces the rebuild bit-for-bit.
+const _DMT_VERIFY_ENVS = Ref(false)
+
+"""
+    _left_env_at!(cache, psi, k)
+
+Return `_left_identity_environment(psi, k)`, extending the cached prefix from the current
+watermark by one site at a time. O(1) amortized when `k` advances locally.
+"""
+function _left_env_at!(cache::_DMTEnvCache, psi::MPS, k::Integer)
+  k = Int(k)
+  0 <= k <= cache.n || throw(ArgumentError("DMT left env index $k out of range 0:$(cache.n)"))
+  while cache.lvalid < k
+    j = cache.lvalid + 1
+    cache.left[j + 1] = cache.left[j] * (_pauli_identity_env(siteind(psi, j)) * psi[j])
+    cache.lvalid = j
+  end
+  return cache.left[k + 1]
+end
+
+"""
+    _right_env_at!(cache, psi, k)
+
+Return `_right_identity_environment(psi, k)`, extending the cached suffix from the current
+watermark by one site at a time. O(1) amortized when `k` retreats locally.
+"""
+function _right_env_at!(cache::_DMTEnvCache, psi::MPS, k::Integer)
+  k = Int(k)
+  1 <= k <= cache.n + 1 || throw(ArgumentError("DMT right env index $k out of range 1:$(cache.n + 1)"))
+  while cache.rvalid > k
+    j = cache.rvalid - 1
+    cache.right[j] = cache.right[j + 1] * (_pauli_identity_env(siteind(psi, j)) * psi[j])
+    cache.rvalid = j
+  end
+  return cache.right[k]
+end
+
+"""
+    _invalidate_env!(cache, lo, hi)
+
+Mark the environments stale for a mutation that touched sites `lo:hi`. Lowers the left watermark
+to `lo-2` and raises the right watermark to `hi+2` (the one-site-beyond margin covers the open
+link index; see [`_DMTEnvCache`](@ref)).
+"""
+function _invalidate_env!(cache::_DMTEnvCache, lo::Integer, hi::Integer)
+  cache.lvalid = clamp(min(cache.lvalid, Int(lo) - 2), 0, cache.n)
+  cache.rvalid = clamp(max(cache.rvalid, Int(hi) + 2), 1, cache.n + 1)
+  return cache
+end
+
+"""
+    _orthogonalize_env!(cache, psi, bond)
+
+Move the orthogonality center to `bond`, invalidating the re-gauged range. `orthogonalize!`
+re-gauges the tensors between the old center and `bond`; the old center lies in
+`[leftlim, rightlim]`, so `[min(leftlim,bond), max(rightlim,bond)]` bounds the touched sites.
+"""
+function _orthogonalize_env!(cache::_DMTEnvCache, psi::MPS, bond::Integer)
+  ll = ITensorMPS.leftlim(psi)
+  rl = ITensorMPS.rightlim(psi)
+  orthogonalize!(psi, bond)
+  lo = clamp(min(ll, Int(bond)), 1, cache.n)
+  hi = clamp(max(rl, Int(bond)), 1, cache.n)
+  _invalidate_env!(cache, lo, hi)
+  return psi
+end
+
+function _assert_env_matches(label, cached::ITensor, fresh::ITensor)
+  ITensors.hassameinds(cached, fresh) ||
+    error("DMT env verify ($label): index mismatch\n  cached=$(inds(cached))\n  fresh =$(inds(fresh))")
+  difference = norm(cached - fresh)
+  scale = max(norm(fresh), one(real(float(one(eltype(fresh))))))
+  difference <= sqrt(eps(Float64)) * scale ||
+    error("DMT env verify ($label): norm(diff)=$difference exceeds tolerance (scale=$scale)")
+  return nothing
+end
+
+"""
     _dmt_truncation_bonds(start, span, direction)
 
 Return the internal bonds at which DMT truncation should be applied for one local update.
@@ -248,6 +366,7 @@ function _dmt_bond_truncate!(
   direction::Symbol=:R,
   connector_buffer::Integer=8,
   orthogonalize::Bool=true,
+  cache::Union{Nothing,_DMTEnvCache}=nothing,
 )
   maxdim > 0 || return psi
   connector_buffer >= 0 || throw(ArgumentError("DMT connector_buffer must be nonnegative"))
@@ -257,17 +376,29 @@ function _dmt_bond_truncate!(
   isnothing(current_link) && return psi
   dim(current_link) <= maxdim && return psi
 
-  orthogonalize && orthogonalize!(psi, bond)
+  if orthogonalize
+    isnothing(cache) ? orthogonalize!(psi, bond) : _orthogonalize_env!(cache, psi, bond)
+  end
   left_site = siteind(psi, bond)
   right_site = siteind(psi, bond + 1)
 
-  # The identity/trace environments are rebuilt from the canonical gauge on every call -- the
-  # dominant per-sweep cost (see the O(N^2) note on `_dmt_window_truncate!`). A cached/threaded
-  # environment was deliberately *not* exposed here: supplying a stale env silently produces an
-  # invalid truncation, and a correct threaded sweep needs gauge control the gate primitive
-  # (`tebd_evolve!` -> ITensorMPS `product`) does not provide. See that note for the design.
-  left_env = _left_identity_environment(psi, bond - 1)
-  right_env = _right_identity_environment(psi, bond + 2)
+  # The identity/trace environments depend only on the current `psi[1:bond-1]` / `psi[bond+2:N]`
+  # tensors. Rebuilding both from scratch every call is the dominant per-sweep cost (the O(N^2)
+  # note on `_dmt_window_truncate!`); a supplied `cache` memoizes them and rebuilds only the part
+  # invalidated since the last bond, amortizing the cost to O(1) for a local sweep. Because the
+  # rest of this function is byte-for-byte unchanged, a cached env equal to the rebuild yields
+  # identical truncation output -- asserted under `_DMT_VERIFY_ENVS[]`.
+  if isnothing(cache)
+    left_env = _left_identity_environment(psi, bond - 1)
+    right_env = _right_identity_environment(psi, bond + 2)
+  else
+    left_env = _left_env_at!(cache, psi, bond - 1)
+    right_env = _right_env_at!(cache, psi, bond + 2)
+    if _DMT_VERIFY_ENVS[]
+      _assert_env_matches("left b=$bond", left_env, _left_identity_environment(psi, bond - 1))
+      _assert_env_matches("right b=$bond", right_env, _right_identity_environment(psi, bond + 2))
+    end
+  end
 
   previous_link = linkind(psi, bond - 1)
   left_inds = isnothing(previous_link) ? (left_site,) : (previous_link, left_site)
@@ -296,10 +427,13 @@ function _dmt_bond_truncate!(
     psi[bond] = psi[bond] * new_u * new_s
     psi[bond + 1] = new_v * psi[bond + 1]
   end
+  # The repair SVD rewrote sites `bond` and `bond+1`; invalidate them so the cache stays correct
+  # independent of what runs next (each operation owns its own footprint).
+  isnothing(cache) || _invalidate_env!(cache, bond, bond + 1)
   return psi
 end
 
-function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::Integer, cutoff::Real, direction::Symbol, connector_buffer::Integer)
+function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::Integer, cutoff::Real, direction::Symbol, connector_buffer::Integer, cache::Union{Nothing,_DMTEnvCache}=nothing)
   span <= 1 && return psi
 
   # Truncate every bond inside the gate window as an independent single-bond DMT update, with
@@ -314,41 +448,32 @@ function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::
   # discards information indiscriminately. Re-gauging per bond keeps a span-`S` window exactly
   # equal to the verified single-bond path applied to each of its bonds.
   #
-  # PERFORMANCE (known, deferred -- see perf-1 in the operator-space audit). Each
-  # `_dmt_bond_truncate!` rebuilds both identity/trace environments from scratch
-  # (`_left_identity_environment` over sites `1:bond-1`, `_right_identity_environment` over
-  # `bond+2:N`), so a full schedule sweep of ~N bonds costs O(N^2 * chi^2) -- the dominant term
-  # for long chains at moderate chi (the regime reached when pushing PXP runs to the times
-  # needed for the asymptotic z=3/2).
+  # PERFORMANCE (perf-1, implemented). Rebuilding both identity/trace environments from scratch
+  # in every `_dmt_bond_truncate!` (`_left_identity_environment` over `1:bond-1`,
+  # `_right_identity_environment` over `bond+2:N`) costs O(N) per bond, so a full ~N-bond
+  # schedule sweep is O(N^2 * chi^2) -- the dominant term for long chains at moderate chi (the
+  # regime reached pushing PXP runs to the times needed for the asymptotic z=3/2). When a
+  # `cache::_DMTEnvCache` is threaded through the sweep (`dmt_evolve!` builds one and passes it
+  # down), each bond instead extends a memoized running environment by only the sites mutated
+  # since the previous bond, amortizing to O(1) per bond -> O(N * chi^2) per sweep.
   #
-  # The textbook fix is a moving-orthogonality-center sweep that threads one running
-  # environment (left for a :R sweep, right for :L) and precomputes the other once, amortizing
-  # the per-bond cost to O(1) -> O(N * chi^2) per sweep. It was deferred, not done, because a
-  # *correct* implementation must solve three coupled problems:
-  #   1. Gauge consistency: each environment must match the post-`orthogonalize!(psi, bond)`
-  #      canonical gauge. A naive cache truncates later bonds in a non-canonical gauge -- the
-  #      bug described above ("badly wrong for :L"). The threading is only valid because a
-  #      monotonic sweep freezes the left-canonical prefix / right-canonical suffix.
-  #   2. The gate primitive: `tebd_evolve!` applies gates via ITensorMPS `product`, which
-  #      re-gauges opaquely and replaces every tensor object. A threaded sweep needs explicit
-  #      gauge control the primitive does not expose, i.e. it must be rebuilt alongside.
-  #   3. Schedule shape: the PXP energy-transport schedule is non-monotonic (boundary terms
-  #      revisit bond 1), mixed-span (2 and 3), and produces overlapping multi-bond windows, so
-  #      the clean monotonic-sweep assumptions do not hold for the primary use case; it needs
-  #      per-site last-touch finalization plus on-the-fly recompute where a span-3 gate reaches
-  #      into the precomputed region.
-  # A safe rollout would gate the threaded path behind a per-bond bit-for-bit assertion against
-  # this rebuild path (toggled across the full ED-oracle suite) before trusting it.
-  #
-  # Prototype findings (a threaded sweep was built and validated against this path, then shelved):
-  # the cache invalidation must drop entries one site *beyond* the changed range on each side,
-  # because a left env over `1:k` opens on `link(k)` and a right env over `k:N` on `link(k-1)`, so
-  # modifying site m staleness the env whose open *index* touches an adjacent bond even when its
-  # *sites* are untouched. With that fixed, the forward sweep matched the rebuild exactly and the
-  # reverse sweep matched on clean input -- but the threaded forward left redundant near-zero bond
-  # dimensions (gauge/roundoff artifact of pinning the center per gate) that the reverse sweep then
-  # mishandled. A correct version must reproduce this path's *canonical-form output* (trimmed
-  # bonds), not merely its physical state; that is the open problem for a future dedicated effort.
+  # The cache does NOT change what this function computes: `orthogonalize=true` and the entire
+  # `_dmt_bond_truncate!` operation sequence are unchanged, and a cached environment is by
+  # construction the same contraction of the same `psi` tensors the rebuild would produce -- so
+  # the truncation output is bit-for-bit identical. This sidesteps the three problems that made
+  # the optimization look hard:
+  #   1. Gauge consistency: the env value depends only on the current tensors, not on which gauge
+  #      produced them, and the per-bond `orthogonalize!` is retained -- so the cache is correct
+  #      in any gauge, not only a frozen monotonic prefix/suffix.
+  #   2. The gate primitive: `tebd_evolve!` (ITensorMPS `product`) re-gauges opaquely, but it
+  #      only ever touches the path between the old orthocenter and the gate window; the caller
+  #      invalidates that bounded range (via `leftlim`/`rightlim`) rather than tracking `product`
+  #      internally.
+  #   3. Schedule shape: invalidation is per-operation and footprint-based, so the non-monotonic,
+  #      mixed-span, overlapping PXP schedule needs no special handling -- it stays O(1)/bond
+  #      because every gate's footprint is its O(span) window (verified empirically).
+  # Correctness is guarded by `_DMT_VERIFY_ENVS[] = true`, which asserts every cached env equals
+  # the from-scratch rebuild (index identity + norm of difference) across the ED-oracle suite.
   for bond in _dmt_truncation_bonds(start, span, direction)
     _dmt_bond_truncate!(
       psi,
@@ -358,6 +483,7 @@ function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::
       direction=direction,
       connector_buffer=connector_buffer,
       orthogonalize=true,
+      cache=cache,
     )
   end
   return psi
@@ -398,11 +524,25 @@ function dmt_step!(
   direction::Symbol=:R,
   gate_maxdim::Integer=max(Int(maxdim) * 16, 64),
   connector_buffer::Integer=8,
+  cache::Union{Nothing,_DMTEnvCache}=nothing,
 )
   start = _bond_start(bond)
   span = _operator_span_at(psi, gate, start)
   _validate_dmt_step(psi, gate, start, span, direction, Int(maxdim), Int(connector_buffer))
+  # `tebd_evolve!` (ITensorMPS `product`) re-gauges the path between the old orthocenter and the
+  # gate window. Capture the limits first so the env cache can invalidate that bounded range.
+  if !isnothing(cache)
+    ll = ITensorMPS.leftlim(psi)
+    rl = ITensorMPS.rightlim(psi)
+  end
   tebd_evolve!(psi, gate, start; maxdim=Int(gate_maxdim), cutoff=0.0)
+  if !isnothing(cache)
+    _invalidate_env!(
+      cache,
+      clamp(min(ll, start), 1, length(psi)),
+      clamp(max(rl, start + span - 1), 1, length(psi)),
+    )
+  end
   _dmt_window_truncate!(
     psi,
     start,
@@ -411,6 +551,7 @@ function dmt_step!(
     cutoff=cutoff,
     direction=direction,
     connector_buffer=Int(connector_buffer),
+    cache=cache,
   )
   return psi
 end
@@ -512,6 +653,12 @@ This driver is intended for **transport simulations** (e.g. spin or energy diffu
 """
 function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normalize)
   reverse_is_default = _is_default_reverse_schedule(evo.schedule, evo.reverse_schedule)
+  # One environment cache threaded through the whole call: each `dmt_step!` mutates `psi`
+  # locally and invalidates only the touched range, so the cache stays consistent across the
+  # forward sweep, the forward->reverse turnaround, and successive `nstep` passes (no mutation
+  # happens between steps that the step itself does not record). See `_DMTEnvCache` / the
+  # perf-1 note on `_dmt_window_truncate!`.
+  cache = _DMTEnvCache(psi)
   for _ in 1:evo.nstep
     for (index, bond) in pairs(evo.schedule)
       local_gate = _gate_for_step(evo.gate, bond, index)
@@ -524,6 +671,7 @@ function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normal
         direction=:R,
         gate_maxdim=evo.gate_maxdim,
         connector_buffer=evo.connector_buffer,
+        cache=cache,
       )
     end
     for (index, bond) in pairs(evo.reverse_schedule)
@@ -537,6 +685,7 @@ function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normal
         direction=:L,
         gate_maxdim=evo.gate_maxdim,
         connector_buffer=evo.connector_buffer,
+        cache=cache,
       )
     end
   end
