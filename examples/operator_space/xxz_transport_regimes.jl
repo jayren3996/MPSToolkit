@@ -123,13 +123,47 @@ function fit_z(times, M2, edge, (tmin, tmax))
     return 2 / slope, n
 end
 
+# Local dynamical exponent z_local(t) = 2 / [Δ log M2 / Δ log t] over a ~1.0-time-unit gap --
+# the same per-row local slope the PXP scripts (pxp_energy_correlator.jl / pxp_energy_transport.jl)
+# print. A genuine scaling regime holds z_local flat at the target; a crossover drifts THROUGH it.
+# Printing this column keeps the single fitted z honest: that fit AVERAGES this ramp.
+local_gap = max(1, round(Int, 1.0 / (2 * dt)))
+function local_exponent(times, M2, k)
+    (k > local_gap && times[k] > 0 && times[k - local_gap] > 0 && M2[k] > 0 && M2[k - local_gap] > 0) || return NaN
+    return 2 / (log(M2[k] / M2[k - local_gap]) / log(times[k] / times[k - local_gap]))
+end
+
+trajectories = NamedTuple[]
 println("XXZ spin transport via operator-space DMT  (nsites=$nsites, maxdim=$maxdim, t_max=$(2*dt*ncall), fit t in $(fit_window))")
 println(rpad("Delta", 7), rpad("predicted regime", 22), rpad("z (target)", 12), rpad("z (measured)", 14), rpad("npts", 6), "M2(t_max)")
 for (Delta, regime, zpred) in cases
     times, M2, edge = transport_trace(Delta)
     z, npts = fit_z(times, M2, edge, fit_window)
     @printf("%-7.2f%-22s%-12.2f%-14.3f%-6d%.3f\n", Delta, regime, zpred, z, npts, M2[end])
+    push!(trajectories, (; Delta, zpred, times, M2))
 end
-println("\nThe three regimes are recovered close to z = 1, 3/2, 2 from one short run by fitting the")
-println("intermediate scaling plateau (t in $(fit_window)): late enough to clear the ballistic")
-println("transient, early enough that the kept bond dimension still represents the conserved tail.")
+
+# Local z(t) across the fit window -- the single fitted z above is the average of these columns.
+report_idx = [k for k in eachindex(trajectories[1].times)
+              if fit_window[1] <= trajectories[1].times[k] <= fit_window[2] &&
+                 abs(trajectories[1].times[k] - round(trajectories[1].times[k])) < 1e-9]
+println("\nlocal z(t) across the fit window  (target in brackets; flat = scaling regime, drifting = crossover):")
+print(rpad("Delta [target]", 16))
+for k in report_idx
+    print(lpad(@sprintf("t=%.0f", trajectories[1].times[k]), 8))
+end
+println()
+for tr in trajectories
+    print(rpad(@sprintf("%.2f [%.1f]", tr.Delta, tr.zpred), 16))
+    for k in report_idx
+        v = local_exponent(tr.times, tr.M2, k)
+        print(lpad(isnan(v) ? "--" : @sprintf("%.2f", v), 8))
+    end
+    println()
+end
+
+println("\nThe three regimes are SEPARATED close to z = 1, 3/2, 2 from one short, cheap run. But the")
+println("local-z columns show the Delta >= 1 estimators are still DRIFTING through their targets within")
+println("t_max = $(2*dt*ncall) -- a crossover, not a converged plateau -- so the single fitted z averages")
+println("a moving slope. Treat these as effective, resource-bound exponents: raising nsites/maxdim and")
+println("extending t flattens the local-z columns toward the targets, at higher cost.")
