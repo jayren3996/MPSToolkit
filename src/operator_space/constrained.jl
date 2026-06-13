@@ -1,5 +1,5 @@
 """
-    constrained_dmt_evolve!(rho, evo, projector; project_every=1, projector_maxdim=2*evo.maxdim, projector_cutoff=evo.cutoff, normalize=true)
+    constrained_dmt_evolve!(rho, evo, projector; project_every=1, projector_maxdim=2*evo.maxdim, projector_cutoff=evo.cutoff, normalize=evo.normalize)
 
 Run scheduled operator-space DMT evolution with periodic constraint-projection checkpoints.
 
@@ -29,10 +29,12 @@ contaminates transport observables.
   the inflated bonds add substantial cost per sweep (1.3-2x at moderate `maxdim`, growing
   with `maxdim` as the cubic SVD scaling takes over).
 - `projector_cutoff`: Truncation cutoff for the projector application.
-- `normalize`: If `true` (default), renormalize after each checkpoint (and let the chunked
-  `dmt_evolve!` sweeps renormalize). Set `false` to preserve absolute operator scales, which
-  is required when tracking unnormalized traces of a **traceless** operator (e.g. conserved
-  `tr(H O(t))` in correlator-protocol transport runs); see [`dmt_evolve!`](@ref).
+- `normalize`: Whether to renormalize after each checkpoint (and let the chunked
+  `dmt_evolve!` sweeps renormalize). Defaults to `evo.normalize`, so a
+  `DMTGateEvolution(...; normalize=false)` is honored without re-passing the keyword here —
+  matching [`dmt_evolve!`](@ref) and [`evolve!`](@ref). Set `false` to preserve absolute
+  operator scales, which is required when tracking unnormalized traces of a **traceless**
+  operator (e.g. conserved `tr(H O(t))` in correlator-protocol transport runs).
 
 # Returns
 - The mutated and projected (and, by default, normalized) `rho`.
@@ -44,7 +46,7 @@ function constrained_dmt_evolve!(
   project_every::Integer=1,
   projector_maxdim::Integer=2 * evo.maxdim,
   projector_cutoff::Real=evo.cutoff,
-  normalize::Bool=true,
+  normalize::Bool=evo.normalize,
 )
   project_every >= 1 || throw(ArgumentError("constrained_dmt_evolve! requires project_every >= 1"))
   projector_maxdim >= 1 || throw(ArgumentError("constrained_dmt_evolve! requires projector_maxdim >= 1"))

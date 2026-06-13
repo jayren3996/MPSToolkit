@@ -623,3 +623,43 @@ end
   dmt_evolve!(unnormalized, evo; normalize=false)
   @test pauli_trace(unnormalized) ≈ trace0 atol = 1e-6 * abs(trace0)
 end
+
+@testset "constrained_dmt_evolve! honors the evo.normalize field (A2-1 regression)" begin
+  # Audit follow-up: the constrained driver's `normalize` keyword must DEFAULT to evo.normalize,
+  # not a hardcoded `true`. Previously a normalize=false evolution called WITHOUT an explicit
+  # normalize keyword was silently re-normalized (the field was ignored), re-introducing the
+  # trace-inflation footgun the field exists to prevent. At N=6 the operator space is exact at
+  # maxdim=4^3=64, so unitary evolution + in-sector projection preserve the HS norm; scaling the
+  # initial state to norm 2 makes a normalize=false run (norm stays 2) cleanly distinct from a
+  # normalize=true run (norm reset to 1), independent of any truncation magnitude.
+  nsites = 6
+  psites = pauli_siteinds(nsites)
+  terms = _pxp_terms(nsites)
+  weights = [0.4, 0.4, 0.0, 0.0, -0.4, -0.4]
+  rho = pauli_gibbs_state(
+    psites, terms, weights;
+    nsteps=8, maxdim=256, cutoff=0.0, initial_state=pauli_pxp_constraint_state(psites),
+  )
+  rho[1] = 2.0 * rho[1]                       # norm(rho) = 2, distinctly != 1
+  gates = [pauli_gate_from_hamiltonian(h, 0.05) for (_, h) in terms]
+  schedule = [start for (start, _) in terms]
+  projector = pauli_pxp_constraint_projector(psites)
+  # normalize=false carried ONLY in the field (no call-site keyword below); exact bond dim.
+  evo = DMTGateEvolution(
+    gates, 0.05;
+    schedule=schedule, reverse_schedule=reverse(schedule),
+    nstep=4, maxdim=64, cutoff=1e-12, gate_maxdim=256, connector_buffer=4, normalize=false,
+  )
+
+  honored = copy(rho)
+  constrained_dmt_evolve!(honored, evo, projector; project_every=2)                        # no kwarg
+  explicit_false = copy(rho)
+  constrained_dmt_evolve!(explicit_false, evo, projector; project_every=2, normalize=false)
+  explicit_true = copy(rho)
+  constrained_dmt_evolve!(explicit_true, evo, projector; project_every=2, normalize=true)
+
+  @test norm(honored) ≈ norm(explicit_false) atol = 1e-10   # field honored: no-kwarg ≡ explicit false
+  @test isapprox(norm(explicit_true), 1.0; atol = 1e-6)     # explicit true renormalizes (kwarg overrides)
+  @test isapprox(norm(honored), 2.0; rtol = 1e-3)           # field false: the norm-2 scale is preserved
+  @test !isapprox(norm(honored), 1.0; rtol = 1e-2)          # the regression: default no longer forces -> 1
+end
