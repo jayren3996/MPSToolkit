@@ -329,6 +329,55 @@ end
     @test inner(manual, scheduled) ≈ 1.0 atol = 1e-8
   end
 
+  @testset "threaded env cache reproduces the rebuild bit-for-bit (PXP hard case, verify on)" begin
+    # Guards the perf-1 environment cache. With _DMT_VERIFY_ENVS on, _dmt_bond_truncate! throws
+    # if any threaded environment differs from the from-scratch rebuild (index identity + norm of
+    # difference), so reaching the end of dmt_evolve! proves the cached path is byte-faithful. The
+    # PXP energy-transport schedule is the adversarial input: non-monotonic (bond 1 revisited),
+    # mixed-span (2 and 3), overlapping multi-bond windows, run forward and reverse over 2 sweeps
+    # on a generic high-operator-entanglement state (random_mps) where truncation actually fires.
+    old = MPSToolkit._DMT_VERIFY_ENVS[]
+    MPSToolkit._DMT_VERIFY_ENVS[] = true
+    try
+      nsites = 8
+      psites = pauli_siteinds(nsites)
+      terms = [(first(pxp_term_support(nsites, j)), Matrix(pxp_term_hamiltonian(nsites, j))) for j in 1:nsites]
+      gates = [pauli_gate_from_hamiltonian(h, 0.05) for (_, h) in terms]
+      schedule = [start for (start, _) in terms]
+      evo = DMTGateEvolution(gates, 0.05; schedule=schedule, reverse_schedule=reverse(schedule),
+        nstep=2, maxdim=8, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
+
+      psi = random_mps(ComplexF64, psites; linkdims=24)
+      normalize!(psi)
+      @test dmt_evolve!(psi, evo) === psi   # no env-verify assertion fired
+
+      # And explicitly: the threaded result equals the rebuild path (cache=nothing) — same state
+      # AND same trimmed bond dimensions (the canonical-form output, not merely the physical state).
+      MPSToolkit._DMT_VERIFY_ENVS[] = false
+      base = random_mps(ComplexF64, psites; linkdims=24)
+      normalize!(base)
+      threaded = copy(base)
+      dmt_evolve!(threaded, evo)
+      rebuilt = copy(base)
+      for _ in 1:evo.nstep
+        for (i, b) in pairs(evo.schedule)
+          dmt_step!(rebuilt, MPSToolkit._gate_for_step(evo.gate, b, i), b; maxdim=evo.maxdim,
+            cutoff=evo.cutoff, direction=:R, gate_maxdim=evo.gate_maxdim, connector_buffer=evo.connector_buffer)
+        end
+        for (i, b) in pairs(evo.reverse_schedule)
+          g = MPSToolkit._reverse_gate_for_step(evo.gate, true, evo.schedule, b, i)
+          dmt_step!(rebuilt, g, b; maxdim=evo.maxdim, cutoff=evo.cutoff, direction=:L,
+            gate_maxdim=evo.gate_maxdim, connector_buffer=evo.connector_buffer)
+        end
+      end
+      normalize!(rebuilt)
+      @test abs(inner(threaded, rebuilt)) ≈ 1.0 atol = 1e-10
+      @test _link_dims(threaded) == _link_dims(rebuilt)
+    finally
+      MPSToolkit._DMT_VERIFY_ENVS[] = old
+    end
+  end
+
   @testset "reverse DMT sweep uses gates associated with original bonds" begin
     sites = pauli_siteinds(4)
     state_a = pauli_basis_state(sites, [2, 1, 1, 1])
