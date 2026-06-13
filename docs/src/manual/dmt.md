@@ -365,12 +365,20 @@ DMT-protected components, so the default per-sweep renormalization silently infl
 absolute traces — and with it the conserved total ``\sum_x C(x,t) = \mathrm{tr}(P_G H\,
 O(t))``, which with `normalize=false` becomes the run's truncation error bar), and
 `normalize=false` in the profile measurement (the trace it would divide by vanishes).
-Production-validated reference points for the crossover (``N = 64``): the local ``M_2``
-slope plateaus at **1.46–1.49 over** ``t = 8\!-\!14`` at ``\chi = 48`` (χ-converged to
-1–6%, still descending toward ``4/3`` from above), while ``\chi = 32`` reads **1.32–1.38**
-— truncation suppresses ``M_2`` growth and pulls the slope *down*, so an undershooting
-slope near the target can be a truncation artifact rather than convergence. Raise `maxdim`
-until the slope stops moving up, then extend in time.
+Production-validated reference points for the crossover (``N = 64``), committed as a
+reproducible reference in `examples/operator_space/data/pxp_energy_correlator_chi48_N64.csv`
+(re-fit by `examples/operator_space/pxp_energy_correlator_reference.jl`, and pinned in
+`test/test_pxp.jl`): the local ``M_2`` slope plateaus at **1.46–1.50 over** ``t = 8\!-\!14``
+at ``\chi = 48`` (LSQ ``2/z = 1.48``), robustly above the diffusive ``1.0`` and **descending
+toward** ``4/3`` **from above** — it has *not* reached the asymptote. The `normalize=false`
+conserved-total drift is the run's truncation error bar: it stays within **1–6% only through**
+``t \approx 10`` and grows to **~9–12% by** ``t = 12\!-\!14``, so the top of the window is the
+least trustworthy part of the plateau, and reaching the asymptotic ``4/3`` (expected only at
+``t \gtrsim 20\!-\!30``) requires ``\chi > 48`` — not merely longer times. By contrast
+``\chi = 32`` (the shipped demo default) reads **1.30–1.38**: truncation suppresses ``M_2``
+growth and pulls the slope *down*, so an undershooting slope near the target there is a
+truncation artifact, not convergence. Raise `maxdim` until the slope stops moving up, then
+extend in time.
 
 ### Protocol 2 — energy domain-wall melt
 
