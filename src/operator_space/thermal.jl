@@ -50,7 +50,8 @@ DMT energy-transport runs.
   gate-construction loop), which [`pauli_gate_from_imaginary_time`](@ref) halves to sandwich
   `e^{-(dbeta/2) h_j} = e^{-(w_j / (4 nsteps)) h_j}` on each side per application. Summed over
   the `2 nsteps` forward+reverse applications this accumulates to `e^{-(w_j/2) h_j}` per side,
-  i.e. the target `e^{-K/2}`.
+  i.e. the target `e^{-K/2}`. The name `nstep` is also accepted as an alias for `nsteps`,
+  matching the evolution drivers (e.g. [`DMTGateEvolution`](@ref)).
 - `maxdim`, `cutoff`: Ordinary TEBD truncation budget used during preparation. Plain SVD
   truncation is appropriate here: at small weights the prepared state stays close to a
   product in operator space.
@@ -69,10 +70,12 @@ function pauli_gibbs_state(
   terms,
   weights;
   nsteps::Integer=4,
+  nstep::Union{Nothing,Integer}=nothing,
   maxdim::Integer=64,
   cutoff::Real=1e-12,
   initial_state=nothing,
 )
+  nsteps = isnothing(nstep) ? nsteps : Int(nstep)
   length(terms) == length(weights) || throw(ArgumentError("pauli_gibbs_state requires one weight per term"))
   nsteps >= 1 || throw(ArgumentError("pauli_gibbs_state requires nsteps >= 1"))
   maxdim >= 1 || throw(ArgumentError("pauli_gibbs_state requires maxdim >= 1"))

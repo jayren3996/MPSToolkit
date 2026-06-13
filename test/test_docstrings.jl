@@ -85,6 +85,7 @@ end
     :spectral_function,
     :pauli_daoe_projector,
     :fdaoe_projector,
+    :pauli_fdaoe_projector,
     :pauli_siteinds,
   ]
 

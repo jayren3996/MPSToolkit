@@ -159,7 +159,7 @@ A few points on composing them well:
 
 ```@docs
 pauli_daoe_projector
-fdaoe_projector
+pauli_fdaoe_projector
 ```
 
 ## Examples (scripts)

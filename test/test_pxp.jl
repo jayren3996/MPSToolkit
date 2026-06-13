@@ -424,6 +424,9 @@ _pxp_terms(nsites; omega=1.0) =
   @testset "argument validation" begin
     @test_throws ArgumentError pauli_gibbs_state(psites, terms, fill(beta, nsites - 1))
     @test_throws ArgumentError pauli_gibbs_state(psites, terms, fill(beta, nsites); nsteps=0)
+    # nstep is accepted as an alias for nsteps (consistency with the evolution drivers).
+    @test_throws ArgumentError pauli_gibbs_state(psites, terms, fill(beta, nsites); nstep=0)
+    @test pauli_gibbs_state(psites, terms, fill(beta, nsites); nstep=2) isa MPS
   end
 end
 
