@@ -96,6 +96,35 @@ end
     @test _dense_pauli_coefficients(via_opts) ≈ _dense_pauli_coefficients(via_kwargs) atol = 1e-12
   end
 
+  @testset "generic evolve! dispatch carries the normalize field" begin
+    sites = pauli_siteinds(6)
+    psi0 = random_mps(sites; linkdims=20)
+    normalize!(psi0)
+    gates = [_identity_gate(2) for _ in 1:5]
+    schedule = collect(1:5)
+    mk(nrm) = DMTGateEvolution(
+      gates, 0.1; schedule=schedule, reverse_schedule=reverse(schedule),
+      nstep=1, maxdim=8, cutoff=1e-12, gate_maxdim=64, connector_buffer=4, normalize=nrm,
+    )
+
+    # Generic evolve! returns the mutated MPS and matches dmt_evolve! at the same setting.
+    a = copy(psi0)
+    @test evolve!(a, mk(true)) === a
+    b = copy(psi0)
+    dmt_evolve!(b, mk(true))
+    @test abs(inner(a, b)) ≈ 1.0 atol = 1e-10
+
+    # The normalize field is honored: truncation sheds norm, restored only when normalize=true.
+    c = copy(psi0)
+    evolve!(c, mk(false))
+    @test norm(a) ≈ 1.0 atol = 1e-10
+    @test norm(c) < 0.999
+    # An explicit keyword still overrides the field.
+    d = copy(psi0)
+    evolve!(d, mk(true); normalize=false)
+    @test norm(d) ≈ norm(c) atol = 1e-8
+  end
+
   @testset "DMT validates Pauli dimension for single-site gates" begin
     sites = siteinds("S=1", 3)   # dim-3 sites are not Pauli operator-space
     psi = MPS(sites, n -> "Up")

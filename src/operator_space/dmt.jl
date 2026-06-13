@@ -456,7 +456,7 @@ This driver is intended for **transport simulations** (e.g. spin or energy diffu
   truncation budgets.
 
 # Keyword Arguments
-- `normalize`: If `true` (default), `normalize!(psi)` at the end, the usual convention for
+- `normalize`: If `true` (default, taken from `evo.normalize`), `normalize!(psi)` at the end, the usual convention for
   trajectories that interpret the state as a normalized vectorized operator. Set `false`
   when tracking **unnormalized** traces of a traceless operator (e.g. the conserved
   `tr(H O(t))` of a Heisenberg-evolved energy density): truncation sheds Hilbert-Schmidt
@@ -469,7 +469,7 @@ This driver is intended for **transport simulations** (e.g. spin or energy diffu
 # Notes
 - One call runs `evo.nstep` complete forward-and-reverse sweeps.
 """
-function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=true)
+function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normalize)
   reverse_is_default = _is_default_reverse_schedule(evo.schedule, evo.reverse_schedule)
   for _ in 1:evo.nstep
     for (index, bond) in pairs(evo.schedule)
@@ -511,6 +511,6 @@ Dispatch operator-space evolution through the DMT backend.
 The `normalize` keyword is forwarded to [`dmt_evolve!`](@ref); set it `false` when tracking
 unnormalized traces of a traceless operator (e.g. conserved `tr(H O(t))`).
 """
-function evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=true)
+function evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normalize)
   return dmt_evolve!(psi, evo; normalize=normalize)
 end
