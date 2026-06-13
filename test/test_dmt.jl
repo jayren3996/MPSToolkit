@@ -194,6 +194,18 @@ end
     @test after ≈ before atol = 1e-12
   end
 
+  @testset "_complete_orthonormal_basis edge cases" begin
+    # target_dim exceeding the ambient dimension is rejected.
+    @test_throws ArgumentError MPSToolkit._complete_orthonormal_basis(ComplexF64[1 0; 0 1; 0 0], 4)
+    # A rank-deficient protected block (duplicate columns) still yields an orthonormal basis
+    # whose span reproduces the protected columns.
+    rank_deficient = ComplexF64[1 1; 0 0; 0 0; 0 0]
+    basis = MPSToolkit._complete_orthonormal_basis(rank_deficient, 3)
+    @test size(basis) == (4, 3)
+    @test basis' * basis ≈ Matrix{ComplexF64}(I, 3, 3) atol = 1e-10
+    @test basis * (basis' * rank_deficient) ≈ rank_deficient atol = 1e-10
+  end
+
   @testset "complex DMT projection uses adjoint orthonormal bases" begin
     left_protected = ComplexF64[
       1 1+im

@@ -48,6 +48,7 @@ function constrained_dmt_evolve!(
 )
   project_every >= 1 || throw(ArgumentError("constrained_dmt_evolve! requires project_every >= 1"))
   projector_maxdim >= 1 || throw(ArgumentError("constrained_dmt_evolve! requires projector_maxdim >= 1"))
+  projector_cutoff >= 0 || throw(ArgumentError("constrained_dmt_evolve! requires projector_cutoff >= 0"))
   length(projector) == length(rho) || throw(ArgumentError("projector and state must have matching lengths"))
 
   remaining = evo.nstep

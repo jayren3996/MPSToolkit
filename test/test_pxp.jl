@@ -321,6 +321,10 @@ end
     )
     @test_throws ArgumentError pauli_expectation_profile(leaky, [(1, _random_hermitian(1, 1))])
     @test length(pauli_expectation_profile(leaky, [(1, _random_hermitian(1, 1))]; normalize=false)) == 1
+    # test-7: non-Pauli (non-dimension-4) sites are rejected by trace and profile.
+    bad = MPS(siteinds("S=1", 3), n -> "Up")
+    @test_throws ArgumentError pauli_trace(bad)
+    @test_throws ArgumentError pauli_expectation_profile(bad, [(1, ComplexF64[1.0 0.0; 0.0 -1.0])])
   end
 end
 
@@ -490,6 +494,19 @@ end
 
   @test_throws ArgumentError constrained_dmt_evolve!(evolved, evo, projector; project_every=0)
   @test_throws ArgumentError constrained_dmt_evolve!(evolved, evo, pauli_pxp_constraint_projector(pauli_siteinds(4)))
+
+  # test-5: a non-default projector budget still matches dense ED at exact bond dimension.
+  evolved2 = copy(rho)
+  constrained_dmt_evolve!(evolved2, evo, projector; project_every=2, projector_maxdim=256, projector_cutoff=1e-14)
+  @test maximum(abs.(real.(pauli_expectation_profile(evolved2, terms)) - expected_profile)) < 5e-3
+  # project_every is irrelevant at exact bond dimension (no truncation leakage to remove).
+  every1 = copy(rho)
+  constrained_dmt_evolve!(every1, evo, projector; project_every=1)
+  everyN = copy(rho)
+  constrained_dmt_evolve!(everyN, evo, projector; project_every=nstep)
+  @test maximum(abs.(real.(pauli_expectation_profile(every1, terms)) - real.(pauli_expectation_profile(everyN, terms)))) < 1e-6
+  # projector_cutoff is validated.
+  @test_throws ArgumentError constrained_dmt_evolve!(copy(rho), evo, projector; projector_cutoff=-1e-12)
 end
 
 @testset "energy-correlator protocol matches dense ED (normalize=false)" begin

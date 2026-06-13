@@ -202,7 +202,13 @@ function _complete_orthonormal_basis(protected::AbstractMatrix, target_dim::Inte
       mul!(candidate, block, coefficients, -one(element_type), one(element_type)) # candidate -= block * coefficients
     end
     candidate_norm = norm(candidate)
-    if candidate_norm > ambient_dim * eps(real(float(candidate_norm == 0 ? one(candidate_norm) : candidate_norm)))
+    # Linear-dependence test relative to the candidate's *original* unit norm, not the
+    # post-projection residual. Each candidate starts as a unit standard-basis vector, so a
+    # genuinely new direction leaves an O(1) residual while a dependent one leaves only
+    # O(ambient * eps) roundoff. Scaling the threshold by the residual's own magnitude (as a
+    # naive `eps(candidate_norm)` would) collapses it to ~eps^2 for roundoff residuals, which
+    # then pass as spurious near-duplicate columns and break orthonormality.
+    if candidate_norm > ambient_dim * eps(one(real(float(candidate_norm))))
       filled += 1
       @views basis[:, filled] .= candidate ./ candidate_norm
     end
