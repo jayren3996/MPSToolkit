@@ -227,6 +227,47 @@ end
     @test abs(inner(jw_tail, projected_jw_tail) - 1.0) ≤ 1e-10
   end
 
+  @testset "DAOE damping weight matches the exp(-gamma*max(size-lstar,0)) oracle" begin
+    # Operator "size" in DAOE is the Hamming weight -- the number of non-identity Pauli sites,
+    # independent of their span (a gapped weight-k string damps identically to a contiguous one).
+    # Sweep size and lstar against the closed form on a 5-site chain so every size is reachable,
+    # including gapped/edge-separated strings the 4-string smoke tests above never exercise.
+    oracle_sites = pauli_siteinds(5)
+    daoe_weight(labels, lstar, gamma) = exp(-gamma * max(count(!=(1), labels) - lstar, 0))
+    test_strings = [
+      [1, 1, 1, 1, 1],   # identity, size 0
+      [4, 1, 1, 1, 1],   # size 1
+      [2, 1, 3, 1, 1],   # size 2, gapped
+      [2, 1, 3, 1, 4],   # size 3, edge-separated
+      [2, 3, 4, 2, 3],   # size 5, full
+    ]
+    for lstar in (0, 1, 2), gamma in (0.3, 0.9)
+      projector = pauli_daoe_projector(oracle_sites; lstar=lstar, gamma=gamma)
+      for labels in test_strings
+        state = _basis_product_mps(oracle_sites, labels)
+        projected = apply(projector, state; maxdim=16, cutoff=0.0)
+        @test inner(state, projected) ≈ daoe_weight(labels, lstar, gamma) atol = 1e-10
+      end
+    end
+  end
+
+  @testset "DAOE and FDAOE damping preserve the operator trace" begin
+    # The weight-0 identity component carries tr(O); DAOE/FDAOE damp only the higher-weight
+    # tail, leaving the identity coefficient -- and hence the trace -- untouched. Regression for
+    # the corrected daoe.md guidance: these are size-damping channels, not trace-changing maps.
+    trace_sites = pauli_siteinds(4)
+    operator = 3.0 * _basis_product_mps(trace_sites, [1, 1, 1, 1])
+    for (labels, coeff) in (([2, 2, 1, 1], 1.5), ([4, 3, 2, 1], 0.8), ([2, 3, 4, 2], 0.4))
+      operator = add(operator, coeff * _basis_product_mps(trace_sites, labels); cutoff=0.0)
+    end
+    trace_before = pauli_trace(operator)
+    for projector in (pauli_daoe_projector(trace_sites; lstar=1, gamma=0.7),
+                      pauli_fdaoe_projector(trace_sites; wstar=2, gamma=0.4))
+      projected = apply(projector, operator; maxdim=32, cutoff=0.0)
+      @test pauli_trace(projected) ≈ trace_before atol = 1e-10
+    end
+  end
+
   @testset "DAOE/FDAOE projectors validate cutoffs and gamma" begin
     @test_throws ArgumentError pauli_daoe_projector(sites; lstar=-1, gamma=0.1)
     @test_throws ArgumentError pauli_daoe_projector(sites; lstar=2, gamma=-0.1)

@@ -213,6 +213,23 @@ end
   @test tdvp_state.value == 10
 end
 
+@testset "scarfinder single-step upgrade preserves evolution fields" begin
+  # A DMTGateEvolution built to track a traceless operator (normalize=false) keeps the
+  # default nstep=1, so ScarFinder's single-step upgrade rebuilds it. The rebuild must carry
+  # the normalize field across; otherwise the upgraded evolution silently re-normalizes the
+  # trajectory and destroys the unnormalized-trace diagnostic the field exists to preserve.
+  dmt_evo = DMTGateEvolution(rand(ComplexF64, 4, 4), 0.01; schedule=[1], maxdim=6,
+                             connector_buffer=6, normalize=false)
+  dmt_upgraded = MPSToolkit._scarfinder_evolution(dmt_evo; warn=false)
+  @test dmt_upgraded.nstep == 10
+  @test dmt_upgraded.normalize == false
+
+  # The TDVP rebuild already preserves normalize; pin it so the two drivers stay consistent.
+  tdvp_evo = TDVPEvolution(reshape(1:4, 2, 2), -0.1im; nsteps=1, normalize=false)
+  tdvp_upgraded = MPSToolkit._scarfinder_evolution(tdvp_evo; warn=false)
+  @test tdvp_upgraded.normalize == false
+end
+
 @testset "scarfinder preserves non-unit step counts" begin
   psi = StepCountState(0)
   evo = LocalGateEvolution(reshape(1:4, 2, 2), 0.1; nstep=3)
