@@ -5,6 +5,9 @@ Return the physical trace of a vectorized operator stored as a Pauli-basis `MPS`
 
 In the normalized Pauli convention `tr(ρ) = (√2)^N c_{I…I}`, where `c_{I…I}` is the
 amplitude of the all-identity string, so the trace is one identity-environment contraction.
+The `(√2)^N` prefactor overflows `Float64` for `N ≳ 2048`, so absolute traces of very large
+operators are not representable (far beyond any feasible operator-space MPS size); normalized
+ratio observables are unaffected because the factor cancels.
 
 # Arguments
 - `rho`: Operator-space `MPS` on dimension-4 Pauli sites.
@@ -64,7 +67,8 @@ vectorized operator `rho`, in one O(N) sweep with cumulative identity environmen
 
 # Keyword Arguments
 - `normalize`: If `true` (default), return `tr(ρ O_k) / tr(ρ)`; otherwise return the
-  unnormalized `tr(ρ O_k)`.
+  unnormalized `tr(ρ O_k)`. The unnormalized branch carries a `(√2)^N` factor that overflows
+  `Float64` for `N ≳ 2048` (far beyond feasible MPS sizes); the normalized ratio is immune.
 
 # Returns
 - A `Vector{ComplexF64}` of expectation values. For Hermitian `ρ` and `O_k` the entries are
