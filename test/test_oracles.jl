@@ -136,5 +136,14 @@ end
     integral = sum(reconstruct_chebyshev(x, moments; kernel=nothing) * pi * sqrt(1 - x^2) for x in nodes) / nq
     @test integral ≈ moments[1] atol = 1e-8
     @test moments[1] ≈ real(inner(psi, psi)) atol = 1e-10
+
+    # The m=0 sum rule is blind to the n>=1 terms: int T_n/(pi*sqrt(1-x^2)) = 0 for n>=1, so a
+    # wrong factor on the `2 * sum` would still integrate to mu_0. Project the reconstructed
+    # density onto T_m by the same Chebyshev-Gauss quadrature -- (1/nq) sum_q g(x_q) T_m(x_q)
+    # recovers mu_m for m>=1 -- to pin the factor-of-2 and the kernel=nothing reconstruction.
+    for m in (1, 2, 5)
+      projected = sum(reconstruct_chebyshev(x, moments; kernel=nothing) * pi * sqrt(1 - x^2) * cos(m * acos(x)) for x in nodes) / nq
+      @test projected ≈ moments[m + 1] atol = 1e-8
+    end
   end
 end
