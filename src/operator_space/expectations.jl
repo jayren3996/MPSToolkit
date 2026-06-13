@@ -87,7 +87,13 @@ function pauli_expectation_profile(rho::MPS, terms; normalize::Bool=true)
     right[site] = right[site + 1] * (_pauli_identity_env(siteind(rho, site)) * rho[site])
   end
   denominator = scalar(right[1])
-  normalize && iszero(denominator) && throw(ArgumentError("normalized Pauli expectations require a nonzero trace"))
+  # Reject a numerically-negligible (not just exactly-zero) trace relative to the operator
+  # scale. For a traceless operator the post-truncation trace is an O(eps) residue rather than
+  # exactly zero, and normalizing by it silently amplifies every entry by ~1/eps. This mirrors
+  # the relative tolerance the DMT kernel (`_mat_trunc!`) already uses; traceless operators
+  # should be measured with `normalize=false`.
+  normalize && abs(denominator) <= sqrt(eps(Float64)) * norm(rho) &&
+    throw(ArgumentError("normalized Pauli expectations require a nonzero trace; the operator trace is numerically negligible relative to its norm (use normalize=false for a traceless operator)"))
 
   results = Vector{ComplexF64}(undef, length(terms))
   left = ITensor(1.0)

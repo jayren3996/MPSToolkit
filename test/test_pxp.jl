@@ -305,6 +305,23 @@ end
     value = pauli_expectation(hermitian_rho, Matrix(pxp_term_hamiltonian(2, 1)), 1)
     @test abs(imag(value)) < 1e-12
   end
+
+  @testset "error and edge paths" begin
+    @test isempty(pauli_expectation_profile(rho, Tuple{Int,Matrix{ComplexF64}}[]))
+    @test_throws ArgumentError pauli_expectation_profile(rho, [(0, _random_hermitian(1, 1))])
+    @test_throws ArgumentError pauli_expectation_profile(rho, [(nsites, _random_hermitian(2, 1))])
+    @test_throws ArgumentError pauli_expectation_profile(rho, [(1, ones(ComplexF64, 2, 3))])
+    # numerics-1: a numerically-negligible (not exactly zero) trace is rejected under
+    # normalize=true, but allowed under normalize=false.
+    leaky = add(
+      pauli_basis_state(psites, [4, 1, 1, 1]),
+      pauli_basis_state(psites, [1, 1, 1, 1]; coefficient=1e-13);
+      maxdim=8,
+      cutoff=0.0,
+    )
+    @test_throws ArgumentError pauli_expectation_profile(leaky, [(1, _random_hermitian(1, 1))])
+    @test length(pauli_expectation_profile(leaky, [(1, _random_hermitian(1, 1))]; normalize=false)) == 1
+  end
 end
 
 # Dense K = sum_j w_j h_j for the PXP term list.
@@ -470,6 +487,68 @@ end
 
   @test_throws ArgumentError constrained_dmt_evolve!(evolved, evo, projector; project_every=0)
   @test_throws ArgumentError constrained_dmt_evolve!(evolved, evo, pauli_pxp_constraint_projector(pauli_siteinds(4)))
+end
+
+@testset "energy-correlator protocol matches dense ED (normalize=false)" begin
+  # End-to-end check of the pxp_energy_correlator.jl protocol: a traceless, sector-projected
+  # energy density O(0) = P_G h_center P_G, Heisenberg-evolved with normalize=false, measured
+  # as the unnormalized profile C(x) = tr(O h_x). At N=6 with maxdim = 4^3 = 64 the
+  # operator-space evolution is exact (no truncation), so it matches dense ED.
+  nsites = 6
+  center = nsites ÷ 2
+  dt = 0.05
+  nstep = 4                       # t_total = 2*dt*nstep = 0.4
+  psites = pauli_siteinds(nsites)
+  terms = _pxp_terms(nsites)
+  projector = pauli_pxp_constraint_projector(psites)
+
+  # O(0): vectorize the center PXP term, sector-project, and HS-normalize (as the script does).
+  phys = siteinds("S=1/2", nsites)
+  os = OpSum()
+  os += "ProjUp", center - 1, "X", center, "ProjUp", center + 1
+  center_mpo = MPO(os, phys)
+  O = pauli_state_from_mpo(center_mpo, psites)
+  O = apply(projector, O; maxdim=256, cutoff=0.0)
+  normalize!(O)
+
+  # Dense O(0) from the SAME operator: o0 = P_G h_center P_G / ||.||_HS (HS norm = the
+  # vectorized MPS norm that normalize! divides by).
+  pg = _pxp_projector_dense(nsites)
+  o0_raw = pg * _mpo_dense(center_mpo, phys) * pg
+  o0 = o0_raw / sqrt(real(tr(o0_raw' * o0_raw)))
+  h_dense = [_embed_term(h, start, nsites) for (start, h) in terms]
+
+  # O is traceless => normalize=true must be rejected (numerics-1); normalize=false gives
+  # tr(O h_x) exactly, matching the dense correlator with no extra factors. Tight at t=0.
+  @test_throws ArgumentError pauli_expectation_profile(O, terms)
+  profile0 = real.(pauli_expectation_profile(O, terms; normalize=false))
+  @test profile0 ≈ [real(tr(o0 * hx)) for hx in h_dense] atol = 1e-8
+
+  # Heisenberg-evolve at exact bond dimension with normalize=false.
+  gates = [pauli_gate_from_hamiltonian(h, dt) for (_, h) in terms]
+  schedule = [start for (start, _) in terms]
+  evo = DMTGateEvolution(
+    gates,
+    dt;
+    schedule=schedule,
+    reverse_schedule=reverse(schedule),
+    nstep=nstep,
+    maxdim=64,
+    cutoff=0.0,
+    gate_maxdim=256,
+    connector_buffer=8,
+  )
+  constrained_dmt_evolve!(O, evo, projector; project_every=1, normalize=false)
+  profile_t = real.(pauli_expectation_profile(O, terms; normalize=false))
+
+  # Dense reference uses the exact propagator; the MPS uses a 2nd-order Trotter sweep, so the
+  # site-by-site match is at Trotter tolerance (a sign/normalization/sector bug would be O(1)).
+  u = exp(-1im * Matrix(_pxp_dense(nsites)) * (2 * dt * nstep))
+  o_t = u * o0 * u'
+  @test maximum(abs.(profile_t - [real(tr(o_t * hx)) for hx in h_dense])) < 5e-3
+
+  # Conserved total: sum_x C(x,t) = tr(H O(t)) = tr(H O(0)) (Trotter tolerance).
+  @test sum(profile_t) ≈ sum(real(tr(o0 * hx)) for hx in h_dense) atol = 5e-3
 end
 
 @testset "constrained evolution with normalize=false preserves absolute scales" begin
