@@ -340,6 +340,7 @@ _pxp_terms(nsites; omega=1.0) =
     @test pauli_gate_from_imaginary_time(h, dbeta) ≈ pauli_gate(exp(-(dbeta / 2) * h)) atol = 1e-12
     @test pauli_gate_from_imaginary_time(h, 0.0) ≈ Matrix{ComplexF64}(I, 4^3, 4^3) atol = 1e-12
     @test_throws ArgumentError pauli_gate_from_imaginary_time(ones(2, 3), 0.1)
+    @test_throws ArgumentError pauli_gate_from_imaginary_time([0.0 1.0; 0.0 0.0], 0.1)
   end
 
   nsites = 4

@@ -18,6 +18,8 @@ unitary; for Hermitian `h` the slice `A = e^{-(dbeta/2) h}` is Hermitian and pos
 """
 function pauli_gate_from_imaginary_time(h::AbstractMatrix, dbeta::Real)
   size(h, 1) == size(h, 2) || throw(ArgumentError("imaginary-time Hamiltonian must be square"))
+  norm(h - h') <= sqrt(eps(Float64)) * max(norm(h), one(Float64)) ||
+    throw(ArgumentError("imaginary-time Hamiltonian must be Hermitian"))
   return pauli_gate(exp(-(dbeta / 2) * Matrix{ComplexF64}(h)))
 end
 

@@ -409,8 +409,8 @@ function _is_default_reverse_schedule(schedule, reverse_schedule)
   return true
 end
 
-function _reverse_gate_index(schedule, reverse_schedule, bond, index)
-  if _is_default_reverse_schedule(schedule, reverse_schedule)
+function _reverse_gate_index(is_default, schedule, bond, index)
+  if is_default
     return length(schedule) - index + 1
   end
 
@@ -421,21 +421,24 @@ function _reverse_gate_index(schedule, reverse_schedule, bond, index)
 end
 
 """
-    _reverse_gate_for_step(gate_spec, schedule, reverse_schedule, bond, index)
+    _reverse_gate_for_step(gate_spec, is_default, schedule, bond, index)
 
 Resolve the gate for a reverse DMT schedule entry. Matrix and callable gate providers keep the
 same semantics as forward sweeps. Vector gate providers are mapped back to the corresponding
-forward schedule entry.
+forward schedule entry. `is_default` is the precomputed
+`_is_default_reverse_schedule(schedule, reverse_schedule)` flag, hoisted out of the per-step
+loop by the caller so the loop-invariant schedule scan runs once per `dmt_evolve!`, not once
+per reverse step.
 """
-function _reverse_gate_for_step(gate_spec::AbstractVector, schedule, reverse_schedule, bond, index)
-  return _gate_for_step(gate_spec, bond, _reverse_gate_index(schedule, reverse_schedule, bond, index))
+function _reverse_gate_for_step(gate_spec::AbstractVector, is_default, schedule, bond, index)
+  return _gate_for_step(gate_spec, bond, _reverse_gate_index(is_default, schedule, bond, index))
 end
 
-function _reverse_gate_for_step(gate_spec::Function, schedule, reverse_schedule, bond, index)
-  return _gate_for_step(gate_spec, bond, _reverse_gate_index(schedule, reverse_schedule, bond, index))
+function _reverse_gate_for_step(gate_spec::Function, is_default, schedule, bond, index)
+  return _gate_for_step(gate_spec, bond, _reverse_gate_index(is_default, schedule, bond, index))
 end
 
-function _reverse_gate_for_step(gate_spec, schedule, reverse_schedule, bond, index)
+function _reverse_gate_for_step(gate_spec, is_default, schedule, bond, index)
   return _gate_for_step(gate_spec, bond, index)
 end
 
@@ -467,6 +470,7 @@ This driver is intended for **transport simulations** (e.g. spin or energy diffu
 - One call runs `evo.nstep` complete forward-and-reverse sweeps.
 """
 function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=true)
+  reverse_is_default = _is_default_reverse_schedule(evo.schedule, evo.reverse_schedule)
   for _ in 1:evo.nstep
     for (index, bond) in pairs(evo.schedule)
       local_gate = _gate_for_step(evo.gate, bond, index)
@@ -482,7 +486,7 @@ function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=true)
       )
     end
     for (index, bond) in pairs(evo.reverse_schedule)
-      local_gate = _reverse_gate_for_step(evo.gate, evo.schedule, evo.reverse_schedule, bond, index)
+      local_gate = _reverse_gate_for_step(evo.gate, reverse_is_default, evo.schedule, bond, index)
       dmt_step!(
         psi,
         local_gate,
