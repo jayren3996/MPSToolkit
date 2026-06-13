@@ -19,6 +19,42 @@
 
 ---
 
+## Resolution (2026-06-13)
+
+The 12 low-risk fixes plus the behavior-affecting proposals were implemented as a test-gated,
+commit-per-phase sequence on `feat/pxp-energy-transport` (each phase: TDD where behavioral →
+full-suite gate → commit). Final state: **full suite green**.
+
+| Phase | Implemented | Findings |
+|---|---|---|
+| P0 | Baseline: the 12 low-risk fixes + this report | applied autofixes |
+| P1 | Constraint/scar citations; DAOE-vs-`P_G` clarification | docs-7, docs-8 |
+| P2 | O(N²)→O(N) reverse-schedule-scan hoist; imaginary-time Hermiticity guard | perf-2, numerics-6 |
+| P3 | `maxdim≥1` validator tightening; `gate_maxdim` default reconciliation | convention-2/correctness-4/numerics-3, convention-3 |
+| P4 | **`numerics-1`** relative-tolerance trace guard (silent-amplification footgun); **`test-2`** energy-correlator ED oracle; edge tests | numerics-1, test-2, test-4 |
+| P5 | `normalize` field on `DMTGateEvolution`; `pauli_fdaoe_projector` canonical + alias; `nstep` alias | convention-6/5/1, test-1/3 |
+| P6 | **Bonus correctness bug fix** (see below); coverage tests | test-5/7/8 + `_complete_orthonormal_basis` fix |
+| P7 | `(√2)^N` overflow limit documented | numerics-4 |
+| P8 | `perf-1` deferred → `perf-4` applied (dead-kwarg footgun removed + design/findings documented in-code) | perf-1, perf-4 |
+
+**Bonus bug fix (not in the original 40 findings).** Adding `test-8` (rank-deficient
+`_complete_orthonormal_basis` coverage) surfaced a genuine correctness bug: the linear-dependence
+threshold was scaled by `eps(candidate_norm)` (the post-projection residual's own magnitude),
+collapsing to ~`eps²` for roundoff residuals, so a numerically-dependent standard-basis vector was
+accepted as a spurious near-duplicate column — producing a **non-orthonormal** "orthonormal" DMT
+basis. Fixed to scale by the candidate's unit norm.
+
+**`perf-1` (O(N²) environment rebuild) — attempted, deferred.** A full threaded-environment sweep
+was prototyped in an isolated worktree and validated against the ED oracles with a bit-for-bit
+assertion harness. The cache invalidation was corrected (off-by-one on the env open-index), the
+forward sweep matched the rebuild exactly, and the reverse matched on clean input — but the
+threaded forward left redundant near-zero bond dimensions (a gauge/roundoff artifact) that broke
+the reverse sweep. Rather than ship a fragile change to the transport engine, `perf-4` was applied
+instead (footgun removal + the complete design and these findings documented in-code on
+`_dmt_window_truncate!`), leaving the correct O(N²) path in place for a dedicated future effort.
+
+---
+
 ## Applied low-risk fixes (verified)
 
 All changes are docstrings/comments, citations, defensive validation, type annotations, or a behavior-identical allocation hoist. Default behavior is unchanged.
