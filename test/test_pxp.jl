@@ -305,6 +305,27 @@ end
     value = pauli_expectation(hermitian_rho, Matrix(pxp_term_hamiltonian(2, 1)), 1)
     @test abs(imag(value)) < 1e-12
   end
+
+  @testset "error and edge paths" begin
+    @test isempty(pauli_expectation_profile(rho, Tuple{Int,Matrix{ComplexF64}}[]))
+    @test_throws ArgumentError pauli_expectation_profile(rho, [(0, _random_hermitian(1, 1))])
+    @test_throws ArgumentError pauli_expectation_profile(rho, [(nsites, _random_hermitian(2, 1))])
+    @test_throws ArgumentError pauli_expectation_profile(rho, [(1, ones(ComplexF64, 2, 3))])
+    # numerics-1: a numerically-negligible (not exactly zero) trace is rejected under
+    # normalize=true, but allowed under normalize=false.
+    leaky = add(
+      pauli_basis_state(psites, [4, 1, 1, 1]),
+      pauli_basis_state(psites, [1, 1, 1, 1]; coefficient=1e-13);
+      maxdim=8,
+      cutoff=0.0,
+    )
+    @test_throws ArgumentError pauli_expectation_profile(leaky, [(1, _random_hermitian(1, 1))])
+    @test length(pauli_expectation_profile(leaky, [(1, _random_hermitian(1, 1))]; normalize=false)) == 1
+    # test-7: non-Pauli (non-dimension-4) sites are rejected by trace and profile.
+    bad = MPS(siteinds("S=1", 3), n -> "Up")
+    @test_throws ArgumentError pauli_trace(bad)
+    @test_throws ArgumentError pauli_expectation_profile(bad, [(1, ComplexF64[1.0 0.0; 0.0 -1.0])])
+  end
 end
 
 # Dense K = sum_j w_j h_j for the PXP term list.
@@ -340,6 +361,7 @@ _pxp_terms(nsites; omega=1.0) =
     @test pauli_gate_from_imaginary_time(h, dbeta) ≈ pauli_gate(exp(-(dbeta / 2) * h)) atol = 1e-12
     @test pauli_gate_from_imaginary_time(h, 0.0) ≈ Matrix{ComplexF64}(I, 4^3, 4^3) atol = 1e-12
     @test_throws ArgumentError pauli_gate_from_imaginary_time(ones(2, 3), 0.1)
+    @test_throws ArgumentError pauli_gate_from_imaginary_time([0.0 1.0; 0.0 0.0], 0.1)
   end
 
   nsites = 4
@@ -406,6 +428,9 @@ _pxp_terms(nsites; omega=1.0) =
   @testset "argument validation" begin
     @test_throws ArgumentError pauli_gibbs_state(psites, terms, fill(beta, nsites - 1))
     @test_throws ArgumentError pauli_gibbs_state(psites, terms, fill(beta, nsites); nsteps=0)
+    # nstep is accepted as an alias for nsteps (consistency with the evolution drivers).
+    @test_throws ArgumentError pauli_gibbs_state(psites, terms, fill(beta, nsites); nstep=0)
+    @test pauli_gibbs_state(psites, terms, fill(beta, nsites); nstep=2) isa MPS
   end
 end
 
@@ -469,6 +494,81 @@ end
 
   @test_throws ArgumentError constrained_dmt_evolve!(evolved, evo, projector; project_every=0)
   @test_throws ArgumentError constrained_dmt_evolve!(evolved, evo, pauli_pxp_constraint_projector(pauli_siteinds(4)))
+
+  # test-5: a non-default projector budget still matches dense ED at exact bond dimension.
+  evolved2 = copy(rho)
+  constrained_dmt_evolve!(evolved2, evo, projector; project_every=2, projector_maxdim=256, projector_cutoff=1e-14)
+  @test maximum(abs.(real.(pauli_expectation_profile(evolved2, terms)) - expected_profile)) < 5e-3
+  # project_every is irrelevant at exact bond dimension (no truncation leakage to remove).
+  every1 = copy(rho)
+  constrained_dmt_evolve!(every1, evo, projector; project_every=1)
+  everyN = copy(rho)
+  constrained_dmt_evolve!(everyN, evo, projector; project_every=nstep)
+  @test maximum(abs.(real.(pauli_expectation_profile(every1, terms)) - real.(pauli_expectation_profile(everyN, terms)))) < 1e-6
+  # projector_cutoff is validated.
+  @test_throws ArgumentError constrained_dmt_evolve!(copy(rho), evo, projector; projector_cutoff=-1e-12)
+end
+
+@testset "energy-correlator protocol matches dense ED (normalize=false)" begin
+  # End-to-end check of the pxp_energy_correlator.jl protocol: a traceless, sector-projected
+  # energy density O(0) = P_G h_center P_G, Heisenberg-evolved with normalize=false, measured
+  # as the unnormalized profile C(x) = tr(O h_x). At N=6 with maxdim = 4^3 = 64 the
+  # operator-space evolution is exact (no truncation), so it matches dense ED.
+  nsites = 6
+  center = nsites ÷ 2
+  dt = 0.05
+  nstep = 4                       # t_total = 2*dt*nstep = 0.4
+  psites = pauli_siteinds(nsites)
+  terms = _pxp_terms(nsites)
+  projector = pauli_pxp_constraint_projector(psites)
+
+  # O(0): vectorize the center PXP term, sector-project, and HS-normalize (as the script does).
+  phys = siteinds("S=1/2", nsites)
+  os = OpSum()
+  os += "ProjUp", center - 1, "X", center, "ProjUp", center + 1
+  center_mpo = MPO(os, phys)
+  O = pauli_state_from_mpo(center_mpo, psites)
+  O = apply(projector, O; maxdim=256, cutoff=0.0)
+  normalize!(O)
+
+  # Dense O(0) from the SAME operator: o0 = P_G h_center P_G / ||.||_HS (HS norm = the
+  # vectorized MPS norm that normalize! divides by).
+  pg = _pxp_projector_dense(nsites)
+  o0_raw = pg * _mpo_dense(center_mpo, phys) * pg
+  o0 = o0_raw / sqrt(real(tr(o0_raw' * o0_raw)))
+  h_dense = [_embed_term(h, start, nsites) for (start, h) in terms]
+
+  # O is traceless => normalize=true must be rejected (numerics-1); normalize=false gives
+  # tr(O h_x) exactly, matching the dense correlator with no extra factors. Tight at t=0.
+  @test_throws ArgumentError pauli_expectation_profile(O, terms)
+  profile0 = real.(pauli_expectation_profile(O, terms; normalize=false))
+  @test profile0 ≈ [real(tr(o0 * hx)) for hx in h_dense] atol = 1e-8
+
+  # Heisenberg-evolve at exact bond dimension with normalize=false.
+  gates = [pauli_gate_from_hamiltonian(h, dt) for (_, h) in terms]
+  schedule = [start for (start, _) in terms]
+  evo = DMTGateEvolution(
+    gates,
+    dt;
+    schedule=schedule,
+    reverse_schedule=reverse(schedule),
+    nstep=nstep,
+    maxdim=64,
+    cutoff=0.0,
+    gate_maxdim=256,
+    connector_buffer=8,
+  )
+  constrained_dmt_evolve!(O, evo, projector; project_every=1, normalize=false)
+  profile_t = real.(pauli_expectation_profile(O, terms; normalize=false))
+
+  # Dense reference uses the exact propagator; the MPS uses a 2nd-order Trotter sweep, so the
+  # site-by-site match is at Trotter tolerance (a sign/normalization/sector bug would be O(1)).
+  u = exp(-1im * Matrix(_pxp_dense(nsites)) * (2 * dt * nstep))
+  o_t = u * o0 * u'
+  @test maximum(abs.(profile_t - [real(tr(o_t * hx)) for hx in h_dense])) < 5e-3
+
+  # Conserved total: sum_x C(x,t) = tr(H O(t)) = tr(H O(0)) (Trotter tolerance).
+  @test sum(profile_t) ≈ sum(real(tr(o0 * hx)) for hx in h_dense) atol = 5e-3
 end
 
 @testset "constrained evolution with normalize=false preserves absolute scales" begin
@@ -522,4 +622,44 @@ end
   unnormalized = copy(rho)
   dmt_evolve!(unnormalized, evo; normalize=false)
   @test pauli_trace(unnormalized) ≈ trace0 atol = 1e-6 * abs(trace0)
+end
+
+@testset "constrained_dmt_evolve! honors the evo.normalize field (A2-1 regression)" begin
+  # Audit follow-up: the constrained driver's `normalize` keyword must DEFAULT to evo.normalize,
+  # not a hardcoded `true`. Previously a normalize=false evolution called WITHOUT an explicit
+  # normalize keyword was silently re-normalized (the field was ignored), re-introducing the
+  # trace-inflation footgun the field exists to prevent. At N=6 the operator space is exact at
+  # maxdim=4^3=64, so unitary evolution + in-sector projection preserve the HS norm; scaling the
+  # initial state to norm 2 makes a normalize=false run (norm stays 2) cleanly distinct from a
+  # normalize=true run (norm reset to 1), independent of any truncation magnitude.
+  nsites = 6
+  psites = pauli_siteinds(nsites)
+  terms = _pxp_terms(nsites)
+  weights = [0.4, 0.4, 0.0, 0.0, -0.4, -0.4]
+  rho = pauli_gibbs_state(
+    psites, terms, weights;
+    nsteps=8, maxdim=256, cutoff=0.0, initial_state=pauli_pxp_constraint_state(psites),
+  )
+  rho[1] = 2.0 * rho[1]                       # norm(rho) = 2, distinctly != 1
+  gates = [pauli_gate_from_hamiltonian(h, 0.05) for (_, h) in terms]
+  schedule = [start for (start, _) in terms]
+  projector = pauli_pxp_constraint_projector(psites)
+  # normalize=false carried ONLY in the field (no call-site keyword below); exact bond dim.
+  evo = DMTGateEvolution(
+    gates, 0.05;
+    schedule=schedule, reverse_schedule=reverse(schedule),
+    nstep=4, maxdim=64, cutoff=1e-12, gate_maxdim=256, connector_buffer=4, normalize=false,
+  )
+
+  honored = copy(rho)
+  constrained_dmt_evolve!(honored, evo, projector; project_every=2)                        # no kwarg
+  explicit_false = copy(rho)
+  constrained_dmt_evolve!(explicit_false, evo, projector; project_every=2, normalize=false)
+  explicit_true = copy(rho)
+  constrained_dmt_evolve!(explicit_true, evo, projector; project_every=2, normalize=true)
+
+  @test norm(honored) ≈ norm(explicit_false) atol = 1e-10   # field honored: no-kwarg ≡ explicit false
+  @test isapprox(norm(explicit_true), 1.0; atol = 1e-6)     # explicit true renormalizes (kwarg overrides)
+  @test isapprox(norm(honored), 2.0; rtol = 1e-3)           # field false: the norm-2 scale is preserved
+  @test !isapprox(norm(honored), 1.0; rtol = 1e-2)          # the regression: default no longer forces -> 1
 end

@@ -226,4 +226,14 @@ end
     @test abs(inner(double_z, projected_double_z) - exp(-0.4 * 2)) ≤ 1e-10
     @test abs(inner(jw_tail, projected_jw_tail) - 1.0) ≤ 1e-10
   end
+
+  @testset "DAOE/FDAOE projectors validate cutoffs and gamma" begin
+    @test_throws ArgumentError pauli_daoe_projector(sites; lstar=-1, gamma=0.1)
+    @test_throws ArgumentError pauli_daoe_projector(sites; lstar=2, gamma=-0.1)
+    @test_throws ArgumentError pauli_fdaoe_projector(sites; wstar=-1, gamma=0.1)
+    @test_throws ArgumentError pauli_fdaoe_projector(sites; wstar=2, gamma=-0.1)
+    # The fdaoe_projector alias shares the implementation and its validation.
+    @test_throws ArgumentError fdaoe_projector(sites; wstar=-1, gamma=0.1)
+    @test pauli_fdaoe_projector(sites; wstar=2, gamma=0.4) isa MPO
+  end
 end

@@ -90,7 +90,7 @@ c    = pauli_components([0 1; 1 0])           # (I=0, X=1, Y=0, Z=0)  -> X
 
 These helpers turn a dense *physical-space* operator (acting on one or a few spin-1/2 sites) into the corresponding dense *operator-space* gate in the Pauli basis. The number of sites is inferred from the matrix dimension, so a ``4\times4`` matrix is read as a two-site gate.
 
-- `pauli_gate(unitary)` — the superoperator induced by conjugation, ``G[\alpha,\beta] = \operatorname{tr}\!\big[P_\alpha^\dagger\, U P_\beta U^\dagger\big]`` with normalized Pauli-basis operators ``P_\alpha``. This is the operator-space image of ``\rho \mapsto U\rho U^\dagger``.
+- `pauli_gate(unitary)` — the superoperator induced by conjugation, ``G[\alpha_{\text{out}},\alpha_{\text{in}}] = \operatorname{tr}\!\big[P_{\alpha_{\text{out}}}^\dagger\, U P_{\alpha_{\text{in}}} U^\dagger\big]`` with normalized Pauli-basis operators ``P_\alpha`` (row = output index, column = input index). This is the operator-space image of ``\rho \mapsto U\rho U^\dagger``.
 - `pauli_gate_from_hamiltonian(h, dt)` — the conjugation gate for the unitary ``e^{-i\,dt\,h}``, i.e. one Heisenberg/commutator TEBD step. This is the function you pass as `map_hamiltonian` to the TEBD scheduler.
 - `pauli_lindblad_generator(h, jumps)` — the dense local Lindbladian ``\mathcal{L}`` in the Pauli basis for Hamiltonian `h` and jump operator(s) `jumps` (a single matrix or a collection, each matching the dimension of `h`).
 - `pauli_gate_from_lindbladian(h, jumps, dt)` — the dissipative one-step gate ``e^{\,dt\,\mathcal{L}} = e^{\,dt\,\text{pauli\_lindblad\_generator}(h, jumps)}``.

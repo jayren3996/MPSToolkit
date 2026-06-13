@@ -18,6 +18,8 @@ unitary; for Hermitian `h` the slice `A = e^{-(dbeta/2) h}` is Hermitian and pos
 """
 function pauli_gate_from_imaginary_time(h::AbstractMatrix, dbeta::Real)
   size(h, 1) == size(h, 2) || throw(ArgumentError("imaginary-time Hamiltonian must be square"))
+  norm(h - h') <= sqrt(eps(Float64)) * max(norm(h), one(Float64)) ||
+    throw(ArgumentError("imaginary-time Hamiltonian must be Hermitian"))
   return pauli_gate(exp(-(dbeta / 2) * Matrix{ComplexF64}(h)))
 end
 
@@ -43,8 +45,13 @@ DMT energy-transport runs.
 
 # Keyword Arguments
 - `nsteps`: Number of Trotter steps. Each step applies every term gate once in a forward
-  sweep and once in a reverse sweep (symmetrized splitting), so each application sandwiches
-  `e^{-(w_j / (4 nsteps)) h_j}` on both sides.
+  sweep and once in a reverse sweep (symmetrized splitting). The imaginary-time increment
+  passed to each gate is `dbeta = w_j / (2 nsteps)` (the `dbeta` in the inline comment at the
+  gate-construction loop), which [`pauli_gate_from_imaginary_time`](@ref) halves to sandwich
+  `e^{-(dbeta/2) h_j} = e^{-(w_j / (4 nsteps)) h_j}` on each side per application. Summed over
+  the `2 nsteps` forward+reverse applications this accumulates to `e^{-(w_j/2) h_j}` per side,
+  i.e. the target `e^{-K/2}`. The name `nstep` is also accepted as an alias for `nsteps`,
+  matching the evolution drivers (e.g. [`DMTGateEvolution`](@ref)).
 - `maxdim`, `cutoff`: Ordinary TEBD truncation budget used during preparation. Plain SVD
   truncation is appropriate here: at small weights the prepared state stays close to a
   product in operator space.
@@ -63,10 +70,12 @@ function pauli_gibbs_state(
   terms,
   weights;
   nsteps::Integer=4,
+  nstep::Union{Nothing,Integer}=nothing,
   maxdim::Integer=64,
   cutoff::Real=1e-12,
   initial_state=nothing,
 )
+  nsteps = isnothing(nstep) ? nsteps : Int(nstep)
   length(terms) == length(weights) || throw(ArgumentError("pauli_gibbs_state requires one weight per term"))
   nsteps >= 1 || throw(ArgumentError("pauli_gibbs_state requires nsteps >= 1"))
   maxdim >= 1 || throw(ArgumentError("pauli_gibbs_state requires maxdim >= 1"))

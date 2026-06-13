@@ -74,6 +74,8 @@ end
     @test opts.cutoff == 1e-12
     @test opts.gate_maxdim == 480
     @test opts.connector_buffer == 8
+    # gate_maxdim default follows the maxdim*16 formula shared with dmt_step!/DMTGateEvolution.
+    @test DMTOptions(maxdim=8).gate_maxdim == max(8 * 16, 64)
 
     @test_throws ArgumentError DMTOptions(maxdim=0)
     @test_throws ArgumentError DMTOptions(cutoff=-1e-12)
@@ -92,6 +94,35 @@ end
     dmt_step!(via_opts, gate, 1, step_opts)
     dmt_step!(via_kwargs, gate, 1; maxdim=4, cutoff=1e-12, gate_maxdim=16, connector_buffer=2)
     @test _dense_pauli_coefficients(via_opts) ≈ _dense_pauli_coefficients(via_kwargs) atol = 1e-12
+  end
+
+  @testset "generic evolve! dispatch carries the normalize field" begin
+    sites = pauli_siteinds(6)
+    psi0 = random_mps(sites; linkdims=20)
+    normalize!(psi0)
+    gates = [_identity_gate(2) for _ in 1:5]
+    schedule = collect(1:5)
+    mk(nrm) = DMTGateEvolution(
+      gates, 0.1; schedule=schedule, reverse_schedule=reverse(schedule),
+      nstep=1, maxdim=8, cutoff=1e-12, gate_maxdim=64, connector_buffer=4, normalize=nrm,
+    )
+
+    # Generic evolve! returns the mutated MPS and matches dmt_evolve! at the same setting.
+    a = copy(psi0)
+    @test evolve!(a, mk(true)) === a
+    b = copy(psi0)
+    dmt_evolve!(b, mk(true))
+    @test abs(inner(a, b)) ≈ 1.0 atol = 1e-10
+
+    # The normalize field is honored: truncation sheds norm, restored only when normalize=true.
+    c = copy(psi0)
+    evolve!(c, mk(false))
+    @test norm(a) ≈ 1.0 atol = 1e-10
+    @test norm(c) < 0.999
+    # An explicit keyword still overrides the field.
+    d = copy(psi0)
+    evolve!(d, mk(true); normalize=false)
+    @test norm(d) ≈ norm(c) atol = 1e-8
   end
 
   @testset "DMT validates Pauli dimension for single-site gates" begin
@@ -132,6 +163,7 @@ end
 
     _, psi = _dmt_test_state(3)
     @test_throws ArgumentError dmt_step!(psi, _identity_gate(2), 1; maxdim=2, connector_buffer=3)
+    @test_throws ArgumentError dmt_step!(psi, _identity_gate(2), 1; maxdim=0)
   end
 
   @testset "DMT completes protected bases beyond local Pauli dimension" begin
@@ -160,6 +192,18 @@ end
 
     after = [inner(pauli_basis_state(sites, labels), psi) for labels in probes]
     @test after ≈ before atol = 1e-12
+  end
+
+  @testset "_complete_orthonormal_basis edge cases" begin
+    # target_dim exceeding the ambient dimension is rejected.
+    @test_throws ArgumentError MPSToolkit._complete_orthonormal_basis(ComplexF64[1 0; 0 1; 0 0], 4)
+    # A rank-deficient protected block (duplicate columns) still yields an orthonormal basis
+    # whose span reproduces the protected columns.
+    rank_deficient = ComplexF64[1 1; 0 0; 0 0; 0 0]
+    basis = MPSToolkit._complete_orthonormal_basis(rank_deficient, 3)
+    @test size(basis) == (4, 3)
+    @test basis' * basis ≈ Matrix{ComplexF64}(I, 3, 3) atol = 1e-10
+    @test basis * (basis' * rank_deficient) ≈ rank_deficient atol = 1e-10
   end
 
   @testset "complex DMT projection uses adjoint orthonormal bases" begin
@@ -283,6 +327,55 @@ end
     dmt_evolve!(scheduled, evo)
 
     @test inner(manual, scheduled) ≈ 1.0 atol = 1e-8
+  end
+
+  @testset "threaded env cache reproduces the rebuild bit-for-bit (PXP hard case, verify on)" begin
+    # Guards the perf-1 environment cache. With _DMT_VERIFY_ENVS on, _dmt_bond_truncate! throws
+    # if any threaded environment differs from the from-scratch rebuild (index identity + norm of
+    # difference), so reaching the end of dmt_evolve! proves the cached path is byte-faithful. The
+    # PXP energy-transport schedule is the adversarial input: non-monotonic (bond 1 revisited),
+    # mixed-span (2 and 3), overlapping multi-bond windows, run forward and reverse over 2 sweeps
+    # on a generic high-operator-entanglement state (random_mps) where truncation actually fires.
+    old = MPSToolkit._DMT_VERIFY_ENVS[]
+    MPSToolkit._DMT_VERIFY_ENVS[] = true
+    try
+      nsites = 8
+      psites = pauli_siteinds(nsites)
+      terms = [(first(pxp_term_support(nsites, j)), Matrix(pxp_term_hamiltonian(nsites, j))) for j in 1:nsites]
+      gates = [pauli_gate_from_hamiltonian(h, 0.05) for (_, h) in terms]
+      schedule = [start for (start, _) in terms]
+      evo = DMTGateEvolution(gates, 0.05; schedule=schedule, reverse_schedule=reverse(schedule),
+        nstep=2, maxdim=8, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
+
+      psi = random_mps(ComplexF64, psites; linkdims=24)
+      normalize!(psi)
+      @test dmt_evolve!(psi, evo) === psi   # no env-verify assertion fired
+
+      # And explicitly: the threaded result equals the rebuild path (cache=nothing) — same state
+      # AND same trimmed bond dimensions (the canonical-form output, not merely the physical state).
+      MPSToolkit._DMT_VERIFY_ENVS[] = false
+      base = random_mps(ComplexF64, psites; linkdims=24)
+      normalize!(base)
+      threaded = copy(base)
+      dmt_evolve!(threaded, evo)
+      rebuilt = copy(base)
+      for _ in 1:evo.nstep
+        for (i, b) in pairs(evo.schedule)
+          dmt_step!(rebuilt, MPSToolkit._gate_for_step(evo.gate, b, i), b; maxdim=evo.maxdim,
+            cutoff=evo.cutoff, direction=:R, gate_maxdim=evo.gate_maxdim, connector_buffer=evo.connector_buffer)
+        end
+        for (i, b) in pairs(evo.reverse_schedule)
+          g = MPSToolkit._reverse_gate_for_step(evo.gate, true, evo.schedule, b, i)
+          dmt_step!(rebuilt, g, b; maxdim=evo.maxdim, cutoff=evo.cutoff, direction=:L,
+            gate_maxdim=evo.gate_maxdim, connector_buffer=evo.connector_buffer)
+        end
+      end
+      normalize!(rebuilt)
+      @test abs(inner(threaded, rebuilt)) ≈ 1.0 atol = 1e-10
+      @test _link_dims(threaded) == _link_dims(rebuilt)
+    finally
+      MPSToolkit._DMT_VERIFY_ENVS[] = old
+    end
   end
 
   @testset "reverse DMT sweep uses gates associated with original bonds" begin

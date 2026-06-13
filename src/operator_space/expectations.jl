@@ -5,6 +5,9 @@ Return the physical trace of a vectorized operator stored as a Pauli-basis `MPS`
 
 In the normalized Pauli convention `tr(ρ) = (√2)^N c_{I…I}`, where `c_{I…I}` is the
 amplitude of the all-identity string, so the trace is one identity-environment contraction.
+The `(√2)^N` prefactor overflows `Float64` for `N ≳ 2048`, so absolute traces of very large
+operators are not representable (far beyond any feasible operator-space MPS size); normalized
+ratio observables are unaffected because the factor cancels.
 
 # Arguments
 - `rho`: Operator-space `MPS` on dimension-4 Pauli sites.
@@ -24,10 +27,10 @@ Build the window cap tensor whose entry at the multi-site Pauli label `α` is `t
 so that contracting it against an operator-space MPS window (with identity caps elsewhere)
 yields `tr(ρ O)` up to the `(√2)` factors handled by the callers.
 """
-function _pauli_window_cap(window_sites, op::AbstractMatrix)
+function _pauli_window_cap(window_sites, op::AbstractMatrix;
+                          local_basis=[matrix / sqrt(2) for matrix in values(pauli_matrices())])
   span = length(window_sites)
   size(op) == (2^span, 2^span) || throw(ArgumentError("window cap operator size must match the window span"))
-  local_basis = [matrix / sqrt(2) for matrix in values(pauli_matrices())]
   cap = ITensor(ComplexF64, window_sites...)
   for labels in Iterators.product(ntuple(_ -> 1:4, span)...)
     pauli = foldl(kron, (local_basis[l] for l in labels))
@@ -64,7 +67,8 @@ vectorized operator `rho`, in one O(N) sweep with cumulative identity environmen
 
 # Keyword Arguments
 - `normalize`: If `true` (default), return `tr(ρ O_k) / tr(ρ)`; otherwise return the
-  unnormalized `tr(ρ O_k)`.
+  unnormalized `tr(ρ O_k)`. The unnormalized branch carries a `(√2)^N` factor that overflows
+  `Float64` for `N ≳ 2048` (far beyond feasible MPS sizes); the normalized ratio is immune.
 
 # Returns
 - A `Vector{ComplexF64}` of expectation values. For Hermitian `ρ` and `O_k` the entries are
@@ -79,6 +83,7 @@ function pauli_expectation_profile(rho::MPS, terms; normalize::Bool=true)
   _validate_pauli_operator_space(rho, 1, nsites)
   isempty(terms) && return ComplexF64[]
   windows = _validated_pauli_windows(rho, terms)
+  local_basis = [matrix / sqrt(2) for matrix in values(pauli_matrices())]
 
   right = Vector{ITensor}(undef, nsites + 1)
   right[nsites + 1] = ITensor(1.0)
@@ -86,9 +91,15 @@ function pauli_expectation_profile(rho::MPS, terms; normalize::Bool=true)
     right[site] = right[site + 1] * (_pauli_identity_env(siteind(rho, site)) * rho[site])
   end
   denominator = scalar(right[1])
-  normalize && iszero(denominator) && throw(ArgumentError("normalized Pauli expectations require a nonzero trace"))
+  # Reject a numerically-negligible (not just exactly-zero) trace relative to the operator
+  # scale. For a traceless operator the post-truncation trace is an O(eps) residue rather than
+  # exactly zero, and normalizing by it silently amplifies every entry by ~1/eps. This mirrors
+  # the relative tolerance the DMT kernel (`_mat_trunc!`) already uses; traceless operators
+  # should be measured with `normalize=false`.
+  normalize && abs(denominator) <= sqrt(eps(Float64)) * norm(rho) &&
+    throw(ArgumentError("normalized Pauli expectations require a nonzero trace; the operator trace is numerically negligible relative to its norm (use normalize=false for a traceless operator)"))
 
-  values = Vector{ComplexF64}(undef, length(terms))
+  results = Vector{ComplexF64}(undef, length(terms))
   left = ITensor(1.0)
   absorbed = 0
   for k in sortperm(windows; by=first)
@@ -101,11 +112,11 @@ function pauli_expectation_profile(rho::MPS, terms; normalize::Bool=true)
     for site in (start + 1):(start + span - 1)
       window_block *= rho[site]
     end
-    cap = _pauli_window_cap([siteind(rho, s) for s in start:(start + span - 1)], last(terms[k]))
+    cap = _pauli_window_cap([siteind(rho, s) for s in start:(start + span - 1)], last(terms[k]); local_basis=local_basis)
     raw = scalar(left * (cap * window_block) * right[start + span])
-    values[k] = normalize ? raw / (2.0^(span / 2) * denominator) : 2.0^((nsites - span) / 2) * raw
+    results[k] = normalize ? raw / (2.0^(span / 2) * denominator) : 2.0^((nsites - span) / 2) * raw
   end
-  return values
+  return results
 end
 
 """

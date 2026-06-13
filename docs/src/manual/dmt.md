@@ -289,7 +289,7 @@ with the global constraint projector ``P_G = \prod_j (1 - n_j n_{j+1})``: dynami
 connects the constrained sector (no adjacent excitations) to blockade-violating
 configurations. Energy is the only local conserved density, and its high-temperature
 transport is *superdiffusive*, with dynamical exponent ``z = 3/2`` in the KPZ universality
-class (Ljubotina, Desaules, Serbyn, Abanin, PRX **13**, 011033 (2023)).
+class (Ljubotina, Desaules, Serbyn, Papić, PRX **13**, 011033 (2023)).
 
 Simulating this with DMT needs three constraint-aware ingredients beyond the XXZ workflow
 above, all built from the model helpers `pxp_term_hamiltonian` / `pxp_term_support` and the
@@ -365,12 +365,20 @@ DMT-protected components, so the default per-sweep renormalization silently infl
 absolute traces — and with it the conserved total ``\sum_x C(x,t) = \mathrm{tr}(P_G H\,
 O(t))``, which with `normalize=false` becomes the run's truncation error bar), and
 `normalize=false` in the profile measurement (the trace it would divide by vanishes).
-Production-validated reference points for the crossover (``N = 64``): the local ``M_2``
-slope plateaus at **1.46–1.49 over** ``t = 8\!-\!14`` at ``\chi = 48`` (χ-converged to
-1–6%, still descending toward ``4/3`` from above), while ``\chi = 32`` reads **1.32–1.38**
-— truncation suppresses ``M_2`` growth and pulls the slope *down*, so an undershooting
-slope near the target can be a truncation artifact rather than convergence. Raise `maxdim`
-until the slope stops moving up, then extend in time.
+Production-validated reference points for the crossover (``N = 64``), committed as a
+reproducible reference in `examples/operator_space/data/pxp_energy_correlator_chi48_N64.csv`
+(re-fit by `examples/operator_space/pxp_energy_correlator_reference.jl`, and pinned in
+`test/test_pxp.jl`): the local ``M_2`` slope plateaus at **1.46–1.50 over** ``t = 8\!-\!14``
+at ``\chi = 48`` (LSQ ``2/z = 1.48``), robustly above the diffusive ``1.0`` and **descending
+toward** ``4/3`` **from above** — it has *not* reached the asymptote. The `normalize=false`
+conserved-total drift is the run's truncation error bar: it stays within **1–6% only through**
+``t \approx 10`` and grows to **~9–12% by** ``t = 12\!-\!14``, so the top of the window is the
+least trustworthy part of the plateau, and reaching the asymptotic ``4/3`` (expected only at
+``t \gtrsim 20\!-\!30``) requires ``\chi > 48`` — not merely longer times. By contrast
+``\chi = 32`` (the shipped demo default) reads **1.30–1.38**: truncation suppresses ``M_2``
+growth and pulls the slope *down*, so an undershooting slope near the target there is a
+truncation artifact, not convergence. Raise `maxdim` until the slope stops moving up, then
+extend in time.
 
 ### Protocol 2 — energy domain-wall melt
 
@@ -515,4 +523,6 @@ pauli_pxp_constraint_projector
 - C. David White, Michael Zaletel, Roger S. K. Mong, and Gil Refael, [Quantum dynamics of thermalizing systems](https://arxiv.org/abs/1707.01506)
 - Stuart Yi-Thomas, Brayden Ware, Jay D. Sau, and Christopher David White, [Comparing numerical methods for hydrodynamics in a one-dimensional lattice spin model](https://arxiv.org/abs/2310.06886)
 - En-Jui Kuo, Brayden Ware, Peter Lunts, Mohammad Hafezi, and Christopher David White, [Energy diffusion in weakly interacting chains with fermionic dissipation-assisted operator evolution](https://arxiv.org/abs/2311.17148)
-- Marko Ljubotina, Jean-Yves Desaules, Maksym Serbyn, and Dmitry A. Abanin, [Superdiffusive energy transport in kinetically constrained models](https://doi.org/10.1103/PhysRevX.13.011033), Phys. Rev. X 13, 011033 (2023) — PXP energy transport and the KPZ exponent.
+- Marko Ljubotina, Jean-Yves Desaules, Maksym Serbyn, and Zlatko Papić, [Superdiffusive energy transport in kinetically constrained models](https://doi.org/10.1103/PhysRevX.13.011033), Phys. Rev. X 13, 011033 (2023) — PXP energy transport and the KPZ exponent.
+- Paul Fendley, K. Sengupta, and Subir Sachdev, [Competing density-wave orders in a one-dimensional hard-boson model](https://arxiv.org/abs/cond-mat/0309438), Phys. Rev. B 69, 075106 (2004) — origin of the PXP / hard-square constraint.
+- C. J. Turner, A. A. Michailidis, D. A. Abanin, M. Serbyn, and Z. Papić, [Weak ergodicity breaking from quantum many-body scars](https://arxiv.org/abs/1711.03528), Nature Physics 14, 745 (2018) — quantum many-body scars in the constrained PXP sector.

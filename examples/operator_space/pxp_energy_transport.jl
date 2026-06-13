@@ -11,7 +11,7 @@
 # density — is predicted and observed (numerically) to spread superdiffusively with dynamical
 # exponent z = 3/2, in the KPZ universality class:
 #
-#   Ljubotina, Desaules, Serbyn, Abanin, "Superdiffusive energy transport in kinetically
+#   Ljubotina, Desaules, Serbyn, Papić, "Superdiffusive energy transport in kinetically
 #   constrained models", PRX 13, 011033 (2023).
 #
 # Protocol (domain-wall quench in inverse temperature):
@@ -173,6 +173,6 @@ println("""
 This short run is still inside the ballistic-to-hydrodynamic crossover (the local slope
 column above decreases monotonically toward the asymptote but has not reached it), so the
 effective exponent overestimates 1/z. The asymptotic PXP value is superdiffusive (KPZ),
-1/z = 2/3 (z = 3/2), per Ljubotina-Desaules-Serbyn-Abanin, PRX 13, 011033 (2023); ordinary
+1/z = 2/3 (z = 3/2), per Ljubotina-Desaules-Serbyn-Papić, PRX 13, 011033 (2023); ordinary
 diffusion would give 1/z = 0.5. To approach it, raise nsites / maxdim / ncall together and
 move the fit window later (the cost grows linearly in each).""")

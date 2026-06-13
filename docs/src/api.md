@@ -84,7 +84,7 @@ fidelity_distance
 - `constrained_dmt_evolve!`
 - `DMTOptions`
 - `pauli_daoe_projector`
-- `fdaoe_projector`
+- `pauli_fdaoe_projector` (alias: `fdaoe_projector`)
 
 ## Model Helpers
 

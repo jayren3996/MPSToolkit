@@ -204,6 +204,7 @@ The local operator basis is assumed to be ordered as `(I, X, Y, Z)`.
 """
 function pauli_daoe_projector(sites; lstar::Integer, gamma::Real)
   lstar < 0 && throw(ArgumentError("lstar must be nonnegative"))
+  gamma < 0 && throw(ArgumentError("gamma must be nonnegative"))
   bond_dim = Int(lstar) + 1
   transition_rule = (state, local_state) -> begin
     next_weight, coeff = _daoe_transition(state - 1, local_state, Int(lstar), gamma)
@@ -213,7 +214,7 @@ function pauli_daoe_projector(sites; lstar::Integer, gamma::Real)
 end
 
 """
-    fdaoe_projector(sites; wstar, gamma)
+    pauli_fdaoe_projector(sites; wstar, gamma)
 
 Construct the FDAOE projector MPO that damps Pauli-basis operator strings by fermionic Majorana weight beyond cutoff `wstar`.
 The local operator basis is assumed to be ordered as `(I, X, Y, Z)`.
@@ -228,9 +229,18 @@ The local operator basis is assumed to be ordered as `(I, X, Y, Z)`.
 # Returns
 - A diagonal `MPO` implementing the fermionic DAOE projector.
 """
-function fdaoe_projector(sites; wstar::Integer, gamma::Real)
+function pauli_fdaoe_projector(sites; wstar::Integer, gamma::Real)
   wstar < 0 && throw(ArgumentError("wstar must be nonnegative"))
+  gamma < 0 && throw(ArgumentError("gamma must be nonnegative"))
   bond_dim = Int(wstar) + 2
   transition_rule = (state, local_state) -> _fdaoe_transition(state, local_state, Int(wstar), gamma)
   return _diagonal_projector_mpo(sites, bond_dim, transition_rule)
 end
+
+"""
+    fdaoe_projector(sites; wstar, gamma)
+
+Alias for [`pauli_fdaoe_projector`](@ref); prefer `pauli_fdaoe_projector` for symmetry with
+[`pauli_daoe_projector`](@ref).
+"""
+const fdaoe_projector = pauli_fdaoe_projector

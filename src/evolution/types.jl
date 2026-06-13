@@ -75,6 +75,8 @@ Configuration for scheduled operator-space DMT evolution.
 - `cutoff`: Truncation cutoff used in the final repair SVD.
 - `gate_maxdim`: Temporary bond dimension budget used for raw gate application.
 - `connector_buffer`: Number of connector modes protected during reduced-matrix truncation.
+- `normalize`: Whether `evolve!` / `dmt_evolve!` renormalize the state after evolution.
+  Default `true`; set `false` to track unnormalized traces of a traceless operator.
 """
 struct DMTGateEvolution{TG,TS,TR}
   gate::TG
@@ -86,10 +88,11 @@ struct DMTGateEvolution{TG,TS,TR}
   cutoff::Float64
   gate_maxdim::Int
   connector_buffer::Int
+  normalize::Bool
 end
 
 """
-    DMTGateEvolution(gate, dt; schedule, reverse_schedule=reverse(schedule), nstep=1, maxdim=30, cutoff=1e-12, gate_maxdim=max(maxdim * 16, 64), connector_buffer=8)
+    DMTGateEvolution(gate, dt; schedule, reverse_schedule=reverse(schedule), nstep=1, maxdim=30, cutoff=1e-12, gate_maxdim=max(maxdim * 16, 64), connector_buffer=8, normalize=true)
 
 Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
 
@@ -106,6 +109,9 @@ Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
 - `gate_maxdim`: Temporary gate-application bond dimension budget.
 - `connector_buffer`: Number of connector directions preserved before reduced-matrix
   truncation is applied.
+- `normalize`: Default normalization choice carried by the object; `evolve!` / `dmt_evolve!`
+  use it unless overridden by their own `normalize` keyword. Set `false` for traceless
+  operators (see [`dmt_evolve!`](@ref)).
 
 # Returns
 - A concrete `DMTGateEvolution` object with normalized numeric field types.
@@ -120,6 +126,7 @@ function DMTGateEvolution(
   cutoff=1e-12,
   gate_maxdim=max(Int(maxdim) * 16, 64),
   connector_buffer=8,
+  normalize=true,
 )
   nstep >= 1 || throw(ArgumentError("DMTGateEvolution requires nstep >= 1"))
   maxdim >= 1 || throw(ArgumentError("DMTGateEvolution requires maxdim >= 1"))
@@ -137,6 +144,7 @@ function DMTGateEvolution(
     Float64(cutoff),
     Int(gate_maxdim),
     Int(connector_buffer),
+    Bool(normalize),
   )
 end
 
