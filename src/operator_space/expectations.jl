@@ -24,10 +24,10 @@ Build the window cap tensor whose entry at the multi-site Pauli label `α` is `t
 so that contracting it against an operator-space MPS window (with identity caps elsewhere)
 yields `tr(ρ O)` up to the `(√2)` factors handled by the callers.
 """
-function _pauli_window_cap(window_sites, op::AbstractMatrix)
+function _pauli_window_cap(window_sites, op::AbstractMatrix;
+                          local_basis=[matrix / sqrt(2) for matrix in values(pauli_matrices())])
   span = length(window_sites)
   size(op) == (2^span, 2^span) || throw(ArgumentError("window cap operator size must match the window span"))
-  local_basis = [matrix / sqrt(2) for matrix in values(pauli_matrices())]
   cap = ITensor(ComplexF64, window_sites...)
   for labels in Iterators.product(ntuple(_ -> 1:4, span)...)
     pauli = foldl(kron, (local_basis[l] for l in labels))
@@ -79,6 +79,7 @@ function pauli_expectation_profile(rho::MPS, terms; normalize::Bool=true)
   _validate_pauli_operator_space(rho, 1, nsites)
   isempty(terms) && return ComplexF64[]
   windows = _validated_pauli_windows(rho, terms)
+  local_basis = [matrix / sqrt(2) for matrix in values(pauli_matrices())]
 
   right = Vector{ITensor}(undef, nsites + 1)
   right[nsites + 1] = ITensor(1.0)
@@ -88,7 +89,7 @@ function pauli_expectation_profile(rho::MPS, terms; normalize::Bool=true)
   denominator = scalar(right[1])
   normalize && iszero(denominator) && throw(ArgumentError("normalized Pauli expectations require a nonzero trace"))
 
-  values = Vector{ComplexF64}(undef, length(terms))
+  results = Vector{ComplexF64}(undef, length(terms))
   left = ITensor(1.0)
   absorbed = 0
   for k in sortperm(windows; by=first)
@@ -101,11 +102,11 @@ function pauli_expectation_profile(rho::MPS, terms; normalize::Bool=true)
     for site in (start + 1):(start + span - 1)
       window_block *= rho[site]
     end
-    cap = _pauli_window_cap([siteind(rho, s) for s in start:(start + span - 1)], last(terms[k]))
+    cap = _pauli_window_cap([siteind(rho, s) for s in start:(start + span - 1)], last(terms[k]); local_basis=local_basis)
     raw = scalar(left * (cap * window_block) * right[start + span])
-    values[k] = normalize ? raw / (2.0^(span / 2) * denominator) : 2.0^((nsites - span) / 2) * raw
+    results[k] = normalize ? raw / (2.0^(span / 2) * denominator) : 2.0^((nsites - span) / 2) * raw
   end
-  return values
+  return results
 end
 
 """

@@ -5,7 +5,7 @@
 # the dynamical exponent z. Instead of melting a domain wall, it Heisenberg-evolves a single
 # local energy density in the constrained sector and watches it spread — the protocol of
 #
-#   Ljubotina, Desaules, Serbyn, Abanin, "Superdiffusive energy transport in kinetically
+#   Ljubotina, Desaules, Serbyn, Papić, "Superdiffusive energy transport in kinetically
 #   constrained models", PRX 13, 011033 (2023),
 #
 # which finds KPZ-class superdiffusion, z = 3/2, for PXP energy transport.

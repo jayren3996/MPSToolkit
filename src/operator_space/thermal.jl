@@ -43,8 +43,12 @@ DMT energy-transport runs.
 
 # Keyword Arguments
 - `nsteps`: Number of Trotter steps. Each step applies every term gate once in a forward
-  sweep and once in a reverse sweep (symmetrized splitting), so each application sandwiches
-  `e^{-(w_j / (4 nsteps)) h_j}` on both sides.
+  sweep and once in a reverse sweep (symmetrized splitting). The imaginary-time increment
+  passed to each gate is `dbeta = w_j / (2 nsteps)` (the `dbeta` in the inline comment at the
+  gate-construction loop), which [`pauli_gate_from_imaginary_time`](@ref) halves to sandwich
+  `e^{-(dbeta/2) h_j} = e^{-(w_j / (4 nsteps)) h_j}` on each side per application. Summed over
+  the `2 nsteps` forward+reverse applications this accumulates to `e^{-(w_j/2) h_j}` per side,
+  i.e. the target `e^{-K/2}`.
 - `maxdim`, `cutoff`: Ordinary TEBD truncation budget used during preparation. Plain SVD
   truncation is appropriate here: at small weights the prepared state stays close to a
   product in operator space.

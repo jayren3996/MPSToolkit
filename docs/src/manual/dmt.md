@@ -289,7 +289,7 @@ with the global constraint projector ``P_G = \prod_j (1 - n_j n_{j+1})``: dynami
 connects the constrained sector (no adjacent excitations) to blockade-violating
 configurations. Energy is the only local conserved density, and its high-temperature
 transport is *superdiffusive*, with dynamical exponent ``z = 3/2`` in the KPZ universality
-class (Ljubotina, Desaules, Serbyn, Abanin, PRX **13**, 011033 (2023)).
+class (Ljubotina, Desaules, Serbyn, Papić, PRX **13**, 011033 (2023)).
 
 Simulating this with DMT needs three constraint-aware ingredients beyond the XXZ workflow
 above, all built from the model helpers `pxp_term_hamiltonian` / `pxp_term_support` and the
@@ -515,4 +515,4 @@ pauli_pxp_constraint_projector
 - C. David White, Michael Zaletel, Roger S. K. Mong, and Gil Refael, [Quantum dynamics of thermalizing systems](https://arxiv.org/abs/1707.01506)
 - Stuart Yi-Thomas, Brayden Ware, Jay D. Sau, and Christopher David White, [Comparing numerical methods for hydrodynamics in a one-dimensional lattice spin model](https://arxiv.org/abs/2310.06886)
 - En-Jui Kuo, Brayden Ware, Peter Lunts, Mohammad Hafezi, and Christopher David White, [Energy diffusion in weakly interacting chains with fermionic dissipation-assisted operator evolution](https://arxiv.org/abs/2311.17148)
-- Marko Ljubotina, Jean-Yves Desaules, Maksym Serbyn, and Dmitry A. Abanin, [Superdiffusive energy transport in kinetically constrained models](https://doi.org/10.1103/PhysRevX.13.011033), Phys. Rev. X 13, 011033 (2023) — PXP energy transport and the KPZ exponent.
+- Marko Ljubotina, Jean-Yves Desaules, Maksym Serbyn, and Zlatko Papić, [Superdiffusive energy transport in kinetically constrained models](https://doi.org/10.1103/PhysRevX.13.011033), Phys. Rev. X 13, 011033 (2023) — PXP energy transport and the KPZ exponent.

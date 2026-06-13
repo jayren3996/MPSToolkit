@@ -226,6 +226,14 @@ Perform one DMT-preserving bond truncation step.
 - `cutoff`: Truncation cutoff used in the final repair SVD.
 - `direction`: Sweep direction, either `:R` or `:L`.
 - `connector_buffer`: Number of protected connector directions.
+- `orthogonalize`: If `true` (default), re-gauge the MPS so the orthogonality center is at
+  `bond` before truncating, as the connector-preserving construction requires. Set to `false`
+  only when the center is already known to be at `bond`; otherwise the bond SVD no longer
+  returns the true Schmidt values and the truncation is invalid.
+- `left_env`, `right_env`: Optional precomputed identity/trace environments. When `nothing`
+  (default) they are built from the current canonical gauge. If supplied, they MUST match the
+  gauge at `bond` (e.g. as produced by `orthogonalize!(psi, bond)`); a stale environment
+  silently yields an invalid truncation.
 
 # Returns
 - The mutated `psi`.
@@ -389,11 +397,9 @@ function dmt_step!(psi::MPS, gate::AbstractMatrix, bond, opts::DMTOptions; direc
 end
 
 """
-    _reverse_gate_for_step(gate_spec, schedule, reverse_schedule, bond, index)
+    _is_default_reverse_schedule(schedule, reverse_schedule)
 
-Resolve the gate for a reverse DMT schedule entry. Matrix and callable gate providers keep the
-same semantics as forward sweeps. Vector gate providers are mapped back to the corresponding
-forward schedule entry.
+Return `true` when `reverse_schedule` is exactly `reverse(schedule)`.
 """
 function _is_default_reverse_schedule(schedule, reverse_schedule)
   length(reverse_schedule) == length(schedule) || return false
@@ -414,6 +420,13 @@ function _reverse_gate_index(schedule, reverse_schedule, bond, index)
   return forward_index
 end
 
+"""
+    _reverse_gate_for_step(gate_spec, schedule, reverse_schedule, bond, index)
+
+Resolve the gate for a reverse DMT schedule entry. Matrix and callable gate providers keep the
+same semantics as forward sweeps. Vector gate providers are mapped back to the corresponding
+forward schedule entry.
+"""
 function _reverse_gate_for_step(gate_spec::AbstractVector, schedule, reverse_schedule, bond, index)
   return _gate_for_step(gate_spec, bond, _reverse_gate_index(schedule, reverse_schedule, bond, index))
 end
@@ -490,7 +503,10 @@ end
     evolve!(psi, evo::DMTGateEvolution)
 
 Dispatch operator-space evolution through the DMT backend.
+
+The `normalize` keyword is forwarded to [`dmt_evolve!`](@ref); set it `false` when tracking
+unnormalized traces of a traceless operator (e.g. conserved `tr(H O(t))`).
 """
-function evolve!(psi::MPS, evo::DMTGateEvolution)
-  return dmt_evolve!(psi, evo)
+function evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=true)
+  return dmt_evolve!(psi, evo; normalize=normalize)
 end

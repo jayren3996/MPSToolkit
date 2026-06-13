@@ -58,7 +58,7 @@ inserted for each single-`Z` string is `2^(N / 2 - 1)` for `N` sites.
 - The returned state is not a simple product state; it uses bond dimension `2` to encode
   the operator sum compactly.
 """
-function pauli_total_sz_state(sites; coefficient=nothing)
+function pauli_total_sz_state(sites; coefficient::Union{Nothing,Number}=nothing)
   nsites = length(sites)
   nsites < 1 && throw(ArgumentError("pauli_total_sz_state requires at least one site"))
   coefficient = isnothing(coefficient) ? 2.0^(nsites / 2 - 1) : coefficient
