@@ -418,6 +418,10 @@ the TEBD side of this story — schedules, gate providers, Strang splitting, and
 truncation budget — see [TEBD](tebd.md). For the Pauli-basis vectorization,
 state builders, and gate builders shared by both, see [Operator Space](operator-space.md).
 
+For *when* to prefer DMT, DAOE, or plain TEBD — and in particular why a dynamical exponent
+``z`` and a diffusion constant ``D`` place different demands on the method — see
+[Method Comparison](transport-methods.md).
+
 ## Tips and pitfalls
 
 - **Use DMT only for the density-operator melt.** The whole point of the method is the

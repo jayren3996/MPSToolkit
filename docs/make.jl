@@ -30,6 +30,7 @@ makedocs(
       "Operator Space" => "manual/operator-space.md",
       "DMT" => "manual/dmt.md",
       "DAOE" => "manual/daoe.md",
+      "Method Comparison" => "manual/transport-methods.md",
       "Chebyshev" => "manual/chebyshev.md",
     ],
     "Examples" => "examples.md",
