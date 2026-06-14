@@ -3,3 +3,5 @@ dev/
 .ipynb_checkpoints/
 docs/build/
 .claude/
+# regenerable example output (see examples/dmt/domain_wall_melting.jl)
+examples/dmt/*.csv

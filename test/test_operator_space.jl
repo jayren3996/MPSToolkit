@@ -66,6 +66,36 @@ end
     end
   end
 
+  @testset "pauli_domain_wall_state encodes a signed single-Z sum" begin
+    for nsites in (2, 4, 5)
+      local_sites = pauli_siteinds(nsites)
+      kink = nsites ÷ 2
+      dw = pauli_domain_wall_state(local_sites)
+      # The per-site overlap with the single-Z probe is the signed coefficient
+      # c_j = (j <= kink ? -1 : +1) -- i.e. tr(σ^z_j · D) up to the basis normalization.
+      for target in 1:nsites
+        labels = fill(1, nsites)
+        labels[target] = 4
+        probe = pauli_basis_state(local_sites, labels)
+        expected = target <= kink ? -1.0 : 1.0
+        @test inner(probe, dw) ≈ expected atol = 1e-12
+      end
+      # Compact bond-dimension-2 encoding of the operator sum.
+      @test maxlinkdim(dw) == 2
+      # Traceless: there is no identity-string component.
+      @test inner(pauli_basis_state(local_sites, fill(1, nsites)), dw) ≈ 0.0 atol = 1e-12
+    end
+
+    # Custom kink position and coefficient.
+    s = pauli_siteinds(6)
+    dw = pauli_domain_wall_state(s; kink=2, coefficient=0.5)
+    for target in 1:6
+      labels = fill(1, 6)
+      labels[target] = 4
+      @test inner(pauli_basis_state(s, labels), dw) ≈ (target <= 2 ? -0.5 : 0.5) atol = 1e-12
+    end
+  end
+
   @testset "Pauli-basis gate helpers" begin
     hbond = kron(ComplexF64[1 0; 0 -1], ComplexF64[1 0; 0 -1])
     gate = pauli_gate_from_hamiltonian(hbond, 0.0)

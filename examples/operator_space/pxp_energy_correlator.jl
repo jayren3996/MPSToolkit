@@ -1,7 +1,7 @@
 # PXP energy-transport exponent from the infinite-temperature energy correlator,
 # via constrained operator-space DMT
 #
-# This is the COMPANION script to pxp_energy_transport.jl, and the more efficient route to
+# This is the COMPANION script to examples/dmt/pxp_energy_melting.jl, and the more efficient route to
 # the dynamical exponent z. Instead of melting a domain wall, it Heisenberg-evolves a single
 # local energy density in the constrained sector and watches it spread — the protocol of
 #

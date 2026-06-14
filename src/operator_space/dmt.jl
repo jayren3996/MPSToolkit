@@ -284,56 +284,28 @@ function _complete_orthonormal_basis(protected::AbstractMatrix, target_dim::Inte
   element_type = eltype(protected)
   target_dim == 0 && return zeros(element_type, ambient_dim, 0)
 
-  # Preallocate the whole basis and fill it column by column in place. The leading columns are
-  # the trace/connector-aligned singular vectors of `protected` (in singular-value order, so
-  # column 1 is the dominant connector direction `_mat_trunc!` protects); the remaining columns
-  # complete the space from the standard basis. The column selection and the leading protected
-  # block are identical to the previous per-column Gram-Schmidt sweep, but the orthogonalization
-  # is a single BLAS matrix-vector product against the already-filled block instead of a scalar
-  # loop, and the basis grows in place rather than via repeated `hcat`. That removes the O(d^3)
-  # allocation traffic (`hcat` reallocating the basis and `basis[:, j]` copies every step) that
-  # dominated DMT evolution runtime.
-  basis = Matrix{element_type}(undef, ambient_dim, target_dim)
-  filled = 0
-  if size(protected, 2) > 0
-    factorization = svd(Matrix(protected))
-    scale = isempty(factorization.S) ? zero(real(float(one(element_type)))) : maximum(factorization.S)
-    tolerance = max(ambient_dim, size(protected, 2)) * eps(real(float(scale == 0 ? one(scale) : scale))) * max(scale, one(scale))
-    protected_rank = min(count(>(tolerance), factorization.S), target_dim)
-    if protected_rank > 0
-      @views basis[:, 1:protected_rank] .= factorization.U[:, 1:protected_rank]
-      filled = protected_rank
-    end
+  # Return an orthonormal basis of the ambient space whose leading columns are the
+  # trace/connector-aligned directions of `protected` (in singular-value order, so column 1 is the
+  # dominant connector `_mat_trunc!` protects) and whose trailing columns span the orthogonal
+  # complement. A LAPACK *full* SVD delivers exactly this: `U[:, 1:rank]` are the connector singular
+  # vectors and the remaining `U` columns are an orthonormal basis of the null space of `protected'`.
+  #
+  # This MUST use a backward-stable factorization, NOT a hand-rolled Gram-Schmidt completion. A
+  # single classical-GS sweep of standard-basis vectors (the previous implementation) loses
+  # orthogonality catastrophically for *structured* `protected` whose connector directions nearly
+  # align with standard-basis axes: a near-dependent candidate passes the linear-dependence test
+  # with a tiny residual, is normalized, and yields a column with O(1) orthonormality defect
+  # (observed: ||U'U - I|| ~ 3-13 on evolved-Pauli connector blocks). Because `_dmt_bond_truncate!`
+  # reconstructs the bond operator via the similarity transform `left_basis * reduced * right_basis'`
+  # -- valid only for *unitary* bases -- a non-orthonormal basis silently corrupts the operator and
+  # destroys the local-observable / conserved-charge preservation that is the entire point of DMT.
+  # Random `protected` (as in the unit tests) does not trigger the GS failure, which is why the
+  # defect went unnoticed; an evolved Pauli operator does.
+  if size(protected, 2) == 0
+    return Matrix{element_type}(I, ambient_dim, ambient_dim)[:, 1:target_dim]
   end
-
-  candidate = Vector{element_type}(undef, ambient_dim)
-  projection = Vector{element_type}(undef, target_dim)
-  column = 0
-  while filled < target_dim && column < ambient_dim
-    column += 1
-    fill!(candidate, zero(element_type))
-    candidate[column] = one(element_type)
-    if filled > 0
-      block = @view basis[:, 1:filled]
-      coefficients = @view projection[1:filled]
-      mul!(coefficients, block', candidate)                                       # coefficients = block' * e_column
-      mul!(candidate, block, coefficients, -one(element_type), one(element_type)) # candidate -= block * coefficients
-    end
-    candidate_norm = norm(candidate)
-    # Linear-dependence test relative to the candidate's *original* unit norm, not the
-    # post-projection residual. Each candidate starts as a unit standard-basis vector, so a
-    # genuinely new direction leaves an O(1) residual while a dependent one leaves only
-    # O(ambient * eps) roundoff. Scaling the threshold by the residual's own magnitude (as a
-    # naive `eps(candidate_norm)` would) collapses it to ~eps^2 for roundoff residuals, which
-    # then pass as spurious near-duplicate columns and break orthonormality.
-    if candidate_norm > ambient_dim * eps(one(real(float(candidate_norm))))
-      filled += 1
-      @views basis[:, filled] .= candidate ./ candidate_norm
-    end
-  end
-
-  filled == target_dim || throw(ArgumentError("could not complete orthonormal DMT basis"))
-  return basis
+  u = svd(Matrix(protected); full=true).U
+  return u[:, 1:target_dim]
 end
 
 """

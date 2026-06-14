@@ -90,6 +90,82 @@ function pauli_total_sz_state(sites; coefficient::Union{Nothing,Number}=nothing)
 end
 
 """
+    pauli_domain_wall_state(sites; kink=length(sites) ÷ 2, coefficient=1.0)
+
+Build the Pauli-basis `MPS` representing the signed single-`Z` domain-wall operator
+`D = ∑_j sign(j - kink) · σ^z_j`, with per-site coefficient
+`c_j = -coefficient` for `j ≤ kink` and `+coefficient` for `j > kink`.
+
+This is the infinitesimal (linear-response, infinite-temperature) domain-wall source used in
+spin-transport studies: Heisenberg/Schrödinger-evolving `D` and reading the single-`Z` profile
+`tr(D(t) σ^z_x)` gives the melting magnetization profile whose spreading sets the dynamical
+exponent. It is the antisymmetric sibling of [`pauli_total_sz_state`](@ref) (which is the
+uniform `∑_j σ^z_j`).
+
+# Arguments
+- `sites`: Pauli-space site indices, typically from [`pauli_siteinds`](@ref).
+
+# Keyword Arguments
+- `kink`: Site index after which the sign flips from `-` to `+`. The default `length(sites) ÷ 2`
+  places the wall on the central bond (perfectly antisymmetric for even `length(sites)`). Must
+  lie in `0:length(sites)`.
+- `coefficient`: Magnitude of each single-`Z` coefficient. The overall scale is arbitrary for
+  ratio observables (it cancels in a normalized profile).
+
+# Returns
+- An `MPS` representation of the operator in Pauli space.
+
+# Notes
+- Like [`pauli_total_sz_state`](@ref) the returned state is not a product state; it uses bond
+  dimension `2` to encode the operator sum compactly (the running-sum link state `1` = "single
+  `Z` not yet placed", state `2` = "placed, identity henceforth"). The per-site sign is folded
+  into the `Z`-placement amplitude, so the bond dimension is independent of `kink`.
+- `D` is traceless, so measure its profile with `normalize=false` (see
+  [`pauli_expectation_profile`](@ref)).
+
+# Examples
+```jldoctest
+julia> sites = pauli_siteinds(4);
+
+julia> dw = pauli_domain_wall_state(sites);
+
+julia> length(dw)
+4
+```
+"""
+function pauli_domain_wall_state(sites; kink::Integer=length(sites) ÷ 2, coefficient::Number=1.0)
+  nsites = length(sites)
+  nsites < 1 && throw(ArgumentError("pauli_domain_wall_state requires at least one site"))
+  0 <= kink <= nsites || throw(ArgumentError("kink must lie in 0:length(sites)"))
+  zcoef(j) = j <= kink ? -coefficient : coefficient   # single-Z coefficient c_j on site j
+  nsites == 1 && return pauli_basis_state(sites, [4]; coefficient=zcoef(1))
+
+  left_link = Index(2, "OperatorStateLink,n=1")
+  first = ITensor(sites[1], left_link)
+  first[sites[1] => 1, left_link => 1] = 1.0
+  first[sites[1] => 4, left_link => 2] = zcoef(1)
+
+  tensors = ITensor[first]
+
+  for j in 2:(nsites - 1)
+    right_link = Index(2, "OperatorStateLink,n=$(j)")
+    tensor = ITensor(dag(left_link), sites[j], right_link)
+    tensor[dag(left_link) => 1, sites[j] => 1, right_link => 1] = 1.0
+    tensor[dag(left_link) => 1, sites[j] => 4, right_link => 2] = zcoef(j)
+    tensor[dag(left_link) => 2, sites[j] => 1, right_link => 2] = 1.0
+    push!(tensors, tensor)
+    left_link = right_link
+  end
+
+  last = ITensor(dag(left_link), sites[nsites])
+  last[dag(left_link) => 1, sites[nsites] => 4] = zcoef(nsites)
+  last[dag(left_link) => 2, sites[nsites] => 1] = 1.0
+  push!(tensors, last)
+
+  return MPS(tensors)
+end
+
+"""
     pauli_gate(unitary)
 
 Convert a dense physical unitary acting on spin-1/2 sites into the corresponding dense

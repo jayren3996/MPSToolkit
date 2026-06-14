@@ -271,9 +271,10 @@ end
     corrupted late-time tail would push ``z`` the *wrong* way. Widen the window and raise
     `nsites`/`maxdim` to sharpen the values further, at higher cost.
 
-The full script — with a boundary-contamination guard that drops any fit time at which the
-spreading front has reached the chain edge — is
-[`examples/operator_space/xxz_transport_regimes.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/xxz_transport_regimes.jl).
+A complete, runnable transport script — using the closely related **domain-wall melting** protocol
+(the charge ``\mathcal{T}(t)\sim t^{1/z}`` transferred across the wall in place of the
+autocorrelation width, with the same front-contamination guard) — is
+[`examples/dmt/domain_wall_melting.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/domain_wall_melting.jl).
 
 ## Worked example: constrained energy transport in the PXP chain
 
@@ -384,7 +385,7 @@ extend in time.
 
 The quench protocol: prepare ``\rho(0) \propto e^{-\beta H_L} \otimes e^{+\beta H_R}`` and
 track the transferred energy. From
-[`examples/operator_space/pxp_energy_transport.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_transport.jl):
+[`examples/dmt/pxp_energy_melting.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/pxp_energy_melting.jl):
 
 ```julia
 using MPSToolkit, ITensors, ITensorMPS
@@ -439,7 +440,7 @@ conserved-total drift, and the constraint-leakage probe (residual leakage after 
 vs. leakage accrued by one unprojected sweep):
 [`pxp_energy_correlator.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl)
 and
-[`pxp_energy_transport.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_transport.jl).
+[`pxp_energy_melting.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/pxp_energy_melting.jl).
 
 !!! tip "The checkpoint pattern is generic"
     Nothing in `constrained_dmt_evolve!` is PXP-specific: it interleaves DMT sweeps with any
@@ -513,9 +514,9 @@ pauli_pxp_constraint_projector
 ## Examples
 
 - [examples/operator_space/dmt_scheduler.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/dmt_scheduler.ipynb)
-- [examples/operator_space/xxz_transport_regimes.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/xxz_transport_regimes.jl)
+- [examples/dmt/domain_wall_melting.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/domain_wall_melting.jl)
 - [examples/operator_space/pxp_energy_correlator.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl)
-- [examples/operator_space/pxp_energy_transport.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_transport.jl)
+- [examples/dmt/pxp_energy_melting.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/pxp_energy_melting.jl)
 - [examples/open_systems/pauli_lindblad_tebd.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/open_systems/pauli_lindblad_tebd.ipynb)
 
 ## References
