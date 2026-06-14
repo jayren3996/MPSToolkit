@@ -8,7 +8,10 @@
 #   Ljubotina, Desaules, Serbyn, Papić, "Superdiffusive energy transport in kinetically
 #   constrained models", PRX 13, 011033 (2023),
 #
-# which finds KPZ-class superdiffusion, z = 3/2, for PXP energy transport.
+# which finds an intermediate-time crossover toward KPZ superdiffusion (z = 3/2) for PXP energy
+# transport. Caveat: bare PXP is near-ballistic (z ~ 1) out to t ~ 100 (it sits near a proximate
+# integrable point), the z = 3/2 regime is a long-lived TRANSIENT (t ~ 100-300 or under deformation),
+# and ordinary diffusion (z = 2) is the believed ULTIMATE asymptote.
 #
 # Protocol. The constrained infinite-temperature correlator
 #
@@ -141,7 +144,9 @@ println()
 @printf("late-window fit over t in %s (%d points):  effective 2/z = %.3f  =>  z_eff = %.2f\n",
   fit_window, npts, slope, 2 / slope)
 println("""
-Reference: KPZ-class PXP energy transport has 2/z = 4/3 (z = 3/2), PRX 13, 011033 (2023).
+Reference: the KPZ-class crossover for PXP energy transport has 2/z = 4/3 (z = 3/2), an
+intermediate-time transient (PRX 13, 011033 (2023)); bare PXP is near-ballistic (z ~ 1) out to
+t ~ 100 and the ultimate asymptote is believed to be diffusion (z = 2).
 At this maxdim the measured slope mixes two effects: the slow crossover (true slope still
 ABOVE 4/3 at these times, descending) and truncation (which suppresses M2 growth and pulls
 the slope DOWN — production runs measured ~1.46-1.49 at maxdim=48 vs ~1.32-1.38 at

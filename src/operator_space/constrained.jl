@@ -3,6 +3,12 @@
 
 Run scheduled operator-space DMT evolution with periodic constraint-projection checkpoints.
 
+!!! warning "Density operators only"
+    Like [`dmt_evolve!`](@ref), this is a DMT driver: `rho` must be a near-infinite-temperature
+    **density operator** (e.g. a constrained energy domain-wall melt). DMT protects the trace
+    component, so it must **not** be used to Heisenberg-evolve a **traceless** operator / two-point
+    correlator — use ordinary TEBD for those.
+
 The driver executes the `evo.nstep` forward-plus-reverse DMT sweeps of
 [`dmt_evolve!`](@ref) in chunks of `project_every` sweeps; after each chunk (including the
 final, possibly shorter one) it applies the operator-space `projector` MPO with
