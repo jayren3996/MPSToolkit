@@ -44,11 +44,11 @@ using ITensorMPS
 using MPSToolkit
 using Printf
 
-# ---- parameters (default = cheap; raise NSITES / MAXDIM / T_MAX for a sharper "detailed" run) ----
+# ---- parameters (converged defaults, ~10 min for 3 regimes; lower MAXDIM / T_MAX / NSITES to smoke-test) ----
 const NSITES           = 80
-const MAXDIM           = 32
+const MAXDIM           = 48
 const DT               = 0.1                 # per-sweep gate time; one evolve! advances t by 2*DT
-const T_MAX            = 12.0
+const T_MAX            = 20.0
 const NCALL            = round(Int, T_MAX / (2 * DT))   # forward+reverse DMT sweeps
 const CONNECTOR_BUFFER = 4
 const GATE_MAXDIM      = 4 * MAXDIM
