@@ -257,6 +257,31 @@ end
     end
   end
 
+  @testset "DMT preserves total S^z for a structured traceless operator (basis-completion regression)" begin
+    # The connector basis from `_complete_orthonormal_basis` must be UNITARY: `_dmt_bond_truncate!`
+    # reconstructs the bond operator via `left_basis * reduced * right_basis'`, so a non-orthonormal
+    # basis silently destroys DMT's local-observable preservation. Total S^z commutes with every XXZ
+    # bond gate, so for the traceless domain-wall operator D = sum_j sign(j - kink) sigma^z_j the
+    # charge sum_x tr(D(t) sigma^z_x) is conserved at 0 exactly. A structured (evolved-Pauli)
+    # operator exercises the Gram-Schmidt completion failure mode that random unit-test inputs miss;
+    # the buggy completion drove this charge to O(1), a correct (orthonormal) basis keeps it at the
+    # truncation floor (~1e-4 here, vs |dSp| ~ 13 with the defect).
+    nsites = 12
+    sites = pauli_siteinds(nsites)
+    state = pauli_domain_wall_state(sites; kink=nsites ÷ 2)
+    gate = pauli_gate_from_hamiltonian(spinhalf_xyz_bond_hamiltonian(; Jx=1.0, Jy=1.0, Jz=1.0), 0.1)
+    schedule = collect(1:(nsites - 1))
+    evo = DMTGateEvolution(gate, 0.1; schedule=schedule, reverse_schedule=reverse(schedule),
+      maxdim=24, cutoff=1e-10, gate_maxdim=96, connector_buffer=4, normalize=false)
+    Z = pauli_matrices().Z
+    total_charge(psi) = sum(real.(pauli_expectation_profile(psi, [(x, Z) for x in 1:nsites]; normalize=false)))
+    @test abs(total_charge(state)) < 1e-10           # exact at t = 0
+    for _ in 1:8
+      evolve!(state, evo)
+      @test abs(total_charge(state)) < 1e-2          # conserved under DMT truncation
+    end
+  end
+
   @testset "DMT truncates every internal bond of wider update windows" begin
     for span in (1, 2, 3, 4, 5)
       nsites = span + 3
