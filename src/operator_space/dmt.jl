@@ -7,8 +7,12 @@ Options controlling operator-space density matrix truncation (DMT).
     DMT is a specialized truncation scheme designed for **transport** (e.g. spin or energy
     diffusion) in operator space.  It protects local reduced operator data, including the
     identity/trace component and nearby Pauli components, before truncating connected
-    long-range correlations. For general operator-space evolution without this transport
-    bias, use ordinary TEBD truncation (`LocalGateEvolution`) instead.
+    long-range correlations. Because the protected anchor IS the trace/identity component, DMT is
+    valid only for near-infinite-temperature **density operators** (e.g. an energy domain-wall
+    melt). Do **not** apply it to a **traceless** operator such as a two-point correlator (e.g.
+    `P_G h_c P_G`): there is no trace component to anchor the truncation, so it runs outside its
+    design regime. For correlators — or any general operator-space evolution without this transport
+    bias — use ordinary TEBD truncation (`LocalGateEvolution`) instead.
 
 # Fields
 - `maxdim`: Target bond dimension after DMT truncation.
@@ -603,6 +607,12 @@ Run scheduled operator-space DMT evolution.
 
 This driver is intended for **transport simulations** (e.g. spin or energy diffusion).  See
 [`DMTOptions`](@ref) for the transport-specific assumptions built into DMT truncation.
+
+!!! warning "Density operators only — not traceless operators / correlators"
+    DMT protects the trace/identity component, so `psi` must be a near-infinite-temperature
+    **density operator** (e.g. an energy domain-wall melt). Do **not** use it to Heisenberg-evolve a
+    **traceless** operator such as a two-point correlator — there is no trace to anchor the
+    truncation. Use ordinary TEBD (`tebd_evolve!` / [`LocalGateEvolution`](@ref)) for those.
 
 # Arguments
 - `psi`: Operator-space `MPS` to mutate in place.

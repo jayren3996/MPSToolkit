@@ -289,8 +289,11 @@ flips a site only when both neighbors are in the ground state. Every term theref
 with the global constraint projector ``P_G = \prod_j (1 - n_j n_{j+1})``: dynamics never
 connects the constrained sector (no adjacent excitations) to blockade-violating
 configurations. Energy is the only local conserved density, and its high-temperature
-transport is *superdiffusive*, with dynamical exponent ``z = 3/2`` in the KPZ universality
-class (Ljubotina, Desaules, Serbyn, Papić, PRX **13**, 011033 (2023)).
+transport shows a slow crossover: bare PXP sits near a proximate integrable point and is
+*near-ballistic* (``z \approx 1``) out to ``t \sim 100``, reaching KPZ superdiffusion (``z = 3/2``)
+only as an intermediate-time transient, with ordinary *diffusion* (``z = 2``) the believed
+ultimate asymptote (Ljubotina, Desaules, Serbyn, Papić, PRX **13**, 011033 (2023); McRoberts &
+Moessner, PRL **133**, 256301 (2024)).
 
 Simulating this with DMT needs three constraint-aware ingredients beyond the XXZ workflow
 above, all built from the model helpers `pxp_term_hamiltonian` / `pxp_term_support` and the
@@ -312,76 +315,27 @@ constraint MPO `pxp_constraint_mpo`:
    choice no term couples the halves and the two exponentials factorize *exactly*. (Assigning
    straddling terms by their center site instead differs only by an ``O(\beta)`` local
    distortion at the wall and gives the same hydrodynamics.) Because each ``h_j`` commutes
-   with ``P_G``, the preparation stays in the constrained sector up to truncation error. For
-   a correlator run the initial state is instead a sector-projected local energy density,
-   built by vectorizing the term's MPO and applying the constraint projector once.
+   with ``P_G``, the preparation stays in the constrained sector up to truncation error.
 3. **Constraint checkpoints during evolution.** Exact gates commute with ``P_G``, but DMT (or
    any) truncation leaks weight out of the sector. The operator-space projector MPO
    ``\rho \mapsto P_G \rho P_G`` — `pauli_pxp_constraint_projector(sites)`, bond dimension 4,
    built by the generic `pauli_superoperator_mpo` — removes the leaked weight, and
    `constrained_dmt_evolve!` interleaves it with the DMT sweeps.
 
-Two ready-made protocols use these ingredients; both ship as full scripts under
-[`examples/operator_space/`](https://github.com/jayren3996/MPSToolkit/tree/main/examples/operator_space).
+The energy domain-wall melt below is the **only** DMT protocol; it ships as a full script at
+[`examples/dmt/pxp_energy_melting.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/pxp_energy_melting.jl).
 
-### Protocol 1 — infinite-temperature energy correlator (the efficient exponent route)
+!!! warning "DMT is for density operators, not two-point correlators"
+    DMT truncation protects the **identity/trace component** and nearby local Pauli data of a
+    near-infinite-temperature *density operator* (see [`DMTOptions`](@ref)) — that is the regime it
+    was designed and validated for, and the domain-wall melt below, where ``\rho(t)`` is exactly
+    such a state, is its intended use. Do **not** use DMT (`dmt_evolve!` / `constrained_dmt_evolve!`)
+    to Heisenberg-evolve a *traceless* operator such as a two-point energy correlator
+    ``O(0) \propto P_G h_c P_G``: a traceless operator has no trace component for DMT to anchor on,
+    so the truncation runs outside its design regime. Evolve correlation / Green's functions with
+    ordinary TEBD ([`LocalGateEvolution`](@ref) / `tebd_evolve!`) instead.
 
-Heisenberg-evolve a single **sector-projected local energy density**,
-``O(0) \propto P_G h_c P_G``, and watch it spread: the profile
-``C(x, t) = \mathrm{tr}(P_G h_x O(t))`` is the constrained infinite-temperature
-energy-energy correlator, and its second moment grows as
-``M_2(t) \sim t^{2/z}`` — asymptotic log-log slope ``4/3`` for ``z = 3/2``. This is the
-protocol of PRX **13**, 011033, condensed from
-[`examples/operator_space/pxp_energy_correlator.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl):
-
-```julia
-using MPSToolkit, ITensors, ITensorMPS
-
-nsites, c, chi, dt = 48, 24, 32, 0.1
-sites = pauli_siteinds(nsites)
-terms = [(first(pxp_term_support(nsites, j)), pxp_term_hamiltonian(nsites, j)) for j in 1:nsites]
-projector = pauli_pxp_constraint_projector(sites)
-
-phys = siteinds("S=1/2", nsites)                  # O(0) = P_G h_c P_G, vectorized
-os = OpSum(); os += "ProjUp", c - 1, "X", c, "ProjUp", c + 1   # "Up" = our |0>
-O = pauli_state_from_mpo(MPO(os, phys), sites)
-O = apply(projector, O; maxdim=4chi, cutoff=1e-12); normalize!(O)
-
-gates = [pauli_gate_from_hamiltonian(h, dt) for (_, h) in terms]
-schedule = [start for (start, _) in terms]
-evo = DMTGateEvolution(gates, dt; schedule, reverse_schedule=reverse(schedule),
-    nstep=1, maxdim=chi, cutoff=1e-12, gate_maxdim=4chi, connector_buffer=8)
-
-M2 = Float64[]
-for k in 1:60                                     # one call advances t by 2*dt
-    constrained_dmt_evolve!(O, evo, projector; project_every=1, normalize=false)
-    p = real.(pauli_expectation_profile(O, terms; normalize=false))  # traceless: unnormalized
-    push!(M2, sum((j - c)^2 * p[j] for j in 1:nsites) / sum(p))
-end
-```
-
-Two conventions in this snippet are load-bearing for a **traceless** operator:
-`normalize=false` in the evolution (truncation sheds Hilbert–Schmidt norm faster than the
-DMT-protected components, so the default per-sweep renormalization silently inflates
-absolute traces — and with it the conserved total ``\sum_x C(x,t) = \mathrm{tr}(P_G H\,
-O(t))``, which with `normalize=false` becomes the run's truncation error bar), and
-`normalize=false` in the profile measurement (the trace it would divide by vanishes).
-Production-validated reference points for the crossover (``N = 64``), committed as a
-reproducible reference in `examples/operator_space/data/pxp_energy_correlator_chi48_N64.csv`
-(re-fit by `examples/operator_space/pxp_energy_correlator_reference.jl`, and pinned in
-`test/test_pxp.jl`): the local ``M_2`` slope plateaus at **1.46–1.50 over** ``t = 8\!-\!14``
-at ``\chi = 48`` (LSQ ``2/z = 1.48``), robustly above the diffusive ``1.0`` and **descending
-toward** ``4/3`` **from above** — it has *not* reached the asymptote. The `normalize=false`
-conserved-total drift is the run's truncation error bar: it stays within **1–6% only through**
-``t \approx 10`` and grows to **~9–12% by** ``t = 12\!-\!14``, so the top of the window is the
-least trustworthy part of the plateau, and reaching the asymptotic ``4/3`` (expected only at
-``t \gtrsim 20\!-\!30``) requires ``\chi > 48`` — not merely longer times. By contrast
-``\chi = 32`` (the shipped demo default) reads **1.30–1.38**: truncation suppresses ``M_2``
-growth and pulls the slope *down*, so an undershooting slope near the target there is a
-truncation artifact, not convergence. Raise `maxdim` until the slope stops moving up, then
-extend in time.
-
-### Protocol 2 — energy domain-wall melt
+### Energy domain-wall melt — the DMT protocol
 
 The quench protocol: prepare ``\rho(0) \propto e^{-\beta H_L} \otimes e^{+\beta H_R}`` and
 track the transferred energy. From
@@ -427,19 +381,16 @@ inflated until the next sweep adds substantial cost per sweep (measured 1.3–2�
 ``\chi`` and growing with ``\chi``) for no measured accuracy gain.
 
 One further lesson from the production-scale validation runs: **profile mirror symmetry is
-a useful truncation gauge**. Both protocols are mirror-symmetric setups, so the profile
+a useful truncation gauge**. The melt is a mirror-symmetric setup, so the profile
 asymmetry should vanish in exact arithmetic; in practice it grows with truncation pressure
 and *shrinks* with increasing ``\chi`` (it is truncation noise, not a sweep-direction bias).
 Monitoring it alongside the conserved total gives a cheap convergence diagnostic.
 
-In both protocols the measurement is `pauli_expectation_profile(rho, terms)`, which
+In the melt the measurement is `pauli_expectation_profile(rho, terms)`, which
 evaluates every ``\mathrm{tr}(\rho h_j)`` (over ``\mathrm{tr}(\rho)`` when normalized) in
-one ``O(N)`` pass with cumulative identity environments, mixed window sizes included. The
-full scripts add the diagnostics discussed above — the local-slope crossover column, the
-conserved-total drift, and the constraint-leakage probe (residual leakage after projection
-vs. leakage accrued by one unprojected sweep):
-[`pxp_energy_correlator.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl)
-and
+one ``O(N)`` pass with cumulative identity environments, mixed window sizes included. The full script adds the diagnostics discussed above — the local-slope crossover column, the
+conserved-total drift, and the constraint-leakage probe (residual leakage after projection vs.
+leakage accrued by one unprojected sweep):
 [`pxp_energy_melting.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/pxp_energy_melting.jl).
 
 !!! tip "The checkpoint pattern is generic"
@@ -469,10 +420,12 @@ state builders, and gate builders shared by both, see [Operator Space](operator-
 
 ## Tips and pitfalls
 
-- **Use DMT only for transport.** The whole point of the method is the identity-preserving
-  bias. If you are computing something that is *not* a conserved-density transport quantity —
-  generic operator growth, out-of-time-order correlators, an arbitrary observable's Heisenberg
-  evolution — that bias is wrong and ordinary operator-space TEBD truncation
+- **Use DMT only for the density-operator melt.** The whole point of the method is the
+  identity-preserving bias, so it applies only to a near-infinite-temperature *density operator*
+  whose transport you track (the domain-wall melt). If you are evolving a *traceless* operator —
+  a two-point / autocorrelation function of a conserved density, generic operator growth,
+  out-of-time-order correlators, or an arbitrary observable's Heisenberg evolution — that bias is
+  wrong (there is no trace component to anchor it), and ordinary operator-space TEBD truncation
   ([`LocalGateEvolution`](@ref) with `tebd_evolve!`) is the right tool.
 - **Tune `maxdim`, `gate_maxdim`, and `connector_buffer` together.** A large `gate_maxdim`
   lets a gate inflate the bond a lot before DMT truncates it back to `maxdim`; with a small
@@ -515,8 +468,8 @@ pauli_pxp_constraint_projector
 
 - [examples/operator_space/dmt_scheduler.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/dmt_scheduler.ipynb)
 - [examples/dmt/domain_wall_melting.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/domain_wall_melting.jl)
-- [examples/operator_space/pxp_energy_correlator.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl)
-- [examples/dmt/pxp_energy_melting.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/pxp_energy_melting.jl)
+- [examples/dmt/pxp_energy_melting.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/pxp_energy_melting.jl) — the energy domain-wall melt (the DMT protocol)
+- [examples/operator_space/pxp_energy_correlator.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl) — *off-label*: evolves a traceless operator with DMT (see the warning above); prefer TEBD for correlators
 - [examples/open_systems/pauli_lindblad_tebd.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/open_systems/pauli_lindblad_tebd.ipynb)
 
 ## References
