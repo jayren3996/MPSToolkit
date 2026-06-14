@@ -53,6 +53,7 @@ end
     :pauli_components,
     :pauli_basis_state,
     :pauli_total_sz_state,
+    :pauli_domain_wall_state,
     :pauli_gate,
     :pauli_gate_from_hamiltonian,
     :pauli_lindblad_generator,

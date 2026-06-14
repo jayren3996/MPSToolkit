@@ -271,9 +271,10 @@ end
     corrupted late-time tail would push ``z`` the *wrong* way. Widen the window and raise
     `nsites`/`maxdim` to sharpen the values further, at higher cost.
 
-The full script — with a boundary-contamination guard that drops any fit time at which the
-spreading front has reached the chain edge — is
-[`examples/operator_space/xxz_transport_regimes.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/xxz_transport_regimes.jl).
+A complete, runnable transport script — using the closely related **domain-wall melting** protocol
+(the charge ``\mathcal{T}(t)\sim t^{1/z}`` transferred across the wall in place of the
+autocorrelation width, with the same front-contamination guard) — is
+[`examples/dmt/domain_wall_melting.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/domain_wall_melting.jl).
 
 ## Worked example: constrained energy transport in the PXP chain
 
@@ -513,7 +514,7 @@ pauli_pxp_constraint_projector
 ## Examples
 
 - [examples/operator_space/dmt_scheduler.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/dmt_scheduler.ipynb)
-- [examples/operator_space/xxz_transport_regimes.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/xxz_transport_regimes.jl)
+- [examples/dmt/domain_wall_melting.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/domain_wall_melting.jl)
 - [examples/operator_space/pxp_energy_correlator.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl)
 - [examples/operator_space/pxp_energy_transport.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_transport.jl)
 - [examples/open_systems/pauli_lindblad_tebd.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/open_systems/pauli_lindblad_tebd.ipynb)
