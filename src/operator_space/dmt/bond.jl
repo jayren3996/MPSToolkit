@@ -173,6 +173,13 @@ function _dmt_bond_truncate!(
   # silently correct for a Hermitian operator and badly wrong otherwise.
   protected_left = conj(matrix(left_protected * left_combiner, left_link, combinedind(left_combiner)))
   protected_right = matrix(right_protected * right_combiner, right_link, combinedind(right_combiner))
+  # The fused width is the `d^(2 radius)` the budget arithmetic assumes; assert it rather than
+  # trust that `left_sites`/`right_sites` still enumerate the protected window. `combiner` fuses
+  # in an unspecified order, which is harmless for the span, but column 1 must still be the
+  # all-identity multi-index for `q0`/`r0` below -- index 1 of every factor maps to index 1 of
+  # any product ordering, and `test_dmt_higher_spin.jl` pins that against an identity cap.
+  @assert size(protected_left, 2) == d^(2 * left_count)
+  @assert size(protected_right, 2) == d^(2 * right_count)
 
   bond_matrix = Diagonal(real.(diag(matrix(s, left_link, right_link))))
   chi = size(bond_matrix, 1)
