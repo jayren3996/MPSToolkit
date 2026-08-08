@@ -22,7 +22,7 @@ comprehension benefit.
 - Branch: `feat/higher-spin-dmt`. Baseline on this branch is fully green; keep it green after every task.
 - Run tests with `julia --project=. -e 'using Pkg; Pkg.test()'` from the repo root. Single-file runs: `julia --project=. test/test_dmt.jl` (test files are self-contained and `using MPSToolkit`).
 - Julia compat floor is `1.10`; do not use syntax newer than that.
-- Every `operator_*` function must have a `pauli_*` wrapper that is **exactly** the `d = 2` case, and existing `pauli_*` call sites must keep working unchanged.
+- Every `pauli_*` name that exists today must keep working unchanged, implemented as **exactly** the `d = 2` case of its `operator_*` counterpart. New `operator_*` functions with no pre-existing spin-1/2 counterpart (`operator_product_state`, `operator_local_sum_state`) need no wrapper.
 - Local basis element 1 is always `I / sqrt(d)`. The DMT kernel depends on this and on Hilbert-Schmidt orthonormality, and on nothing else about the basis.
 - `maxdim` is the **total** post-truncation bond dimension, inclusive of the protected block: `chi' = maxdim - 2 d^(2n)`, floor `maxdim >= 2 d^(2n) + 1`, with `n = (preserve_diameter - 1) / 2`.
 - The left protected block uses `conj(...)` — the paper's pairing is `M = Q_L^T s Q_R`, a transpose. Omitting it is silently correct for Hermitian operators and ~50% wrong otherwise.
