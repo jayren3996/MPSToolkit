@@ -51,6 +51,8 @@ end
     :pauli_matrices,
     :pauli_basis,
     :pauli_components,
+    :operator_basis_matrices,
+    :local_dimension,
     :pauli_basis_state,
     :pauli_total_sz_state,
     :pauli_domain_wall_state,

@@ -20,6 +20,7 @@ include("scarfinder/dispatch.jl")
 include("scarfinder/selectors.jl")
 include("scarfinder/algorithm.jl")
 include("bases/pauli.jl")
+include("bases/operator_basis.jl")
 include("models/spinhalf.jl")
 include("models/pxp.jl")
 include("operator_space/helpers.jl")
@@ -92,8 +93,8 @@ end
 Namespace for local basis helpers.
 """
 module Bases
-using ..MPSToolkit: pauli_matrices, pauli_basis, pauli_components
-export pauli_matrices, pauli_basis, pauli_components
+using ..MPSToolkit: pauli_matrices, pauli_basis, pauli_components, operator_basis_matrices, local_dimension
+export pauli_matrices, pauli_basis, pauli_components, operator_basis_matrices, local_dimension
 end
 
 """
@@ -204,7 +205,7 @@ export evolve!, project!, energy_density, bond_entropy, entanglement_spectrum, f
 export scarfinder_step!, scarfinder!
 export LocalGateEvolution, DMTGateEvolution, TDVPEvolution, BondDimTruncation, EnergyTarget, SelectionContext, EntropySelector, FidelitySelector
 export tebd_evolve!, dmt_evolve!, tdvp_evolve!, local_gates_from_hamiltonians, tebd_evolution_from_hamiltonians, tebd_strang_schedule, tebd_strang_evolution
-export pauli_matrices, pauli_basis, pauli_components
+export pauli_matrices, pauli_basis, pauli_components, operator_basis_matrices, local_dimension
 export spinhalf_matrices, spinhalf_xyz_bond_hamiltonian, spinhalf_tfim_bond_hamiltonian
 export pxp_term_hamiltonian, pxp_term_support, pxp_constraint_mpo
 export pauli_siteinds, pauli_basis_state, pauli_total_sz_state, pauli_domain_wall_state, pauli_gate, pauli_gate_from_hamiltonian, pauli_lindblad_generator, pauli_gate_from_lindbladian, DMTOptions, dmt_step!, dmt_evolve!, pauli_daoe_projector, pauli_fdaoe_projector, fdaoe_projector

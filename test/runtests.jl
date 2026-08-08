@@ -7,6 +7,7 @@ end
 
 include("test_core.jl")
 include("test_docstrings.jl")
+include("test_operator_basis.jl")
 include("test_finite_tebd.jl")
 include("test_finite_tdvp.jl")
 include("test_operator_space.jl")
