@@ -19,6 +19,21 @@ using Test
     end
   end
 
+  @testset "_protected_basis stays orthonormal on a rank-deficient block" begin
+    # `randn` inputs are full rank and do not exercise the degenerate case. This function's
+    # predecessor (`_complete_orthonormal_basis`) shipped a real orthogonality bug that random
+    # inputs did not catch, so duplicate / scaled / zero columns are tested explicitly: the
+    # basis must stay orthonormal AND still span every input column.
+    chi = 24
+    base = randn(ComplexF64, chi, 2)
+    protected = hcat(base[:, 1], base[:, 1], base[:, 2], zeros(ComplexF64, chi), 3.0 * base[:, 1])
+    @test rank(protected; atol = 1e-10) == 2      # genuinely rank deficient
+    basis = MPSToolkit._protected_basis(protected)
+    @test size(basis) == (chi, 5)
+    @test basis' * basis ≈ Matrix{ComplexF64}(I, 5, 5) atol = 1e-12
+    @test norm(protected - basis * (basis' * protected)) < 1e-10
+  end
+
   @testset "the connector is rank one and annihilated by B" begin
     for bond_matrix in (Diagonal(ComplexF64.(sort(rand(30); rev = true))),
                         UpperTriangular(randn(ComplexF64, 30, 30)))

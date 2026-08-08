@@ -100,8 +100,21 @@ include("dmt_test_helpers.jl")
   @testset "budget validation names the local dimension" begin
     sites = operator_siteinds(6; d=2)
     rho = random_mps(ComplexF64, sites; linkdims=20)
-    # 2 d^2 + 1 = 9 for d = 2
-    @test_throws ArgumentError MPSToolkit._dmt_bond_truncate!(rho, 3; maxdim=8, cutoff=0.0)
+    # 2 d^2 + 1 = 9 for d = 2. Assert the MESSAGE, not just the type: the whole point of this
+    # error is to tell a caller which floor applies at their local dimension and that `maxdim`
+    # changed meaning, and a bare `@test_throws ArgumentError` would pass on any of them.
+    failure = try
+      MPSToolkit._dmt_bond_truncate!(rho, 3; maxdim=8, cutoff=0.0)
+      nothing
+    catch exception
+      exception
+    end
+    @test failure isa ArgumentError
+    message = sprint(showerror, failure)
+    @test occursin("local dimension d = 2", message)
+    @test occursin("maxdim >= 2 d^(preserve_diameter - 1) + 1 = 9", message)
+    @test occursin("total bond dimension, inclusive of the protected block", message)
+
     @test MPSToolkit._dmt_bond_truncate!(rho, 3; maxdim=9, cutoff=0.0) === rho
     @test_throws ArgumentError DMTOptions(maxdim=30, preserve_diameter=4)   # must be odd
   end

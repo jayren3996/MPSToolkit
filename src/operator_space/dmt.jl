@@ -236,7 +236,7 @@ function _validate_operator_space(psi::MPS, start::Integer, span::Integer)
   return d
 end
 
-function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span::Integer, direction::Symbol, maxdim::Integer)
+function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span::Integer, direction::Symbol, maxdim::Integer, preserve_diameter::Integer)
   direction === :R || direction === :L || throw(ArgumentError("DMT direction must be :R or :L"))
   maxdim >= 1 || throw(ArgumentError("DMT maxdim must be >= 1"))
   start >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
@@ -246,6 +246,12 @@ function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span
   # gate on a non-operator-space (non-square-dimension) or non-uniform-dimension site is
   # rejected rather than silently accepted.
   _validate_operator_space(psi, start, span)
+  # The budget floor must be checked HERE, not only inside `_dmt_bond_truncate!`: `dmt_step!`
+  # reaches the kernel only after `tebd_evolve!` has applied the gate and re-gauged `psi`, so a
+  # kernel-side throw would leave a half-updated state behind and break the "invalid DMT calls
+  # do not mutate the state" invariant. Checked before the `span == 1` return as well, which
+  # otherwise never reaches the kernel and would skip budget validation entirely.
+  _validate_dmt_budget(psi, maxdim, preserve_diameter)
   span == 1 && return nothing
   start == length(psi) && throw(ArgumentError("periodic boundary DMT is not implemented for local gates"))
   for bond in start:(last_site - 1)
@@ -354,7 +360,7 @@ function dmt_step!(
   _reject_connector_buffer(connector_buffer)
   start = _bond_start(bond)
   span = _operator_span_at(psi, gate, start)
-  _validate_dmt_step(psi, gate, start, span, direction, Int(maxdim))
+  _validate_dmt_step(psi, gate, start, span, direction, Int(maxdim), Int(preserve_diameter))
   # `tebd_evolve!` (ITensorMPS `product`) re-gauges the path between the old orthocenter and the
   # gate window. Capture the limits first so the env cache can invalidate that bounded range.
   if !isnothing(cache)

@@ -174,6 +174,27 @@ end
     @test dim(linkind(psi, 3)) >= 8
   end
 
+  @testset "maxdim is enforced on a genuinely traceless operator" begin
+    # The tight case against the budget. With zero trace the connector is disabled (a = 0), so
+    # B = S: `B QR` keeps its first column and `QL' B` its first row, both protected blocks are
+    # full rank, and the reinstated matrix saturates 2 d^2 + (maxdim - 2 d^2) = maxdim exactly.
+    # This is why the budget cannot be widened to `maxdim - 2 d^2 + 1` -- that would overflow
+    # here and `_dmt_refactor` would clip a genuinely protected direction.
+    sites = pauli_siteinds(7)
+    noise = random_mps(ComplexF64, sites; linkdims=24)
+    identity_state = pauli_basis_state(sites, fill(1, 7))
+    # Subtracting the identity component zeroes the trace exactly while leaving the left and
+    # right identity environments individually nonzero, which is what makes q0' S r0 vanish.
+    traceless = add(noise, -inner(identity_state, noise) * identity_state; maxdim=32, cutoff=0.0)
+    @test abs(pauli_trace(traceless)) < 1e-10 * norm(traceless)
+    @test dim(linkind(traceless, 4)) > 20
+
+    MPSToolkit._dmt_bond_truncate!(traceless, 4; maxdim=20, cutoff=0.0)
+    @test dim(linkind(traceless, 4)) <= 20
+    @test abs(pauli_trace(traceless)) < 1e-10 * norm(traceless)
+    @test all(isfinite, [real(inner(traceless, traceless)), imag(inner(traceless, traceless))])
+  end
+
   @testset "DMT truncates a generic bond into the total budget" begin
     sites = pauli_siteinds(6)
     psi = random_mps(sites; linkdims=20)
@@ -182,11 +203,15 @@ end
     @test dim(linkind(psi, 3)) == 20
     dmt_step!(psi, _identity_gate(2), 3; maxdim=12, cutoff=1e-12, gate_maxdim=40)
 
-    # A generic bond lands at maxdim - 1, not maxdim. `B = S - C` annihilates the identity
-    # directions, so `QL' B` has a zero first ROW and `B QR` a zero first COLUMN: the rank-one
-    # trace connector shares one direction with the two protected blocks instead of adding one.
-    # The realized rank is therefore 1 + (d^2 - 1) + (d^2 - 1) + (maxdim - 2 d^2) = maxdim - 1.
-    # Budgeting chi' = maxdim - 2 d^2 thus lands one short of maxdim, never over it.
+    # On a TRACE-CARRYING bond the reinstated matrix has RANK maxdim - 1, not maxdim.
+    # `B = S - C` annihilates the identity directions, so `QL' B` has a zero first ROW and
+    # `B QR` a zero first COLUMN: the rank-one trace connector shares one direction with the
+    # two protected blocks instead of adding one, giving
+    # 1 + (d^2 - 1) + (d^2 - 1) + (maxdim - 2 d^2) = maxdim - 1.
+    # The reported DIMENSION only reaches that rank when `cutoff > 0`; at `cutoff = 0.0` the
+    # surplus direction survives at ~1e-16 and the bond stays at maxdim. Either way the budget
+    # chi' = maxdim - 2 d^2 never overflows maxdim -- and on a traceless bond, where the
+    # connector is disabled, the rank does saturate maxdim (see the traceless testset above).
     @test dim(linkind(psi, 3)) == 11
   end
 
@@ -268,6 +293,21 @@ end
     @test_throws ArgumentError dmt_step!(psi, _identity_gate(2), length(psi); direction=:R, maxdim=4, gate_maxdim=16)
     @test _link_dims(psi) == reference_dims
     @test inner(reference, psi) ≈ inner(reference, reference) atol = 1e-12
+
+    # An under-floor maxdim must be rejected BEFORE the gate is applied. The kernel-side check
+    # alone is too late: `dmt_step!` reaches it only after `tebd_evolve!` has mutated and
+    # re-gauged the state, which used to leave link dims [16,16,16,16,4] -> [4,16,16,16,4]
+    # behind on a call that threw.
+    wide = random_mps(ComplexF64, sites; linkdims=16)
+    normalize!(wide)
+    wide_reference = copy(wide)
+    wide_dims = _link_dims(wide)
+    @test_throws ArgumentError dmt_step!(wide, _identity_gate(2), 2; maxdim=5, gate_maxdim=64)
+    @test _link_dims(wide) == wide_dims
+    @test inner(wide_reference, wide) ≈ inner(wide_reference, wide_reference) atol = 1e-12
+    # ... including for a span-1 gate, which never reaches the kernel at all.
+    @test_throws ArgumentError dmt_step!(wide, _identity_gate(1), 2; maxdim=5, gate_maxdim=64)
+    @test _link_dims(wide) == wide_dims
 
     bad_sites = [Index(3, "NotPauli,n=$n") for n in 1:4]
     bad_psi = random_mps(bad_sites; linkdims=4)

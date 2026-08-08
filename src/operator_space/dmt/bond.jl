@@ -15,7 +15,12 @@ end
     _validate_dmt_budget(psi, maxdim, preserve_diameter)
 
 Throw an `ArgumentError` unless `maxdim` leaves room for the protected block. Called once at the
-entry to a DMT bond update, so the failure is immediate rather than mid-sweep.
+entry to a DMT step or sweep, so the failure is immediate rather than mid-sweep.
+
+# Notes
+- `_validate_dmt_step` runs this *before* the gate is applied, so a rejected budget never
+  leaves a partially updated `psi` behind. [`_dmt_bond_truncate!`](@ref) repeats the check as a
+  backstop for callers that reach the kernel directly.
 """
 function _validate_dmt_budget(psi::MPS, maxdim::Integer, preserve_diameter::Integer)
   isodd(preserve_diameter) && preserve_diameter >= 1 ||
@@ -106,6 +111,8 @@ function _dmt_bond_truncate!(
 )
   direction === :R || direction === :L || throw(ArgumentError("DMT direction must be :R or :L"))
   1 <= bond < length(psi) || throw(ArgumentError("DMT bond must lie in 1:length(psi)-1"))
+  # Backstop: `_validate_dmt_step` already rejected an under-floor budget before the gate ran,
+  # so this only fires for callers that enter the kernel directly.
   _validate_dmt_budget(psi, maxdim, preserve_diameter)
   link = linkind(psi, bond)
   isnothing(link) && return psi
