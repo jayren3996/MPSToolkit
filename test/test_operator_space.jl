@@ -569,9 +569,40 @@ end
               pauli_domain_wall_state(sites; kink = 2); maxdim = 4, cutoff = 0.0)
     z = pauli_matrices().Z
     terms = [(x, ComplexF64.(z)) for x in 1:4]
-    @test pauli_trace(rho) ≈ operator_trace(rho) atol = 1e-12
-    @test pauli_expectation_profile(rho, terms; normalize = false) ≈
-          operator_expectation_profile(rho, terms; normalize = false) atol = 1e-12
+
+    # Independent ground truth via dense linear algebra, using the same _dense_operator_from_basis
+    # helper the label-based tests at the top of this file use (not pauli_trace/operator_trace
+    # themselves -- comparing those against each other is tautological, since pauli_trace(rho) IS
+    # literally operator_trace(rho), a one-line delegation that cannot fail regardless of whether
+    # the underlying math is right; this is the same defect class fixed in Task 3's F2 finding).
+    # rho = pauli_basis_state(sites, fill(1, 4)) + pauli_domain_wall_state(sites; kink = 2) is,
+    # in the normalized-Pauli convention, literal_scale * I_16 + literal_scale * sum_j coeffs[j] *
+    # Z_j (embedded, identity elsewhere), with literal_scale = (1/sqrt(2))^4 from the four
+    # P_1 = I/sqrt(2) (resp. P_4 = Z/sqrt(2)) factors, and coeffs = [-1, -1, 1, 1] for kink = 2,
+    # coefficient = 1.0 (default): sites 1:kink get -1, the rest get +1.
+    literal_scale = (1 / sqrt(2))^4
+    coeffs = [-1.0, -1.0, 1.0, 1.0]
+    dense_rho = literal_scale * _dense_operator_from_basis(fill(1, 4))
+    for (j, c) in enumerate(coeffs)
+      labels = fill(1, 4)
+      labels[j] = 4
+      dense_rho += literal_scale * c * _dense_operator_from_basis(labels)
+    end
+    expected_trace = tr(dense_rho)
+    expected_profile = ComplexF64[
+      tr(dense_rho * _dense_operator_from_basis([j == x ? 4 : 1 for j in 1:4])) for x in 1:4
+    ]
+
+    @test operator_trace(rho) ≈ expected_trace atol = 1e-10
+    @test operator_expectation_profile(rho, terms; normalize = false) ≈ expected_profile atol = 1e-10
+
+    # Honest delegation checks: pauli_trace/pauli_expectation_profile ARE operator_trace/
+    # operator_expectation_profile here, so these only confirm the wrapper forwards its
+    # arguments unchanged, not that the underlying math is right -- that is the pinned
+    # comparison above. Exact equality, not approximate: it is the same call.
+    @test pauli_trace(rho) == operator_trace(rho)
+    @test pauli_expectation_profile(rho, terms; normalize = false) ==
+          operator_expectation_profile(rho, terms; normalize = false)
   end
 
   @testset "operator_state_from_mpo round-trips at d = 3" begin

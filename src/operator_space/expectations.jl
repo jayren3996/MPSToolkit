@@ -1,14 +1,10 @@
 """
     operator_trace(rho)
 
-Return the physical trace of a vectorized operator stored as an operator-space `MPS`.
-
-In the normalized operator-basis convention `tr(ρ) = (√d)^N c_{I…I}`, where `c_{I…I}` is the
-amplitude of the all-identity string and `d` is the local Hilbert space dimension recovered
-from `rho`'s site indices, the trace is one identity-environment contraction. The `(√d)^N`
-prefactor overflows `Float64` for `N ≳ 2048 / log2(d)`, so absolute traces of very large
-operators are not representable (far beyond any feasible operator-space MPS size); normalized
-ratio observables are unaffected because the factor cancels.
+Return the physical trace of a vectorized operator stored as an operator-space `MPS`, via
+`tr(ρ) = (√d)^N c_{I…I}`, where `c_{I…I}` is the amplitude of the all-identity string and `d`
+is the local Hilbert space dimension recovered from `rho`'s site indices — one
+identity-environment contraction.
 
 # Arguments
 - `rho`: Operator-space `MPS` on sites of a uniform local dimension `d`, typically from
@@ -16,6 +12,11 @@ ratio observables are unaffected because the factor cancels.
 
 # Returns
 - The trace as a `ComplexF64` (real up to numerical noise for Hermitian operators).
+
+# Notes
+- The `(√d)^N` prefactor overflows `Float64` for `N ≳ 2048 / log2(d)`, so absolute traces of
+  very large operators are not representable (far beyond any feasible operator-space MPS
+  size); normalized ratio observables are unaffected because the factor cancels.
 """
 function operator_trace(rho::MPS)
   d = _validate_operator_space(rho, 1, length(rho))

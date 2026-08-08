@@ -60,8 +60,11 @@ DMT energy-transport runs.
   to truncation error.
 
 # Returns
-- A `normalize!`d operator-space `MPS`. The overall scale is arbitrary; physical
-  expectations divide by the trace (see [`operator_expectation_profile`](@ref)).
+- A `normalize!`d operator-space `MPS`.
+
+# Notes
+- The overall scale is arbitrary; physical expectations divide by the trace (see
+  [`operator_expectation_profile`](@ref)).
 """
 function operator_gibbs_state(
   sites,
