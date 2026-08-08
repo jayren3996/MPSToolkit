@@ -308,3 +308,63 @@ end
     @test pauli_fdaoe_projector(sites; wstar=2, gamma=0.4) isa MPO
   end
 end
+
+@testset "generic operator-space state builders" begin
+  @testset "pauli_* wrappers are exactly the d = 2 case" begin
+    @test dim(first(operator_siteinds(3; d = 2))) == 4
+    @test dim(first(operator_siteinds(3; d = 3))) == 9
+
+    sites = pauli_siteinds(4)
+    a = pauli_basis_state(sites, ["I", "Z", "X", "I"])
+    b = operator_basis_state(sites, [1, 4, 2, 1])
+    @test inner(a, b) ≈ 1.0 atol = 1e-14
+
+    total_via_wrapper = pauli_total_sz_state(sites)
+    total_via_generic = operator_local_sum_state(
+      sites, pauli_matrices().Z / sqrt(2), fill(2.0^(4 / 2 - 1), 4))
+    @test inner(total_via_wrapper, total_via_generic) ≈ inner(total_via_wrapper, total_via_wrapper) atol = 1e-12
+
+    dw_wrapper = pauli_domain_wall_state(sites; kink = 2)
+    dw_generic = operator_local_sum_state(
+      sites, pauli_matrices().Z / sqrt(2), [j <= 2 ? -1.0 : 1.0 for j in 1:4])
+    @test inner(dw_wrapper, dw_generic) ≈ inner(dw_wrapper, dw_wrapper) atol = 1e-12
+  end
+
+  @testset "operator_product_state decomposes dense local matrices" begin
+    # A spin-1 S^z on site 2 of a 3-site chain, identity elsewhere.
+    d = 3
+    sites = operator_siteinds(3; d = d)
+    sz = ComplexF64[1 0 0; 0 0 0; 0 0 -1]
+    identity_matrix = Matrix{ComplexF64}(I, d, d)
+    state = operator_product_state(sites, [identity_matrix, sz, identity_matrix])
+    # Amplitude on basis label mu of site 2, with label 1 (the normalized identity) on the
+    # others: tr(P_mu' * S^z) times tr(P_1' * I) = sqrt(d) on each of the two spectator sites.
+    basis = operator_basis_matrices(d)
+    for mu in 1:d^2
+      probe = operator_basis_state(sites, [1, mu, 1])
+      @test inner(probe, state) ≈ tr(basis[mu]' * sz) * d atol = 1e-12
+    end
+  end
+
+  @testset "operator_local_sum_state builds a bond-dimension-2 sum" begin
+    d = 3
+    sites = operator_siteinds(4; d = d)
+    sz = ComplexF64[1 0 0; 0 0 0; 0 0 -1]
+    coeffs = [1.0, -2.0, 3.0, -4.0]
+    state = operator_local_sum_state(sites, sz, coeffs)
+    @test all(dim(linkind(state, b)) <= 2 for b in 1:3)
+    basis = operator_basis_matrices(d)
+    # Coefficient of "S^z on site j, identity elsewhere" must be coeffs[j] * tr(P_mu' * S^z).
+    for j in 1:4, mu in 2:d^2
+      labels = [k == j ? mu : 1 for k in 1:4]
+      probe = operator_basis_state(sites, labels)
+      @test inner(probe, state) ≈ coeffs[j] * tr(basis[mu]' * sz) atol = 1e-12
+    end
+  end
+
+  @testset "label validation is dimension aware" begin
+    @test_throws ArgumentError operator_basis_state(operator_siteinds(2; d = 3), [10, 1])
+    # Pauli letter labels are only meaningful at d = 2.
+    @test_throws ArgumentError operator_basis_state(operator_siteinds(2; d = 3), ["X", "I"])
+  end
+end

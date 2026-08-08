@@ -1,24 +1,4 @@
 """
-    pauli_siteinds(nsites; tagprefix="PauliSpace")
-
-Construct a vector of dimension-4 site indices suitable for vectorized local Pauli bases.
-The basis ordering is `(I, X, Y, Z)`.
-
-# Arguments
-- `nsites`: Number of operator-space sites.
-
-# Keyword Arguments
-- `tagprefix`: Prefix used when naming the generated `Index` tags.
-
-# Returns
-- A vector of length `nsites` containing dimension-4 `Index` objects.
-"""
-function pauli_siteinds(nsites::Integer; tagprefix::AbstractString="PauliSpace")
-  nsites < 1 && throw(ArgumentError("number of Pauli-basis sites must be positive"))
-  return [Index(4, "$(tagprefix),n=$(n)") for n in 1:Int(nsites)]
-end
-
-"""
     _daoe_nontrivial(local_state)
 
 Return `true` if the local Pauli-basis label contributes to the DAOE Pauli weight.
