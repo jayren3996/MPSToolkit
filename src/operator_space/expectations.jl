@@ -122,7 +122,7 @@ function operator_expectation_profile(rho::MPS, terms; normalize::Bool=true)
   # Reject a numerically-negligible (not just exactly-zero) trace relative to the operator
   # scale. For a traceless operator the post-truncation trace is an O(eps) residue rather than
   # exactly zero, and normalizing by it silently amplifies every entry by ~1/eps. This mirrors
-  # the relative tolerance the DMT kernel (`_mat_trunc!`) already uses; traceless operators
+  # the relative tolerance the DMT kernel (`_dmt_connector`) already uses; traceless operators
   # should be measured with `normalize=false`.
   normalize && abs(denominator) <= sqrt(eps(Float64)) * norm(rho) &&
     throw(ArgumentError("normalized operator-space expectations require a nonzero trace; the operator trace is numerically negligible relative to its norm (use normalize=false for a traceless operator)"))

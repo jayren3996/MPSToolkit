@@ -61,20 +61,21 @@ Configuration for scheduled operator-space DMT evolution.
 !!! warning "Transport-specific algorithm"
     DMT is designed for **transport problems** (e.g. spin or energy diffusion) in operator
     space.  Its truncation rule protects local reduced operator data, including the
-    identity/trace component and nearby Pauli components, before truncating connected
+    identity/trace component and nearby local-operator components, before truncating connected
     long-range correlations. For general-purpose operator-space TEBD, use
     [`LocalGateEvolution`](@ref).
 
 # Fields
-- `gate`: Dense local gate specification in the Pauli basis.
+- `gate`: Dense local gate specification in the operator basis.
 - `dt`: Logical time increment associated with one full DMT evolution call.
 - `schedule`: Forward update schedule.
 - `reverse_schedule`: Reverse update schedule used for the backward sweep.
 - `nstep`: Number of complete forward-plus-reverse sweeps per `evolve!` call.
-- `maxdim`: Target post-DMT bond dimension.
-- `cutoff`: Truncation cutoff used in the final repair SVD.
+- `maxdim`: **Total** post-DMT bond dimension, inclusive of the protected block.
+- `cutoff`: Truncation cutoff used in the final refactorization.
 - `gate_maxdim`: Temporary bond dimension budget used for raw gate application.
-- `connector_buffer`: Number of connector modes protected during reduced-matrix truncation.
+- `preserve_diameter`: Positive odd diameter of the observables DMT preserves exactly.
+- `truncation`: `:dense` or `:random` complement truncation.
 - `normalize`: Whether `evolve!` / `dmt_evolve!` renormalize the state after evolution.
   Default `true`; set `false` to track unnormalized traces of a traceless operator.
 """
@@ -87,28 +88,50 @@ struct DMTGateEvolution{TG,TS,TR}
   maxdim::Int
   cutoff::Float64
   gate_maxdim::Int
-  connector_buffer::Int
+  preserve_diameter::Int
+  truncation::Symbol
   normalize::Bool
 end
 
 """
-    DMTGateEvolution(gate, dt; schedule, reverse_schedule=reverse(schedule), nstep=1, maxdim=30, cutoff=1e-12, gate_maxdim=max(maxdim * 16, 64), connector_buffer=8, normalize=true)
+    _reject_connector_buffer(connector_buffer)
+
+Throw an `ArgumentError` describing the DMT budget migration unless `connector_buffer` is
+`nothing`.
+
+# Notes
+- Shared by `DMTOptions`, [`DMTGateEvolution`](@ref) and `dmt_step!`, which all used to accept
+  the keyword. A bare `MethodError` would not tell a caller that `maxdim` also changed meaning.
+"""
+function _reject_connector_buffer(connector_buffer)
+  isnothing(connector_buffer) || throw(ArgumentError(
+    "connector_buffer was removed: DMT now protects the d^(preserve_diameter - 1) local-operator " *
+    "subspace on each side structurally. Use preserve_diameter (odd, default 3) instead, and note " *
+    "that maxdim is now the total bond dimension including the protected block " *
+    "(floor 2 d^(preserve_diameter - 1) + 1)."))
+  return nothing
+end
+
+"""
+    DMTGateEvolution(gate, dt; schedule, reverse_schedule=reverse(schedule), nstep=1, maxdim=30, cutoff=1e-12, gate_maxdim=max(maxdim * 16, 64), preserve_diameter=3, truncation=:dense, normalize=true)
 
 Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
 
 # Arguments
-- `gate`: Dense local gate specification in the operator-space Pauli basis.
+- `gate`: Dense local gate specification in the operator basis.
 - `dt`: Logical time increment associated with one `dmt_evolve!` call.
 
 # Keyword Arguments
 - `schedule`: Forward update schedule.
 - `reverse_schedule`: Reverse update schedule. By default the forward schedule is reversed.
 - `nstep`: Number of complete forward-plus-reverse sweeps per evolution call.
-- `maxdim`: Target bond dimension after DMT truncation.
-- `cutoff`: Truncation cutoff used when repairing the compressed bond.
+- `maxdim`: **Total** bond dimension after DMT truncation, inclusive of the protected block; it
+  must be at least `2 d^(preserve_diameter - 1) + 1` for the local dimension `d` in use.
+- `cutoff`: Truncation cutoff used when refactorizing the compressed bond.
 - `gate_maxdim`: Temporary gate-application bond dimension budget.
-- `connector_buffer`: Number of connector directions preserved before reduced-matrix
-  truncation is applied.
+- `preserve_diameter`: Positive odd diameter of the observables preserved exactly;
+  `radius = (preserve_diameter - 1) / 2` sites are protected on each side of the cut.
+- `truncation`: `:dense` or `:random` complement truncation.
 - `normalize`: Default normalization choice carried by the object; `evolve!` / `dmt_evolve!`
   use it unless overridden by their own `normalize` keyword. Set `false` for traceless
   operators (see [`dmt_evolve!`](@ref)).
@@ -125,15 +148,20 @@ function DMTGateEvolution(
   maxdim=30,
   cutoff=1e-12,
   gate_maxdim=max(Int(maxdim) * 16, 64),
-  connector_buffer=8,
+  preserve_diameter=3,
+  truncation=:dense,
   normalize=true,
+  connector_buffer=nothing,
 )
+  _reject_connector_buffer(connector_buffer)
   nstep >= 1 || throw(ArgumentError("DMTGateEvolution requires nstep >= 1"))
   maxdim >= 1 || throw(ArgumentError("DMTGateEvolution requires maxdim >= 1"))
   cutoff >= 0 || throw(ArgumentError("DMTGateEvolution requires cutoff >= 0"))
   gate_maxdim >= 1 || throw(ArgumentError("DMTGateEvolution requires gate_maxdim >= 1"))
-  connector_buffer >= 0 || throw(ArgumentError("DMTGateEvolution requires connector_buffer >= 0"))
-  connector_buffer <= maxdim || throw(ArgumentError("DMTGateEvolution requires connector_buffer <= maxdim"))
+  isodd(preserve_diameter) && preserve_diameter >= 1 || throw(ArgumentError(
+    "DMTGateEvolution requires a positive odd preserve_diameter, got $(preserve_diameter)"))
+  truncation in (:dense, :random) || throw(ArgumentError(
+    "DMTGateEvolution truncation must be :dense or :random, got $(truncation)"))
   return DMTGateEvolution(
     gate,
     Float64(dt),
@@ -143,7 +171,8 @@ function DMTGateEvolution(
     Int(maxdim),
     Float64(cutoff),
     Int(gate_maxdim),
-    Int(connector_buffer),
+    Int(preserve_diameter),
+    Symbol(truncation),
     Bool(normalize),
   )
 end

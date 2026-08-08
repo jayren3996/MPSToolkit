@@ -32,6 +32,9 @@ include("operator_space/expectations.jl")
 include("operator_space/thermal.jl")
 include("operator_space/dmt/lowrank.jl")
 include("operator_space/dmt.jl")
+# After dmt.jl: `_dmt_bond_truncate!` annotates its `cache` keyword with `_DMTEnvCache`, and a
+# type annotation in a method signature is resolved when the method is defined.
+include("operator_space/dmt/bond.jl")
 include("operator_space/daoe.jl")
 include("operator_space/constrained.jl")
 include("chebyshev/types.jl")

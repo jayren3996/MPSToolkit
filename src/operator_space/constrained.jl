@@ -71,7 +71,8 @@ function constrained_dmt_evolve!(
       maxdim=evo.maxdim,
       cutoff=evo.cutoff,
       gate_maxdim=evo.gate_maxdim,
-      connector_buffer=evo.connector_buffer,
+      preserve_diameter=evo.preserve_diameter,
+      truncation=evo.truncation,
     )
     dmt_evolve!(rho, chunk_evo; normalize=normalize)
     rho[:] = apply(projector, rho; maxdim=Int(projector_maxdim), cutoff=projector_cutoff)

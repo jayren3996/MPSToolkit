@@ -30,7 +30,7 @@ function _dense_pauli_coefficients(psi)
   return coeffs
 end
 
-function _manual_dmt_sweep!(psi, gates; maxdim, cutoff, gate_maxdim, connector_buffer)
+function _manual_dmt_sweep!(psi, gates; maxdim, cutoff, gate_maxdim)
   for (bond, gate) in enumerate(gates)
     dmt_step!(
       psi,
@@ -40,7 +40,6 @@ function _manual_dmt_sweep!(psi, gates; maxdim, cutoff, gate_maxdim, connector_b
       cutoff=cutoff,
       direction=:R,
       gate_maxdim=gate_maxdim,
-      connector_buffer=connector_buffer,
     )
   end
   for (offset, gate) in enumerate(reverse(gates))
@@ -53,7 +52,6 @@ function _manual_dmt_sweep!(psi, gates; maxdim, cutoff, gate_maxdim, connector_b
       cutoff=cutoff,
       direction=:L,
       gate_maxdim=gate_maxdim,
-      connector_buffer=connector_buffer,
     )
   end
   normalize!(psi)
@@ -73,15 +71,17 @@ end
     @test opts.maxdim == 30
     @test opts.cutoff == 1e-12
     @test opts.gate_maxdim == 480
-    @test opts.connector_buffer == 8
+    @test opts.preserve_diameter == 3
+    @test opts.truncation == :dense
     # gate_maxdim default follows the maxdim*16 formula shared with dmt_step!/DMTGateEvolution.
     @test DMTOptions(maxdim=8).gate_maxdim == max(8 * 16, 64)
 
     @test_throws ArgumentError DMTOptions(maxdim=0)
     @test_throws ArgumentError DMTOptions(cutoff=-1e-12)
     @test_throws ArgumentError DMTOptions(gate_maxdim=0)
-    @test_throws ArgumentError DMTOptions(connector_buffer=-1)
-    @test_throws ArgumentError DMTOptions(maxdim=2, connector_buffer=3)
+    @test_throws ArgumentError DMTOptions(preserve_diameter=0)
+    @test_throws ArgumentError DMTOptions(preserve_diameter=4)
+    @test_throws ArgumentError DMTOptions(truncation=:bogus)
 
     # DMTOptions is consumed by dmt_step! and forwards equivalently to the keyword form.
     sites = pauli_siteinds(4)
@@ -90,9 +90,9 @@ end
     via_kwargs = pauli_basis_state(sites, [2, 3, 4, 2])
     normalize!(via_kwargs)
     gate = _identity_gate(2)
-    step_opts = DMTOptions(maxdim=4, cutoff=1e-12, gate_maxdim=16, connector_buffer=2)
+    step_opts = DMTOptions(maxdim=12, cutoff=1e-12, gate_maxdim=16)
     dmt_step!(via_opts, gate, 1, step_opts)
-    dmt_step!(via_kwargs, gate, 1; maxdim=4, cutoff=1e-12, gate_maxdim=16, connector_buffer=2)
+    dmt_step!(via_kwargs, gate, 1; maxdim=12, cutoff=1e-12, gate_maxdim=16)
     @test _dense_pauli_coefficients(via_opts) ≈ _dense_pauli_coefficients(via_kwargs) atol = 1e-12
   end
 
@@ -104,7 +104,7 @@ end
     schedule = collect(1:5)
     mk(nrm) = DMTGateEvolution(
       gates, 0.1; schedule=schedule, reverse_schedule=reverse(schedule),
-      nstep=1, maxdim=8, cutoff=1e-12, gate_maxdim=64, connector_buffer=4, normalize=nrm,
+      nstep=1, maxdim=12, cutoff=1e-12, gate_maxdim=64, normalize=nrm,
     )
 
     # Generic evolve! returns the mutated MPS and matches dmt_evolve! at the same setting.
@@ -125,56 +125,69 @@ end
     @test norm(d) ≈ norm(c) atol = 1e-8
   end
 
-  @testset "DMT validates Pauli dimension for single-site gates" begin
-    sites = siteinds("S=1", 3)   # dim-3 sites are not Pauli operator-space
+  @testset "DMT rejects sites whose dimension is not a perfect square" begin
+    sites = siteinds("S=1", 3)   # dim 3 is not d^2 for any integer d
     psi = MPS(sites, n -> "Up")
     gate = Matrix{ComplexF64}(I, 3, 3)
-    @test_throws ArgumentError dmt_step!(psi, gate, 1; maxdim=8, connector_buffer=2)
+    @test_throws ArgumentError dmt_step!(psi, gate, 1; maxdim=12)
   end
 
   @testset "identity DMT step preserves a product operator" begin
     _, psi = _dmt_test_state(4)
     reference = copy(psi)
 
-    dmt_step!(psi, _identity_gate(2), 2; maxdim=8, cutoff=1e-12, direction=:R, gate_maxdim=64)
+    dmt_step!(psi, _identity_gate(2), 2; maxdim=12, cutoff=1e-12, direction=:R, gate_maxdim=64)
 
     @test inner(reference, psi) ≈ 1.0 atol = 1e-10
-    @test dmt_step!(psi, _identity_gate(2), 2; maxdim=8, cutoff=1e-12, direction=:R, gate_maxdim=64) === psi
+    @test dmt_step!(psi, _identity_gate(2), 2; maxdim=12, cutoff=1e-12, direction=:R, gate_maxdim=64) === psi
   end
 
-  @testset "DMT truncates an enlarged first bond" begin
-    sites = pauli_siteinds(3)
-    terms = [
-      pauli_basis_state(sites, [1, 1, 1]),
-      pauli_basis_state(sites, [2, 2, 1]),
-      pauli_basis_state(sites, [3, 3, 1]),
-    ]
-    psi = normalize(add(terms...; maxdim=8, cutoff=1e-14))
+  @testset "DMT truncates an enlarged bond" begin
+    sites = pauli_siteinds(5)
+    psi = random_mps(ComplexF64, sites; linkdims=16)
+    normalize!(psi)
 
-    @test dim(linkind(psi, 1)) > 1
-    dmt_step!(psi, _identity_gate(2), 1; maxdim=1, cutoff=1e-12, direction=:R, gate_maxdim=8, connector_buffer=0)
+    @test dim(linkind(psi, 2)) > 9
+    dmt_step!(psi, _identity_gate(2), 2; maxdim=9, cutoff=1e-12, direction=:R, gate_maxdim=32)
 
-    @test dim(linkind(psi, 1)) <= 1
+    @test dim(linkind(psi, 2)) <= 9
     @test isfinite(real(inner(psi, psi)))
   end
 
-  @testset "DMT validates connector buffer budget" begin
-    @test_throws ArgumentError DMTGateEvolution(_identity_gate(2), 0.1; schedule=[1], maxdim=2, connector_buffer=3)
+  @testset "connector_buffer raises a migration error" begin
+    @test_throws ArgumentError DMTOptions(maxdim=30, connector_buffer=8)
+    @test_throws ArgumentError DMTGateEvolution(_identity_gate(2), 0.1; schedule=[1],
+      maxdim=30, connector_buffer=8)
 
     _, psi = _dmt_test_state(3)
-    @test_throws ArgumentError dmt_step!(psi, _identity_gate(2), 1; maxdim=2, connector_buffer=3)
+    @test_throws ArgumentError dmt_step!(psi, _identity_gate(2), 1; maxdim=30, connector_buffer=8)
     @test_throws ArgumentError dmt_step!(psi, _identity_gate(2), 1; maxdim=0)
   end
 
-  @testset "DMT completes protected bases beyond local Pauli dimension" begin
+  @testset "maxdim is the total budget" begin
+    sites = operator_siteinds(6; d=2)
+    psi = random_mps(ComplexF64, sites; linkdims=40)
+    normalize!(psi)
+    MPSToolkit._dmt_bond_truncate!(psi, 3; maxdim=20, cutoff=1e-14)
+    @test dim(linkind(psi, 3)) <= 20
+    # 2 d^2 = 8 of those 20 are the protected block
+    @test dim(linkind(psi, 3)) >= 8
+  end
+
+  @testset "DMT truncates a generic bond into the total budget" begin
     sites = pauli_siteinds(6)
     psi = random_mps(sites; linkdims=20)
     normalize!(psi)
 
     @test dim(linkind(psi, 3)) == 20
-    dmt_step!(psi, _identity_gate(2), 3; maxdim=12, cutoff=1e-12, gate_maxdim=40, connector_buffer=8)
+    dmt_step!(psi, _identity_gate(2), 3; maxdim=12, cutoff=1e-12, gate_maxdim=40)
 
-    @test dim(linkind(psi, 3)) == 12
+    # A generic bond lands at maxdim - 1, not maxdim. `B = S - C` annihilates the identity
+    # directions, so `QL' B` has a zero first ROW and `B QR` a zero first COLUMN: the rank-one
+    # trace connector shares one direction with the two protected blocks instead of adding one.
+    # The realized rank is therefore 1 + (d^2 - 1) + (d^2 - 1) + (maxdim - 2 d^2) = maxdim - 1.
+    # Budgeting chi' = maxdim - 2 d^2 thus lands one short of maxdim, never over it.
+    @test dim(linkind(psi, 3)) == 11
   end
 
   @testset "DMT preserves identity and local Pauli data under truncation" begin
@@ -184,101 +197,40 @@ end
       pauli_basis_state(sites, [1, 4, 1, 1, 1]; coefficient=0.3),
       pauli_basis_state(sites, fill(2, 5); coefficient=0.2),
     ]
-    psi = add(terms...; maxdim=8, cutoff=1e-14)
+    # A random component pushes the internal bonds past the maxdim below, so the truncation
+    # actually fires; without it maxdim >= the new floor would leave the state untouched and
+    # the preservation assertion would be vacuous.
+    psi = add(terms..., 0.15 * random_mps(ComplexF64, sites; linkdims=16); maxdim=20, cutoff=1e-14)
     probes = [fill(1, 5), [1, 4, 1, 1, 1], [1, 1, 4, 1, 1], [1, 1, 1, 4, 1]]
     before = [inner(pauli_basis_state(sites, labels), psi) for labels in probes]
 
-    dmt_step!(psi, _identity_gate(3), 2; maxdim=1, cutoff=1e-12, direction=:R, gate_maxdim=8, connector_buffer=0)
+    @test maximum(dim(linkind(psi, b)) for b in 2:3) > 9
+    dmt_step!(psi, _identity_gate(3), 2; maxdim=9, cutoff=1e-12, direction=:R, gate_maxdim=32)
 
     after = [inner(pauli_basis_state(sites, labels), psi) for labels in probes]
     @test after ≈ before atol = 1e-12
   end
 
-  @testset "_complete_orthonormal_basis edge cases" begin
-    # target_dim exceeding the ambient dimension is rejected.
-    @test_throws ArgumentError MPSToolkit._complete_orthonormal_basis(ComplexF64[1 0; 0 1; 0 0], 4)
-    # A rank-deficient protected block (duplicate columns) still yields an orthonormal basis
-    # whose span reproduces the protected columns.
-    rank_deficient = ComplexF64[1 1; 0 0; 0 0; 0 0]
-    basis = MPSToolkit._complete_orthonormal_basis(rank_deficient, 3)
-    @test size(basis) == (4, 3)
-    @test basis' * basis ≈ Matrix{ComplexF64}(I, 3, 3) atol = 1e-10
-    @test basis * (basis' * rank_deficient) ≈ rank_deficient atol = 1e-10
-  end
-
-  @testset "complex DMT projection uses adjoint orthonormal bases" begin
-    left_protected = ComplexF64[
-      1 1+im
-      im 2
-      0.5-im -0.25
-      0.1 0.3im
-    ]
-    right_protected = ComplexF64[
-      1-im 0.2
-      0.7 0.4im
-      im 1
-      0.3+0.2im -0.1
-    ]
-    left_basis = MPSToolkit._complete_orthonormal_basis(left_protected, 4)
-    right_basis = MPSToolkit._complete_orthonormal_basis(right_protected, 4)
-    singular_data = ComplexF64[
-      1.0 0.2im 0.1 0.3
-      -0.4im 0.8 0.2+0.1im 0.0
-      0.1im -0.2 0.5 0.3im
-      0.0 0.1 0.2im 0.2
-    ]
-
-    reduced = left_basis' * singular_data * right_basis
-    repaired = left_basis * reduced * right_basis'
-
-    @test left_basis' * left_basis ≈ Matrix{ComplexF64}(I, 4, 4) atol = 1e-12
-    @test right_basis' * right_basis ≈ Matrix{ComplexF64}(I, 4, 4) atol = 1e-12
-    @test repaired ≈ singular_data atol = 1e-12
-  end
-
-  @testset "orthonormal basis completion is orthonormal and span-preserving (large ambient)" begin
-    # Guards the allocation-free BLAS Gram-Schmidt path used at the bond dimensions that dominate
-    # DMT runtime. The completion must (1) be orthonormal, (2) keep col(protected) inside its
-    # span with the connector direction first, and (3) leave a full square basis a unitary that
-    # round-trips any operator exactly.
-    for (ambient, ncol, target) in ((64, 3, 64), (128, 4, 40), (32, 0, 32), (48, 5, 20))
-      protected = ncol == 0 ? zeros(ComplexF64, ambient, 0) : randn(ComplexF64, ambient, ncol)
-      basis = MPSToolkit._complete_orthonormal_basis(protected, target)
-      @test size(basis) == (ambient, target)
-      @test basis' * basis ≈ Matrix{ComplexF64}(I, target, target) atol = 1e-10
-      if ncol > 0 && target >= min(ncol, ambient)
-        # Every protected column lies in the span of the returned basis.
-        @test norm(protected - basis * (basis' * protected)) < 1e-10
-      end
-      if target == ambient
-        x = randn(ComplexF64, ambient, ambient)
-        @test basis * (basis' * x * basis) * basis' ≈ x atol = 1e-10
-      end
-    end
-  end
-
-  @testset "DMT preserves total S^z for a structured traceless operator (basis-completion regression)" begin
-    # The connector basis from `_complete_orthonormal_basis` must be UNITARY: `_dmt_bond_truncate!`
-    # reconstructs the bond operator via `left_basis * reduced * right_basis'`, so a non-orthonormal
-    # basis silently destroys DMT's local-observable preservation. Total S^z commutes with every XXZ
-    # bond gate, so for the traceless domain-wall operator D = sum_j sign(j - kink) sigma^z_j the
-    # charge sum_x tr(D(t) sigma^z_x) is conserved at 0 exactly. A structured (evolved-Pauli)
-    # operator exercises the Gram-Schmidt completion failure mode that random unit-test inputs miss;
-    # the buggy completion drove this charge to O(1), a correct (orthonormal) basis keeps it at the
-    # truncation floor (~1e-4 here, vs |dSp| ~ 13 with the defect).
+  @testset "DMT preserves total S^z for a structured traceless operator" begin
+    # Total S^z commutes with every XXZ bond gate, so for the traceless domain-wall operator
+    # D = sum_j sign(j - kink) sigma^z_j the charge sum_x tr(D(t) sigma^z_x) is conserved at 0
+    # exactly. Each summand is a diameter-1 observable, so the faithful kernel conserves it to
+    # machine precision rather than merely to the truncation floor -- the 1e-2 tolerance this
+    # testset used to carry is exactly what hid the clipped-protected-block defect. A structured
+    # (evolved-Pauli) operator is the discriminating input; random unit-test inputs are not.
     nsites = 12
     sites = pauli_siteinds(nsites)
     state = pauli_domain_wall_state(sites; kink=nsites ÷ 2)
     gate = pauli_gate_from_hamiltonian(spinhalf_xyz_bond_hamiltonian(; Jx=1.0, Jy=1.0, Jz=1.0), 0.1)
     schedule = collect(1:(nsites - 1))
     evo = DMTGateEvolution(gate, 0.1; schedule=schedule, reverse_schedule=reverse(schedule),
-      maxdim=24, cutoff=1e-10, gate_maxdim=96, connector_buffer=4, normalize=false)
+      maxdim=24, cutoff=1e-10, gate_maxdim=96, normalize=false)
     Z = pauli_matrices().Z
     total_charge(psi) = sum(real.(pauli_expectation_profile(psi, [(x, Z) for x in 1:nsites]; normalize=false)))
     @test abs(total_charge(state)) < 1e-10           # exact at t = 0
     for _ in 1:8
       evolve!(state, evo)
-      @test abs(total_charge(state)) < 1e-2          # conserved under DMT truncation
+      @test abs(total_charge(state)) < 1e-10         # conserved EXACTLY by the faithful kernel
     end
   end
 
@@ -290,7 +242,7 @@ end
       normalize!(psi)
       start = 2
 
-      dmt_step!(psi, _identity_gate(span), start; maxdim=10, cutoff=1e-12, direction=:R, gate_maxdim=32, connector_buffer=4)
+      dmt_step!(psi, _identity_gate(span), start; maxdim=10, cutoff=1e-12, direction=:R, gate_maxdim=32)
 
       for bond in start:(start + span - 2)
         @test dim(linkind(psi, bond)) <= 10
@@ -332,8 +284,8 @@ end
     gate = pauli_gate(exp(-0.1im * kron(x, zz)))
     gates = [gate, gate, gate, gate]
 
-    _manual_dmt_sweep!(manual, gates; maxdim=4, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
-    evo = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 3, 4], reverse_schedule=[4, 3, 2, 1], maxdim=4, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
+    _manual_dmt_sweep!(manual, gates; maxdim=12, cutoff=1e-12, gate_maxdim=64)
+    evo = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 3, 4], reverse_schedule=[4, 3, 2, 1], maxdim=12, cutoff=1e-12, gate_maxdim=64)
     @test dmt_evolve!(scheduled, evo) === scheduled
 
     @test inner(manual, scheduled) ≈ 1.0 atol = 1e-8
@@ -347,8 +299,8 @@ end
     gate = pauli_gate(exp(-0.05im * kron(kron(x, z), x)))
     gates = [gate, gate, gate, gate]
 
-    _manual_dmt_sweep!(manual, gates; maxdim=4, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
-    evo = DMTGateEvolution(gates, 0.05; schedule=[1, 2, 3, 4], reverse_schedule=[4, 3, 2, 1], maxdim=4, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
+    _manual_dmt_sweep!(manual, gates; maxdim=12, cutoff=1e-12, gate_maxdim=64)
+    evo = DMTGateEvolution(gates, 0.05; schedule=[1, 2, 3, 4], reverse_schedule=[4, 3, 2, 1], maxdim=12, cutoff=1e-12, gate_maxdim=64)
     dmt_evolve!(scheduled, evo)
 
     @test inner(manual, scheduled) ≈ 1.0 atol = 1e-8
@@ -370,7 +322,7 @@ end
       gates = [pauli_gate_from_hamiltonian(h, 0.05) for (_, h) in terms]
       schedule = [start for (start, _) in terms]
       evo = DMTGateEvolution(gates, 0.05; schedule=schedule, reverse_schedule=reverse(schedule),
-        nstep=2, maxdim=8, cutoff=1e-12, gate_maxdim=64, connector_buffer=4)
+        nstep=2, maxdim=12, cutoff=1e-12, gate_maxdim=64)
 
       psi = random_mps(ComplexF64, psites; linkdims=24)
       normalize!(psi)
@@ -387,12 +339,14 @@ end
       for _ in 1:evo.nstep
         for (i, b) in pairs(evo.schedule)
           dmt_step!(rebuilt, MPSToolkit._gate_for_step(evo.gate, b, i), b; maxdim=evo.maxdim,
-            cutoff=evo.cutoff, direction=:R, gate_maxdim=evo.gate_maxdim, connector_buffer=evo.connector_buffer)
+            cutoff=evo.cutoff, direction=:R, gate_maxdim=evo.gate_maxdim,
+            preserve_diameter=evo.preserve_diameter, truncation=evo.truncation)
         end
         for (i, b) in pairs(evo.reverse_schedule)
           g = MPSToolkit._reverse_gate_for_step(evo.gate, true, evo.schedule, b, i)
           dmt_step!(rebuilt, g, b; maxdim=evo.maxdim, cutoff=evo.cutoff, direction=:L,
-            gate_maxdim=evo.gate_maxdim, connector_buffer=evo.connector_buffer)
+            gate_maxdim=evo.gate_maxdim, preserve_diameter=evo.preserve_diameter,
+            truncation=evo.truncation)
         end
       end
       normalize!(rebuilt)
@@ -415,8 +369,8 @@ end
     gate3 = Matrix{ComplexF64}(I, 16, 16)
     gates = [gate1, gate2, gate3]
 
-    _manual_dmt_sweep!(manual, gates; maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
-    evo = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 3], reverse_schedule=[3, 2, 1], maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
+    _manual_dmt_sweep!(manual, gates; maxdim=12, cutoff=1e-12, gate_maxdim=16)
+    evo = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 3], reverse_schedule=[3, 2, 1], maxdim=12, cutoff=1e-12, gate_maxdim=16)
     dmt_evolve!(scheduled, evo)
 
     @test abs(inner(manual, scheduled)) ≈ 1.0 atol = 1e-10
@@ -435,18 +389,18 @@ end
     gates = [gate1, gate2, gate3]
 
     for (bond, gate) in zip([1, 2, 1], gates)
-      dmt_step!(manual, gate, bond; maxdim=8, cutoff=1e-12, direction=:R, gate_maxdim=16, connector_buffer=0)
+      dmt_step!(manual, gate, bond; maxdim=12, cutoff=1e-12, direction=:R, gate_maxdim=16)
     end
     for (bond, gate) in zip([1, 2, 1], reverse(gates))
-      dmt_step!(manual, gate, bond; maxdim=8, cutoff=1e-12, direction=:L, gate_maxdim=16, connector_buffer=0)
+      dmt_step!(manual, gate, bond; maxdim=12, cutoff=1e-12, direction=:L, gate_maxdim=16)
     end
     normalize!(manual)
 
-    evo = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 1], reverse_schedule=[1, 2, 1], maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
+    evo = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 1], reverse_schedule=[1, 2, 1], maxdim=12, cutoff=1e-12, gate_maxdim=16)
     dmt_evolve!(scheduled, evo)
 
     @test abs(inner(manual, scheduled)) ≈ 1.0 atol = 1e-10
-    ambiguous = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 1], reverse_schedule=[2, 1, 1], maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
+    ambiguous = DMTGateEvolution(gates, 0.1; schedule=[1, 2, 1], reverse_schedule=[2, 1, 1], maxdim=12, cutoff=1e-12, gate_maxdim=16)
     @test_throws ArgumentError dmt_evolve!(copy(scheduled), ambiguous)
   end
 
@@ -465,8 +419,8 @@ end
     gate3 = pauli_gate(exp(-0.05im * (kron(sz, sy) + 0.4 * kron(sx, sx))))
     gates = [gate1, gate2, gate3]
 
-    _manual_dmt_sweep!(manual, gates; maxdim=32, cutoff=1e-12, gate_maxdim=64, connector_buffer=0)
-    evo = DMTGateEvolution((bond, index) -> gates[index], 0.1; schedule=[1, 2, 3], reverse_schedule=[3, 2, 1], maxdim=32, cutoff=1e-12, gate_maxdim=64, connector_buffer=0)
+    _manual_dmt_sweep!(manual, gates; maxdim=32, cutoff=1e-12, gate_maxdim=64)
+    evo = DMTGateEvolution((bond, index) -> gates[index], 0.1; schedule=[1, 2, 3], reverse_schedule=[3, 2, 1], maxdim=32, cutoff=1e-12, gate_maxdim=64)
     dmt_evolve!(scheduled, evo)
 
     @test _dense_pauli_coefficients(scheduled) ≈ _dense_pauli_coefficients(manual) atol = 1e-10
@@ -482,38 +436,8 @@ end
     forward_schedule = [1, 2, 1]
     reverse_schedule = [2, 1, 1]
 
-    evo = DMTGateEvolution((bond, index) -> gate, 0.1; schedule=forward_schedule, reverse_schedule=reverse_schedule, maxdim=8, cutoff=1e-12, gate_maxdim=16, connector_buffer=0)
+    evo = DMTGateEvolution((bond, index) -> gate, 0.1; schedule=forward_schedule, reverse_schedule=reverse_schedule, maxdim=12, cutoff=1e-12, gate_maxdim=16)
     @test_throws ArgumentError dmt_evolve!(scheduled, evo)
-  end
-
-  @testset "reduced-matrix truncation enforces maxdim for traceless operators" begin
-    n = 16
-    cb = 4
-    chi = 4
-    make_block() = ComplexF64[cis(2 * pi * (i - 1) * (j - 1) / n) for i in 1:n, j in 1:n]
-    trailing = (cb + 1):n
-
-    # Zero identity overlap (traceless operator): truncation must still happen so that
-    # maxdim is enforced rather than silently skipped by an exact `== 0` guard.
-    zero_conn = make_block()
-    zero_conn[1, 1] = 0.0 + 0.0im
-    original = copy(zero_conn)
-    MPSToolkit._mat_trunc!(zero_conn, chi; connector_buffer=cb)
-    @test norm(zero_conn - original) > 1e-8
-    @test rank(zero_conn[trailing, trailing]; atol=1e-8) <= chi
-
-    # Near-singular identity overlap must not blow up the rank-1 connector.
-    near_singular = make_block()
-    near_singular[1, 1] = 1e-200 + 0.0im
-    MPSToolkit._mat_trunc!(near_singular, chi; connector_buffer=cb)
-    @test all(isfinite, near_singular)
-    @test norm(near_singular) < 1e3
-
-    # A well-conditioned identity direction is still preserved exactly (unchanged behavior):
-    # the protected connector rows must survive truncation.
-    well = make_block()
-    MPSToolkit._mat_trunc!(well, chi; connector_buffer=cb)
-    @test well[1:cb, :] ≈ make_block()[1:cb, :] atol = 1e-10
   end
 
   @testset "multi-bond DMT window matches single-bond sequence (canonical gauge)" begin
@@ -525,12 +449,12 @@ end
     # sweep, where the bond SVD degenerated to s ≈ I and the truncation discarded information
     # indiscriminately. random_mps gives generic (high operator-entanglement) states where the
     # bug is visible; simple low-rank states are not a sufficient discriminator.
-    function _single_bond_sequence!(psi, start, span, direction; maxdim, cutoff, connector_buffer)
+    function _single_bond_sequence!(psi, start, span, direction; maxdim, cutoff)
       bonds = collect(start:(start + span - 2))
       direction === :L && (bonds = reverse(bonds))
       for bond in bonds
         MPSToolkit._dmt_window_truncate!(psi, bond, 2; maxdim=maxdim, cutoff=cutoff,
-          direction=direction, connector_buffer=connector_buffer)
+          direction=direction)
       end
       return psi
     end
@@ -542,11 +466,11 @@ end
       normalize!(psi)
 
       windowed = copy(psi)
-      MPSToolkit._dmt_window_truncate!(windowed, 2, span; maxdim=6, cutoff=1e-12,
-        direction=direction, connector_buffer=2)
+      MPSToolkit._dmt_window_truncate!(windowed, 2, span; maxdim=12, cutoff=1e-12,
+        direction=direction)
 
       sequential = copy(psi)
-      _single_bond_sequence!(sequential, 2, span, direction; maxdim=6, cutoff=1e-12, connector_buffer=2)
+      _single_bond_sequence!(sequential, 2, span, direction; maxdim=12, cutoff=1e-12)
 
       @test abs(inner(windowed, sequential)) / (norm(windowed) * norm(sequential)) ≈ 1.0 atol = 1e-10
     end
