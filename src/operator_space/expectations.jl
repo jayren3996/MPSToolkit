@@ -51,8 +51,8 @@ that contracting it against an operator-space MPS window (with identity caps els
   `tr(kron(...) * O)` for each is `O(d^(5s))` and is what makes higher `d` unaffordable: at
   `d = 4, s = 3` the label loop measures 0.254 s per term against 0.000254 s here, which takes
   the diameter-3 preservation sweep at `d = 4` from 122 s to 18 s per pass. Both forms agree to
-  machine precision (measured relative difference at most 1.7e-16 for `d` in `2:5` at spans
-  1-3, and for `d = 2` at spans 4-5).
+  1-2 ulp: the largest relative difference measured is 3.39e-16, over `d` in `2:5` at spans 1-3
+  (complex, Hermitian, real and sparse inputs), `d = 3` at span 4, and `d = 2` at spans 4-5.
 - `kron` orders the first factor slowest, so the reshaped row legs run `(s, s-1, …, 1)`; hence
   the `reverse` when the legs are attached.
 """

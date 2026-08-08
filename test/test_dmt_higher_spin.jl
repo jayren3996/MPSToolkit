@@ -33,12 +33,39 @@ include("dmt_test_helpers.jl")
     end
   end
 
+  # `preservation_error` divides by the sup-norm of the whole `before` profile, so a family with
+  # large expectation values (the dense random probes) would otherwise flatter a family with
+  # small ones (the structured basis products). Every family is therefore scored against its own
+  # denominator, including the widest width on its own -- that is the width the radius is
+  # actually on trial for.
+  function preservation_families(probes, structured_count, d, diameter)
+    spans = [probe_span(op, d) for (_, op) in probes]
+    return ["all" => collect(eachindex(probes)),
+      "structured products" => collect(1:structured_count),
+      "random dense" => collect((structured_count + 1):length(probes)),
+      "widest (span $(diameter))" => [k for k in eachindex(probes) if spans[k] == diameter]]
+  end
+
+  function assert_preserved(label, probes, structured_count, before, after, d, diameter)
+    for (name, index) in preservation_families(probes, structured_count, d, diameter)
+      isempty(index) && continue
+      value = preservation_error(before[index], after[index])
+      @info "$(label): $(name), $(length(index)) probes, preservation error $(value)"
+      @test value < 1e-11
+    end
+    return nothing
+  end
+
   @testset "diameter <= 3 preserved at d = 3 and d = 4" begin
     for d in (3, 4)
       nsites, chi = 6, 60
       maxdim = 2 * d^2 + 12
       sites = operator_siteinds(nsites; d=d)
-      probes = diameter_probes(nsites, d, 3)
+      # Complete onsite basis at widths 1-2, plus dense random probes per window. A kernel that
+      # protected only a few basis directions instead of the whole d^(2 radius) subspace would
+      # pass a 4-element capped sweep at d > 2 and fail this one.
+      structured = diameter_probes(nsites, d, 3; nrandom=0)
+      probes = vcat(structured, random_window_probes(nsites, d, 1:3))
       for (label, noise) in (("Hermitian (real coefficients)", random_mps(sites; linkdims=chi)),
         ("non-Hermitian (complex)", random_mps(ComplexF64, sites; linkdims=chi)))
         rho = add(operator_basis_state(sites, fill(1, nsites)), 0.3 * noise;
@@ -47,11 +74,9 @@ include("dmt_test_helpers.jl")
         before = operator_expectation_profile(rho, probes; normalize=false)
         trace_before = operator_trace(rho)
         MPSToolkit._dmt_bond_truncate!(rho, 3; maxdim=maxdim, cutoff=0.0)
-        sweep_error = preservation_error(before,
-          operator_expectation_profile(rho, probes; normalize=false))
-        @info "d = $(d), $(label): $(length(probes)) probes, preservation error $(sweep_error)"
+        after = operator_expectation_profile(rho, probes; normalize=false)
+        assert_preserved("d = $(d), $(label)", probes, length(structured), before, after, d, 3)
         @test dim(linkind(rho, 3)) <= maxdim
-        @test sweep_error < 1e-11
         @test abs(operator_trace(rho) - trace_before) <= 1e-11 * abs(trace_before)
       end
     end
@@ -80,72 +105,74 @@ include("dmt_test_helpers.jl")
     end
   end
 
-  @testset "preserve_diameter = 5 preserves diameter 5 and stops at diameter 6" begin
-    d, nsites, chi = 2, 9, 60
-    maxdim = 2 * d^4 + 12      # 2 * 16 + 12 = 44
-    sites = operator_siteinds(nsites; d=d)
-    kept = diameter_probes(nsites, d, 5)
-    rho = add(operator_basis_state(sites, fill(1, nsites)),
-      0.3 * random_mps(ComplexF64, sites; linkdims=chi); maxdim=chi + 1, cutoff=0.0)
-    reference = copy(rho)
-    before = operator_expectation_profile(rho, kept; normalize=false)
-    MPSToolkit._dmt_bond_truncate!(rho, 5; maxdim=maxdim, cutoff=0.0, preserve_diameter=5)
-    after = operator_expectation_profile(rho, kept; normalize=false)
-    wide = [k for k in eachindex(kept) if size(kept[k][2], 1) == d^5]
-    sweep_error = preservation_error(before, after)
-    # Measured on the width-5 probes alone as well, so a large-scale width-1 probe cannot mask a
-    # width-5 failure through the shared sup-norm denominator.
-    wide_error = preservation_error(before[wide], after[wide])
-    @info "preserve_diameter = 5: $(length(kept)) probes error $(sweep_error); " *
-          "$(length(wide)) width-5 probes error $(wide_error)"
-    @test dim(linkind(rho, 5)) <= maxdim
-    @test sweep_error < 1e-11
-    @test wide_error < 1e-11
+  @testset "preserve_diameter = 5 preserves diameter 5" begin
+    for (d, nsites, bond, chi, maxdim) in ((2, 9, 5, 60, 2 * 2^4 + 12),      # 44, floor 33
+      (3, 6, 3, 200, 2 * 3^4 + 12))                                          # 174, floor 163
+      # The d = 3 row is the intersection the task exists to prove: wider radius AND higher
+      # local dimension at once. Its floor is 2 * 3^4 + 1 = 163, so the bond has to carry more
+      # than 174 for the truncation to fire; six sites is the shortest chain with such a bond
+      # (9^3 = 729 at bond 3) whose width-5 measurement windows still touch the chain edges and
+      # so stay small enough to contract.
+      sites = operator_siteinds(nsites; d=d)
+      structured = diameter_probes(nsites, d, 5; nrandom=0)
+      kept = vcat(structured, random_window_probes(nsites, d, 1:5))
+      rho = add(operator_basis_state(sites, fill(1, nsites)),
+        0.3 * random_mps(ComplexF64, sites; linkdims=chi); maxdim=chi + 1, cutoff=0.0)
+      @test dim(linkind(rho, bond)) > maxdim        # the truncation really fires
+      reference = copy(rho)
+      before = operator_expectation_profile(rho, kept; normalize=false)
+      MPSToolkit._dmt_bond_truncate!(rho, bond; maxdim=maxdim, cutoff=0.0, preserve_diameter=5)
+      after = operator_expectation_profile(rho, kept; normalize=false)
+      assert_preserved("d = $(d), preserve_diameter = 5", kept, length(structured),
+        before, after, d, 5)
+      @test dim(linkind(rho, bond)) <= maxdim
 
-    # At preserve_diameter = 3 the same diameter-5 probes are NOT preserved: this pins that the
-    # parameter does something rather than being cosmetic.
-    narrow = copy(reference)
-    MPSToolkit._dmt_bond_truncate!(narrow, 5; maxdim=maxdim, preserve_diameter=3, cutoff=0.0)
-    narrow_error = preservation_error(
-      before[wide], operator_expectation_profile(narrow, kept[wide]; normalize=false))
-    @info "preserve_diameter = 3 on the same $(length(wide)) width-5 probes: error $(narrow_error)"
-    @test narrow_error > 1e-8
+      # At preserve_diameter = 3 the same diameter-5 probes are NOT preserved: this pins that
+      # the parameter does something rather than being cosmetic.
+      wide = [k for k in eachindex(kept) if probe_span(kept[k][2], d) == 5]
+      narrow = copy(reference)
+      MPSToolkit._dmt_bond_truncate!(narrow, bond; maxdim=maxdim, preserve_diameter=3, cutoff=0.0)
+      narrow_error = preservation_error(
+        before[wide], operator_expectation_profile(narrow, kept[wide]; normalize=false))
+      @info "d = $(d), preserve_diameter = 3 on the same $(length(wide)) width-5 probes: " *
+            "error $(narrow_error)"
+      @test narrow_error > 1e-8
+    end
   end
 
-  @testset "preserve_diameter = 5 at d = 3" begin
-    # The intersection the task exists to prove: wider radius AND higher local dimension at the
-    # same time. The floor is 2 * 3^4 + 1 = 163, so the bond has to carry more than ~175 for the
-    # truncation to fire at all; six sites is the shortest chain with such a bond (9^3 = 729 at
-    # bond 3) that still keeps the width-5 window blocks small enough to measure, because those
-    # windows then touch the chain edges.
-    d, nsites, chi = 3, 6, 200
-    maxdim = 2 * d^4 + 12      # 174, floor 163
-    sites = operator_siteinds(nsites; d=d)
-    kept = diameter_probes(nsites, d, 5)
-    rho = add(operator_basis_state(sites, fill(1, nsites)),
-      0.3 * random_mps(ComplexF64, sites; linkdims=chi); maxdim=chi + 1, cutoff=0.0)
-    @test dim(linkind(rho, 3)) > maxdim
-    reference = copy(rho)
-    before = operator_expectation_profile(rho, kept; normalize=false)
-    MPSToolkit._dmt_bond_truncate!(rho, 3; maxdim=maxdim, cutoff=0.0, preserve_diameter=5)
-    after = operator_expectation_profile(rho, kept; normalize=false)
-    wide = [k for k in eachindex(kept) if size(kept[k][2], 1) == d^5]
-    sweep_error = preservation_error(before, after)
-    wide_error = preservation_error(before[wide], after[wide])
-    @info "d = 3, preserve_diameter = 5: $(length(kept)) probes error $(sweep_error); " *
-          "$(length(wide)) width-5 probes error $(wide_error)"
-    @test dim(linkind(rho, 3)) <= maxdim
-    @test sweep_error < 1e-11
-    # Measured on the width-5 probes alone as well, so a large-scale width-1 probe cannot mask a
-    # width-5 failure through the shared sup-norm denominator.
-    @test wide_error < 1e-11
-
-    narrow = copy(reference)
-    MPSToolkit._dmt_bond_truncate!(narrow, 3; maxdim=maxdim, cutoff=0.0, preserve_diameter=3)
-    narrow_error = preservation_error(
-      before[wide], operator_expectation_profile(narrow, kept[wide]; normalize=false))
-    @info "d = 3, preserve_diameter = 3 on the same width-5 probes: error $(narrow_error)"
-    @test narrow_error > 1e-8
+  @testset "the guarantee stops exactly one width later" begin
+    # `preserve_diameter = 2 radius + 1` is a sharp edge, not a soft one. At width 2 radius + 2 a
+    # window can put more than `radius` sites on BOTH sides of the cut for the first time, and
+    # exactly those windows must break -- while the same width on a window that still fits one
+    # side inside the radius must stay exact. Random dense probes only: they carry generic
+    # weight on every basis product of the window, which is what makes the break unambiguous.
+    for (d, nsites, bond, diameter, chi, maxdim) in ((3, 6, 3, 3, 60, 30), (4, 5, 3, 3, 60, 44),
+      (2, 9, 5, 5, 60, 44), (3, 6, 3, 5, 200, 174))
+      radius = (diameter - 1) ÷ 2
+      width = diameter + 1
+      sites = operator_siteinds(nsites; d=d)
+      probes = random_window_probes(nsites, d, width:width; nrandom=12)
+      covered = [k for k in eachindex(probes) if guarantee_covers(probes[k][1], width, bond, radius)]
+      uncovered = [k for k in eachindex(probes) if !guarantee_covers(probes[k][1], width, bond, radius)]
+      @test !isempty(uncovered)
+      rho = add(operator_basis_state(sites, fill(1, nsites)),
+        0.3 * random_mps(ComplexF64, sites; linkdims=chi); maxdim=chi + 1, cutoff=0.0)
+      @test dim(linkind(rho, bond)) > maxdim
+      before = operator_expectation_profile(rho, probes; normalize=false)
+      MPSToolkit._dmt_bond_truncate!(rho, bond; maxdim=maxdim, cutoff=0.0,
+        preserve_diameter=diameter)
+      after = operator_expectation_profile(rho, probes; normalize=false)
+      broken = preservation_error(before[uncovered], after[uncovered])
+      @info "d = $(d), preserve_diameter = $(diameter): width-$(width) probes beyond the " *
+            "guarantee ($(length(uncovered)) of $(length(probes))) error $(broken)"
+      @test broken > 1e-4
+      if !isempty(covered)
+        held = preservation_error(before[covered], after[covered])
+        @info "d = $(d), preserve_diameter = $(diameter): width-$(width) probes still inside " *
+              "the guarantee ($(length(covered))) error $(held)"
+        @test held < 1e-11
+      end
+    end
   end
 
   @testset "the cached environments match the rebuild at radius 2" begin
@@ -181,9 +208,10 @@ include("dmt_test_helpers.jl")
     end
   end
 
-  @testset "spin-1 Heisenberg melt conserves total S^z end to end" begin
-    d, nsites, dt = 3, 8, 0.1
-    maxdim = 2 * d^2 + 22      # 40
+  # One spin-1 Heisenberg melt: returns the worst relative total-S^z drift over `nsweep` sweeps
+  # and the largest bond dimension reached.
+  function spin1_melt_drift(nsites, maxdim, nsweep)
+    d, dt = 3, 0.1
     sites = operator_siteinds(nsites; d=d)
     sz = ComplexF64[1 0 0; 0 0 0; 0 0 -1]
     sx = ComplexF64[0 1 0; 1 0 1; 0 1 0] / sqrt(2)
@@ -198,26 +226,48 @@ include("dmt_test_helpers.jl")
       state, [(x, sz) for x in 1:nsites]; normalize=false))
     charge(state) = sum(profile(state))
     initial_charge = charge(rho)
-    # `normalize = false` reports the literal trace, so a single site carries
-    # 0.25 * tr((S^z)^2) * d^(nsites - 1) = 1093.5 here. The conserved quantity must therefore be
-    # judged RELATIVE to that scale: an absolute 1e-9 would be a 9e-13 relative demand, below what
-    # 10 sweeps of 14 gates hold in double precision. Measured worst relative drift is 1.4e-12,
-    # while the same circuit on 6 sites with a budget so large that no truncation fires (maxdim
-    # 800, max bond 9^3) drifts 4.9e-13 relative -- MORE than the truncated 6-site run's 2.0e-13.
-    # The residue is Trotter-circuit roundoff, not DMT.
     scale = maximum(abs, profile(rho))
     schedule = collect(1:(nsites - 1))
     evo = DMTGateEvolution(gate, dt; schedule=schedule, reverse_schedule=reverse(schedule),
       nstep=1, maxdim=maxdim, cutoff=1e-14, normalize=false)
     worst = 0.0
-    for _ in 1:10
+    reached = 0
+    for _ in 1:nsweep
       dmt_evolve!(rho, evo)
       worst = max(worst, abs(charge(rho) - initial_charge))
-      @test abs(charge(rho) - initial_charge) < 1e-11 * scale
+      reached = max(reached, maximum(dim(linkind(rho, b)) for b in 1:(nsites - 1)))
       @test maximum(dim(linkind(rho, b)) for b in 1:(nsites - 1)) <= maxdim
     end
-    @info "spin-1 melt: per-site charge scale $(scale), worst drift over 10 sweeps $(worst) " *
-          "(relative $(worst / scale))"
+    return (relative=worst / scale, absolute=worst, scale=scale, maxlink=reached)
+  end
+
+  @testset "spin-1 Heisenberg melt conserves total S^z end to end" begin
+    # `normalize = false` reports the literal trace, so a single site carries
+    # 0.25 * tr((S^z)^2) * d^(nsites - 1) = 1093.5 at 8 sites. The conserved quantity has to be
+    # judged RELATIVE to that scale: an absolute 1e-9 would be a 9e-13 relative demand, below
+    # what 10 sweeps of 14 gates hold in double precision.
+    main = spin1_melt_drift(8, 2 * 3^2 + 22, 10)     # maxdim 40
+    @info "spin-1 melt, 8 sites: per-site charge scale $(main.scale), worst drift over 10 " *
+          "sweeps $(main.absolute) (relative $(main.relative)), max bond $(main.maxlink)"
+    @test main.relative < 1e-11
+
+    # The residue above is roundoff in the Trotter circuit and the repeated factorizations, NOT
+    # charge leaking through the truncation -- and that claim is asserted, not merely asserted in
+    # a comment. The same circuit on 6 sites is run twice: once truncating at maxdim 40, once
+    # with a budget past the 9^3 = 729 ceiling of a 6-site chain, so `_dmt_bond_truncate!`
+    # short-circuits at every bond and no DMT truncation happens at all. Roundoff alone already
+    # produces the observed drift, so if DMT ever does start shedding charge the truncating run
+    # will pull away from the untruncated one and this comparison fails.
+    truncating = spin1_melt_drift(6, 40, 10)
+    untruncated = spin1_melt_drift(6, 800, 10)
+    @info "spin-1 melt, 6 sites: truncating (max bond $(truncating.maxlink)) relative drift " *
+          "$(truncating.relative); untruncated (max bond $(untruncated.maxlink)) relative drift " *
+          "$(untruncated.relative); ratio $(truncating.relative / untruncated.relative)"
+    @test truncating.maxlink <= 40
+    @test untruncated.maxlink == 3^(2 * (6 ÷ 2))     # 729: the budget never bound
+    @test truncating.relative < 1e-11
+    @test untruncated.relative < 1e-11
+    @test truncating.relative <= 3 * untruncated.relative
   end
 
   @testset "exact-diagonalization oracle at d = 3" begin
