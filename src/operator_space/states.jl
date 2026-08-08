@@ -222,8 +222,8 @@ identity `I` elsewhere.
   identity henceforth") that equals `sum_j c_j O_j` exactly, including its trace/identity
   component. Because it uses the same literal-operator convention as
   [`operator_product_state`](@ref), the two compose correctly: e.g. `add(operator_product_state(
-  sites, fill(I, length(sites))), operator_local_sum_state(sites, sz, coeffs))` is the literal
-  `I + sum_j c_j sz_j`.
+  sites, fill(Matrix{ComplexF64}(I, d, d), length(sites))), operator_local_sum_state(sites, sz,
+  coeffs))` is the literal `I + sum_j c_j sz_j`.
 
 # Notes
 - This is the transport source builder: uniform `coeffs` give a total charge such as
@@ -319,12 +319,18 @@ uniform total-`S^z` operator `sum_j S_j^z`.
   normalization relative to the literal `sum_j coefficient * sigma^z_j`. That factor cancels in
   the ratio observables (e.g. [`pauli_expectation_profile`](@ref)) this state is built for; it
   was always present and is documented here for clarity.
+- Requires `sites` of local dimension `2` (throws `ArgumentError` otherwise); use
+  [`operator_local_sum_state`](@ref) directly for any other local dimension.
 """
 function pauli_total_sz_state(sites; coefficient::Union{Nothing,Number}=nothing)
   nsites = length(sites)
   nsites >= 1 || throw(ArgumentError("pauli_total_sz_state requires at least one site"))
+  d = local_dimension(first(sites))
+  d == 2 || throw(ArgumentError("pauli_total_sz_state is the spin-1/2 case; use operator_local_sum_state for local dimension $(d)"))
+  all(local_dimension(site) == d for site in sites) ||
+    throw(ArgumentError("pauli_total_sz_state requires a uniform local dimension"))
   weight = isnothing(coefficient) ? 2.0^(nsites / 2 - 1) : coefficient
-  weights = _operator_coefficients(pauli_matrices().Z / sqrt(2), 2)
+  weights = _operator_coefficients(pauli_matrices().Z / sqrt(2), d)
   return _local_sum_state(sites, weights, fill(weight, nsites), 1.0)
 end
 
@@ -361,6 +367,8 @@ transport source.
   normalization relative to the literal `sum_j sign(j - kink) * coefficient * sigma^z_j`. That
   factor cancels in ratio observables; it was always present and is documented here for
   clarity.
+- Requires `sites` of local dimension `2` (throws `ArgumentError` otherwise); use
+  [`operator_local_sum_state`](@ref) directly for any other local dimension.
 
 # Examples
 ```jldoctest
@@ -376,7 +384,11 @@ function pauli_domain_wall_state(sites; kink::Integer=length(sites) ÷ 2, coeffi
   nsites = length(sites)
   nsites >= 1 || throw(ArgumentError("pauli_domain_wall_state requires at least one site"))
   0 <= kink <= nsites || throw(ArgumentError("kink must lie in 0:length(sites)"))
-  weights = _operator_coefficients(pauli_matrices().Z / sqrt(2), 2)
+  d = local_dimension(first(sites))
+  d == 2 || throw(ArgumentError("pauli_domain_wall_state is the spin-1/2 case; use operator_local_sum_state for local dimension $(d)"))
+  all(local_dimension(site) == d for site in sites) ||
+    throw(ArgumentError("pauli_domain_wall_state requires a uniform local dimension"))
+  weights = _operator_coefficients(pauli_matrices().Z / sqrt(2), d)
   coeffs = [j <= kink ? -coefficient : coefficient for j in 1:nsites]
   return _local_sum_state(sites, weights, coeffs, 1.0)
 end

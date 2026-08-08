@@ -435,6 +435,17 @@ end
     end
   end
 
+  @testset "pauli_total_sz_state/pauli_domain_wall_state reject non-spin-1/2 sites" begin
+    # Regression: these wrappers used to route through operator_local_sum_state, which derives
+    # d from `sites` and rejects a size mismatch against the fixed 2x2 Z/sqrt(2) operator. After
+    # the identity_amplitude fix they call _local_sum_state directly and must therefore validate
+    # d == 2 themselves -- otherwise a d = 3 site silently builds a bogus bond-dimension-2 MPS
+    # (every valid site dimension d^2 >= 4 keeps the tensor[site => mu] writes for mu in 1:4 in
+    # bounds, so no natural BoundsError would catch this).
+    @test_throws ArgumentError pauli_total_sz_state(operator_siteinds(4; d = 3))
+    @test_throws ArgumentError pauli_domain_wall_state(operator_siteinds(4; d = 3))
+  end
+
   @testset "label validation is dimension aware" begin
     @test_throws ArgumentError operator_basis_state(operator_siteinds(2; d = 3), [10, 1])
     # Pauli letter labels are only meaningful at d = 2.
