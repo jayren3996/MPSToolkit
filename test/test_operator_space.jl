@@ -319,15 +319,21 @@ end
     b = operator_basis_state(sites, [1, 4, 2, 1])
     @test inner(a, b) ≈ 1.0 atol = 1e-14
 
+    # pauli_total_sz_state/pauli_domain_wall_state keep their pre-existing bond-dimension-2
+    # amplitudes (identity_amplitude = 1), while operator_local_sum_state now builds the
+    # *literal* operator sum (identity_amplitude = sqrt(d)) -- see the dedicated pin testset
+    # below. Built from the same weights/coeffs, the two therefore differ by exactly
+    # sqrt(d)^(nsites - 1), not by a factor of 1.
+    scale = sqrt(2.0)^(4 - 1)
     total_via_wrapper = pauli_total_sz_state(sites)
     total_via_generic = operator_local_sum_state(
       sites, pauli_matrices().Z / sqrt(2), fill(2.0^(4 / 2 - 1), 4))
-    @test inner(total_via_wrapper, total_via_generic) ≈ inner(total_via_wrapper, total_via_wrapper) atol = 1e-12
+    @test inner(total_via_wrapper, total_via_generic) ≈ scale * inner(total_via_wrapper, total_via_wrapper) atol = 1e-12
 
     dw_wrapper = pauli_domain_wall_state(sites; kink = 2)
     dw_generic = operator_local_sum_state(
       sites, pauli_matrices().Z / sqrt(2), [j <= 2 ? -1.0 : 1.0 for j in 1:4])
-    @test inner(dw_wrapper, dw_generic) ≈ inner(dw_wrapper, dw_wrapper) atol = 1e-12
+    @test inner(dw_wrapper, dw_generic) ≈ scale * inner(dw_wrapper, dw_wrapper) atol = 1e-12
   end
 
   @testset "operator_product_state decomposes dense local matrices" begin
@@ -354,11 +360,78 @@ end
     state = operator_local_sum_state(sites, sz, coeffs)
     @test all(dim(linkind(state, b)) <= 2 for b in 1:3)
     basis = operator_basis_matrices(d)
-    # Coefficient of "S^z on site j, identity elsewhere" must be coeffs[j] * tr(P_mu' * S^z).
+    # Coefficient of "S^z on site j, identity elsewhere" is coeffs[j] * tr(P_mu' * S^z) times
+    # sqrt(d)^(nsites - 1): operator_local_sum_state now inserts a literal identity (amplitude
+    # sqrt(d) on basis element 1, not 1) on every other site, so the literal operator it
+    # represents is exactly sum_j coeffs[j] * S^z_j -- see the dedicated literal-sum testset
+    # below for the direct check against operator_product_state.
+    literal_scale = sqrt(d)^(length(sites) - 1)
     for j in 1:4, mu in 2:d^2
       labels = [k == j ? mu : 1 for k in 1:4]
       probe = operator_basis_state(sites, labels)
-      @test inner(probe, state) ≈ coeffs[j] * tr(basis[mu]' * sz) atol = 1e-12
+      @test inner(probe, state) ≈ literal_scale * coeffs[j] * tr(basis[mu]' * sz) atol = 1e-12
+    end
+  end
+
+  @testset "operator_local_sum_state equals the literal operator sum" begin
+    # Pin operator_local_sum_state against literal per-term product states built with
+    # operator_product_state, for both a traceless and a non-traceless local operator, at two
+    # different local dimensions. This is the exact composition later transport tasks rely on
+    # (e.g. rho = I + sum_j c_j S^z_j), so the two builders must agree on what "identity
+    # elsewhere" means.
+    cases = (
+      (d = 2, op = ComplexF64[2 0; 0 1], nsites = 4),      # non-traceless, d = 2
+      (d = 2, op = ComplexF64[1 0; 0 -1], nsites = 4),     # traceless (sigma^z), d = 2
+      (d = 3, op = ComplexF64.(diagm([2, 1, 0])), nsites = 3),   # non-traceless, d = 3
+      (d = 3, op = ComplexF64.(diagm([1, 0, -1])), nsites = 3),  # traceless (spin-1 S^z), d = 3
+    )
+    for case in cases
+      d, op, nsites = case.d, case.op, case.nsites
+      sites = operator_siteinds(nsites; d = d)
+      identity_matrix = Matrix{ComplexF64}(I, d, d)
+      coeffs = [1.0, -2.0, 3.0, -4.0][1:nsites]
+
+      single(j) = operator_product_state(sites, [k == j ? op : identity_matrix for k in 1:nsites];
+                                          coefficient = coeffs[j])
+      reference = single(1)
+      for j in 2:nsites
+        reference = add(reference, single(j); maxdim = 16, cutoff = 0.0)
+      end
+      built = operator_local_sum_state(sites, op, coeffs)
+      @test inner(reference, built) ≈ inner(reference, reference) atol = 1e-10
+      @test norm(built) ≈ norm(reference) atol = 1e-10
+    end
+  end
+
+  @testset "pauli_total_sz_state/pauli_domain_wall_state pin identity_amplitude = 1" begin
+    # These wrappers deliberately keep their pre-refactor bond-dimension-2 numerics (unlike
+    # operator_local_sum_state, which now builds the literal operator sum). Pin that convention
+    # directly: built from the *same* normalized op (pauli_matrices().Z / sqrt(2)), the wrapper
+    # and operator_local_sum_state must differ by exactly identity_amplitude^(nsites - 1), i.e.
+    # 1^(nsites-1) vs sqrt(2)^(nsites-1) -- nothing else.
+    for nsites in (1, 4)
+      sites = pauli_siteinds(nsites)
+      kink = min(2, nsites)
+      coefficient = 0.75
+      scale = 2.0^((nsites - 1) / 2)
+
+      dw = pauli_domain_wall_state(sites; kink = kink, coefficient = coefficient)
+      dw_weights = [j <= kink ? -coefficient : coefficient for j in 1:nsites]
+      dw_reference = operator_local_sum_state(sites, pauli_matrices().Z / sqrt(2), dw_weights)
+      @test inner(dw, dw_reference) ≈ scale * inner(dw, dw) atol = 1e-12
+      @test norm(dw_reference) ≈ scale * norm(dw) atol = 1e-12
+
+      total = pauli_total_sz_state(sites)
+      total_weights = fill(2.0^(nsites / 2 - 1), nsites)
+      total_reference = operator_local_sum_state(sites, pauli_matrices().Z / sqrt(2), total_weights)
+      @test inner(total, total_reference) ≈ scale * inner(total, total) atol = 1e-12
+      @test norm(total_reference) ≈ scale * norm(total) atol = 1e-12
+
+      # nsites == 1 has no "unoccupied" site, so identity_amplitude never enters: scale == 1
+      # and the wrapper and operator_local_sum_state must coincide exactly.
+      if nsites == 1
+        @test scale ≈ 1.0 atol = 1e-14
+      end
     end
   end
 
