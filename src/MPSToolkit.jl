@@ -123,13 +123,19 @@ using ..MPSToolkit:
   operator_gate_from_lindbladian,
   pauli_state_from_mpo,
   pauli_superoperator_mpo,
+  operator_state_from_mpo,
+  operator_superoperator_mpo,
   pauli_pxp_constraint_state,
   pauli_pxp_constraint_projector,
   pauli_trace,
   pauli_expectation,
   pauli_expectation_profile,
+  operator_trace,
+  operator_expectation,
+  operator_expectation_profile,
   pauli_gate_from_imaginary_time,
   pauli_gibbs_state,
+  operator_gibbs_state,
   constrained_dmt_evolve!,
   DMTOptions,
   dmt_step!,
@@ -157,13 +163,19 @@ export pauli_siteinds,
   operator_gate_from_lindbladian,
   pauli_state_from_mpo,
   pauli_superoperator_mpo,
+  operator_state_from_mpo,
+  operator_superoperator_mpo,
   pauli_pxp_constraint_state,
   pauli_pxp_constraint_projector,
   pauli_trace,
   pauli_expectation,
   pauli_expectation_profile,
+  operator_trace,
+  operator_expectation,
+  operator_expectation_profile,
   pauli_gate_from_imaginary_time,
   pauli_gibbs_state,
+  operator_gibbs_state,
   constrained_dmt_evolve!,
   DMTOptions,
   dmt_step!,
@@ -229,8 +241,8 @@ export pauli_matrices, pauli_basis, pauli_components, operator_basis_matrices, l
 export spinhalf_matrices, spinhalf_xyz_bond_hamiltonian, spinhalf_tfim_bond_hamiltonian
 export pxp_term_hamiltonian, pxp_term_support, pxp_constraint_mpo
 export pauli_siteinds, pauli_basis_state, pauli_total_sz_state, pauli_domain_wall_state, operator_siteinds, operator_basis_state, operator_product_state, operator_local_sum_state, pauli_gate, pauli_gate_from_hamiltonian, pauli_lindblad_generator, pauli_gate_from_lindbladian, operator_gate, operator_gate_from_hamiltonian, operator_gate_from_imaginary_time, operator_lindblad_generator, operator_gate_from_lindbladian, DMTOptions, dmt_step!, dmt_evolve!, pauli_daoe_projector, pauli_fdaoe_projector, fdaoe_projector
-export pauli_state_from_mpo, pauli_superoperator_mpo, pauli_pxp_constraint_state, pauli_pxp_constraint_projector, pauli_trace, pauli_expectation, pauli_expectation_profile
-export pauli_gate_from_imaginary_time, pauli_gibbs_state, constrained_dmt_evolve!
+export pauli_state_from_mpo, pauli_superoperator_mpo, operator_state_from_mpo, operator_superoperator_mpo, pauli_pxp_constraint_state, pauli_pxp_constraint_projector, pauli_trace, pauli_expectation, pauli_expectation_profile, operator_trace, operator_expectation, operator_expectation_profile
+export pauli_gate_from_imaginary_time, pauli_gibbs_state, operator_gibbs_state, constrained_dmt_evolve!
 export ChebyshevRescaling, chebyshev_rescaling, rescale_hamiltonian, SpectralFunction, chebyshev_moments, energy_cutoff!, jackson_damping, jackson_kernel, reconstruct_chebyshev, spectral_function
 
 end

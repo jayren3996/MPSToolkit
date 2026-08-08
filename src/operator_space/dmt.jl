@@ -42,15 +42,25 @@ struct DMTOptions
 end
 
 """
-    _pauli_identity_env(site)
+    _identity_env(site)
 
-Return the local Pauli-basis identity ket used when building DMT environments.
+Return the local basis-1 ket used when building operator-space identity/trace environments.
+Basis element 1 is always the normalized identity `I / sqrt(d)` (see
+[`operator_basis_matrices`](@ref)), so this is dimension-generic without any change of body.
 """
-function _pauli_identity_env(site)
+function _identity_env(site)
   tensor = ITensor(site)
   tensor[site => 1] = 1.0
   return tensor
 end
+
+"""
+    _pauli_identity_env(site)
+
+Deprecated alias for [`_identity_env`](@ref), kept so this file's remaining internal call
+sites keep compiling until they are migrated to the new name.
+"""
+const _pauli_identity_env = _identity_env
 
 """
     _left_identity_environment(psi, stop)
@@ -208,11 +218,22 @@ function _dmt_truncation_bonds(start::Integer, span::Integer, direction::Symbol)
   throw(ArgumentError("DMT direction must be :R or :L"))
 end
 
-function _validate_pauli_operator_space(psi::MPS, start::Integer, span::Integer)
-  for site in start:(start + span - 1)
-    dim(siteind(psi, site)) == 4 || throw(ArgumentError("DMT assumes Pauli operator-space sites ordered as (I, X, Y, Z) with local dimension 4"))
+"""
+    _validate_operator_space(psi, start, span)
+
+Validate that the window `start:(start + span - 1)` of operator-space `MPS` `psi` has a
+uniform local dimension, and return that dimension.
+
+# Returns
+- The local dimension `d` shared by every site in the window.
+"""
+function _validate_operator_space(psi::MPS, start::Integer, span::Integer)
+  d = local_dimension(siteind(psi, Int(start)))
+  for site in Int(start):(Int(start) + Int(span) - 1)
+    local_dimension(siteind(psi, site)) == d ||
+      throw(ArgumentError("operator-space window sites must share a common local dimension"))
   end
-  return nothing
+  return d
 end
 
 function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span::Integer, direction::Symbol, maxdim::Integer, connector_buffer::Integer)
@@ -223,10 +244,10 @@ function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span
   start >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
   last_site = start + span - 1
   last_site <= length(psi) || throw(ArgumentError("local gate support exceeds chain length"))
-  # Validate Pauli operator-space dimensions for every span, including span == 1, so a
-  # single-site gate on a non-Pauli (non-dimension-4) site is rejected rather than silently
-  # accepted.
-  _validate_pauli_operator_space(psi, start, span)
+  # Validate operator-space dimensions for every span, including span == 1, so a single-site
+  # gate on a non-operator-space (non-square-dimension) or non-uniform-dimension site is
+  # rejected rather than silently accepted.
+  _validate_operator_space(psi, start, span)
   span == 1 && return nothing
   start == length(psi) && throw(ArgumentError("periodic boundary DMT is not implemented for local gates"))
   for bond in start:(last_site - 1)

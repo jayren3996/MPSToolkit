@@ -25,8 +25,14 @@ to physical dynamics.
 
 # Returns
 - An `MPS` over `sites` whose Pauli amplitudes are `tr(P_α† P_G)`.
+
+# Notes
+- Defined for spin-1/2 (local dimension 2) operator space only; throws `ArgumentError` for
+  any other local dimension, since the PXP blockade constraint is a two-level construction.
 """
 function pauli_pxp_constraint_state(sites)
+  all(local_dimension(site) == 2 for site in sites) ||
+    throw(ArgumentError("this helper is defined for spin-1/2 (local dimension 2) operator space only"))
   return pauli_state_from_mpo(pxp_constraint_mpo(_pxp_physical_sites(length(sites))), sites)
 end
 
@@ -47,7 +53,13 @@ truncation (DMT or plain SVD) does leak weight out of it. Periodically applying 
 - An `MPO` over `sites`, idempotent up to truncation, that fixes any vectorized operator
   supported in the constrained sector and annihilates operators supported on
   blockade-violating configurations.
+
+# Notes
+- Defined for spin-1/2 (local dimension 2) operator space only; throws `ArgumentError` for
+  any other local dimension, since the PXP blockade constraint is a two-level construction.
 """
 function pauli_pxp_constraint_projector(sites)
+  all(local_dimension(site) == 2 for site in sites) ||
+    throw(ArgumentError("this helper is defined for spin-1/2 (local dimension 2) operator space only"))
   return pauli_superoperator_mpo(pxp_constraint_mpo(_pxp_physical_sites(length(sites))), sites)
 end

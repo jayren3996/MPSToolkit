@@ -1,13 +1,32 @@
 """
-    pauli_trace(rho)
+    operator_trace(rho)
 
-Return the physical trace of a vectorized operator stored as a Pauli-basis `MPS`.
+Return the physical trace of a vectorized operator stored as an operator-space `MPS`.
 
-In the normalized Pauli convention `tr(ρ) = (√2)^N c_{I…I}`, where `c_{I…I}` is the
-amplitude of the all-identity string, so the trace is one identity-environment contraction.
-The `(√2)^N` prefactor overflows `Float64` for `N ≳ 2048`, so absolute traces of very large
+In the normalized operator-basis convention `tr(ρ) = (√d)^N c_{I…I}`, where `c_{I…I}` is the
+amplitude of the all-identity string and `d` is the local Hilbert space dimension recovered
+from `rho`'s site indices, the trace is one identity-environment contraction. The `(√d)^N`
+prefactor overflows `Float64` for `N ≳ 2048 / log2(d)`, so absolute traces of very large
 operators are not representable (far beyond any feasible operator-space MPS size); normalized
 ratio observables are unaffected because the factor cancels.
+
+# Arguments
+- `rho`: Operator-space `MPS` on sites of a uniform local dimension `d`, typically from
+  [`operator_siteinds`](@ref).
+
+# Returns
+- The trace as a `ComplexF64` (real up to numerical noise for Hermitian operators).
+"""
+function operator_trace(rho::MPS)
+  d = _validate_operator_space(rho, 1, length(rho))
+  return Float64(d)^(length(rho) / 2) * scalar(_right_identity_environment(rho, 1))
+end
+
+"""
+    pauli_trace(rho)
+
+Spin-1/2 case of [`operator_trace`](@ref): return the physical trace of a vectorized operator
+stored as a Pauli-basis `MPS`.
 
 # Arguments
 - `rho`: Operator-space `MPS` on dimension-4 Pauli sites.
@@ -15,38 +34,44 @@ ratio observables are unaffected because the factor cancels.
 # Returns
 - The trace as a `ComplexF64` (real up to numerical noise for Hermitian operators).
 """
-function pauli_trace(rho::MPS)
-  _validate_pauli_operator_space(rho, 1, length(rho))
-  return 2.0^(length(rho) / 2) * scalar(_right_identity_environment(rho, 1))
-end
+pauli_trace(rho::MPS) = operator_trace(rho)
 
 """
-    _pauli_window_cap(window_sites, op)
+    _operator_window_cap(window_sites, op, d)
 
-Build the window cap tensor whose entry at the multi-site Pauli label `α` is `tr(P_α O)`,
-so that contracting it against an operator-space MPS window (with identity caps elsewhere)
-yields `tr(ρ O)` up to the `(√2)` factors handled by the callers.
+Build the window cap tensor whose entry at the multi-site basis label `α` is `tr(P_α O)`, so
+that contracting it against an operator-space MPS window (with identity caps elsewhere) yields
+`tr(ρ O)` up to the `(√d)` factors handled by the callers.
 """
-function _pauli_window_cap(window_sites, op::AbstractMatrix;
-                          local_basis=[matrix / sqrt(2) for matrix in values(pauli_matrices())])
+function _operator_window_cap(window_sites, op::AbstractMatrix, d::Integer)
   span = length(window_sites)
-  size(op) == (2^span, 2^span) || throw(ArgumentError("window cap operator size must match the window span"))
+  local_dim = Int(d)
+  size(op) == (local_dim^span, local_dim^span) ||
+    throw(ArgumentError("window cap operator size must match the window span"))
+  local_basis = operator_basis_matrices(local_dim)
   cap = ITensor(ComplexF64, window_sites...)
-  for labels in Iterators.product(ntuple(_ -> 1:4, span)...)
-    pauli = foldl(kron, (local_basis[l] for l in labels))
-    value = tr(pauli * op)
+  for labels in Iterators.product(ntuple(_ -> 1:local_dim^2, span)...)
+    basis_op = foldl(kron, (local_basis[l] for l in labels))
+    value = tr(basis_op * op)
     iszero(value) && continue
     cap[(site => label for (site, label) in zip(window_sites, labels))...] = value
   end
   return cap
 end
 
-function _validated_pauli_windows(rho::MPS, terms)
+"""
+    _validated_operator_windows(rho, terms, d)
+
+Validate a collection of `(start, op)` measurement terms against the chain length of `rho`,
+inferring each term's site span from `op`'s size at local dimension `d`, and return the
+`(start, span)` windows in input order.
+"""
+function _validated_operator_windows(rho::MPS, terms, d::Integer)
   windows = Vector{Tuple{Int,Int}}(undef, length(terms))
   for (k, (start, op)) in enumerate(terms)
     size(op, 1) == size(op, 2) || throw(ArgumentError("dense local operator must be square"))
     1 <= start <= length(rho) || throw(ArgumentError("term start must lie in 1:$(length(rho))"))
-    span = _operator_span(size(op, 1), local_dimension(siteind(rho, Int(start))))
+    span = _operator_span(size(op, 1), d)
     start + span - 1 <= length(rho) || throw(ArgumentError("term support exceeds chain length"))
     windows[k] = (Int(start), span)
   end
@@ -54,21 +79,22 @@ function _validated_pauli_windows(rho::MPS, terms)
 end
 
 """
-    pauli_expectation_profile(rho, terms; normalize=true)
+    operator_expectation_profile(rho, terms; normalize=true)
 
 Evaluate `tr(ρ O_k)` (optionally over `tr(ρ)`) for a list of dense local operators against a
 vectorized operator `rho`, in one O(N) sweep with cumulative identity environments.
 
 # Arguments
-- `rho`: Operator-space `MPS` on dimension-4 Pauli sites.
+- `rho`: Operator-space `MPS` on sites of a uniform local dimension `d`.
 - `terms`: Collection of `(start, op)` pairs; each `op` is a dense physical operator on
-  `2^span` dimensions acting on the sites `start:(start + span - 1)`. The pairs may be given
+  `d^span` dimensions acting on the sites `start:(start + span - 1)`. The pairs may be given
   in any order; results follow the input order.
 
 # Keyword Arguments
 - `normalize`: If `true` (default), return `tr(ρ O_k) / tr(ρ)`; otherwise return the
-  unnormalized `tr(ρ O_k)`. The unnormalized branch carries a `(√2)^N` factor that overflows
-  `Float64` for `N ≳ 2048` (far beyond feasible MPS sizes); the normalized ratio is immune.
+  unnormalized `tr(ρ O_k)`. The unnormalized branch carries a `(√d)^N` factor that overflows
+  `Float64` for `N ≳ 2048 / log2(d)` (far beyond feasible MPS sizes); the normalized ratio is
+  immune.
 
 # Returns
 - A `Vector{ComplexF64}` of expectation values. For Hermitian `ρ` and `O_k` the entries are
@@ -77,18 +103,19 @@ vectorized operator `rho`, in one O(N) sweep with cumulative identity environmen
 # Notes
 - This is the energy-density-profile measurement for operator-space transport runs: pass the
   Hamiltonian terms (e.g. from [`pxp_term_hamiltonian`](@ref)) and take the real part.
+- Every site of `rho` must share the same local dimension `d`; it is recovered once from the
+  chain (not re-derived per term) and reused for every window in `terms`.
 """
-function pauli_expectation_profile(rho::MPS, terms; normalize::Bool=true)
+function operator_expectation_profile(rho::MPS, terms; normalize::Bool=true)
   nsites = length(rho)
-  _validate_pauli_operator_space(rho, 1, nsites)
+  d = _validate_operator_space(rho, 1, nsites)
   isempty(terms) && return ComplexF64[]
-  windows = _validated_pauli_windows(rho, terms)
-  local_basis = [matrix / sqrt(2) for matrix in values(pauli_matrices())]
+  windows = _validated_operator_windows(rho, terms, d)
 
   right = Vector{ITensor}(undef, nsites + 1)
   right[nsites + 1] = ITensor(1.0)
   for site in nsites:-1:1
-    right[site] = right[site + 1] * (_pauli_identity_env(siteind(rho, site)) * rho[site])
+    right[site] = right[site + 1] * (_identity_env(siteind(rho, site)) * rho[site])
   end
   denominator = scalar(right[1])
   # Reject a numerically-negligible (not just exactly-zero) trace relative to the operator
@@ -97,7 +124,7 @@ function pauli_expectation_profile(rho::MPS, terms; normalize::Bool=true)
   # the relative tolerance the DMT kernel (`_mat_trunc!`) already uses; traceless operators
   # should be measured with `normalize=false`.
   normalize && abs(denominator) <= sqrt(eps(Float64)) * norm(rho) &&
-    throw(ArgumentError("normalized Pauli expectations require a nonzero trace; the operator trace is numerically negligible relative to its norm (use normalize=false for a traceless operator)"))
+    throw(ArgumentError("normalized operator-space expectations require a nonzero trace; the operator trace is numerically negligible relative to its norm (use normalize=false for a traceless operator)"))
 
   results = Vector{ComplexF64}(undef, length(terms))
   left = ITensor(1.0)
@@ -106,30 +133,78 @@ function pauli_expectation_profile(rho::MPS, terms; normalize::Bool=true)
     start, span = windows[k]
     while absorbed < start - 1
       absorbed += 1
-      left = left * (_pauli_identity_env(siteind(rho, absorbed)) * rho[absorbed])
+      left = left * (_identity_env(siteind(rho, absorbed)) * rho[absorbed])
     end
     window_block = rho[start]
     for site in (start + 1):(start + span - 1)
       window_block *= rho[site]
     end
-    cap = _pauli_window_cap([siteind(rho, s) for s in start:(start + span - 1)], last(terms[k]); local_basis=local_basis)
+    cap = _operator_window_cap([siteind(rho, s) for s in start:(start + span - 1)], last(terms[k]), d)
     raw = scalar(left * (cap * window_block) * right[start + span])
-    results[k] = normalize ? raw / (2.0^(span / 2) * denominator) : 2.0^((nsites - span) / 2) * raw
+    results[k] = normalize ? raw / (Float64(d)^(span / 2) * denominator) : Float64(d)^((nsites - span) / 2) * raw
   end
   return results
 end
 
 """
-    pauli_expectation(rho, op, start; normalize=true)
+    pauli_expectation_profile(rho, terms; normalize=true)
+
+Spin-1/2 case of [`operator_expectation_profile`](@ref): evaluate `tr(ρ O_k)` (optionally over
+`tr(ρ)`) for a list of dense local operators against a vectorized operator `rho` on Pauli sites.
+
+# Arguments
+- `rho`: Operator-space `MPS` on dimension-4 Pauli sites.
+- `terms`: Collection of `(start, op)` pairs; each `op` is a dense physical operator on `2^span`
+  dimensions.
+
+# Keyword Arguments
+- `normalize`: See [`operator_expectation_profile`](@ref).
+
+# Returns
+- A `Vector{ComplexF64}` of expectation values.
+"""
+pauli_expectation_profile(rho::MPS, terms; normalize::Bool=true) =
+  operator_expectation_profile(rho, terms; normalize=normalize)
+
+"""
+    operator_expectation(rho, op, start; normalize=true)
 
 Evaluate `tr(ρ O) / tr(ρ)` (or the unnormalized `tr(ρ O)` with `normalize=false`) for one
 dense local operator `op` applied at `start` against a vectorized operator `rho`.
 
-See [`pauli_expectation_profile`](@ref) for the batched O(N) version and the conventions.
+See [`operator_expectation_profile`](@ref) for the batched O(N) version and the conventions.
+
+# Arguments
+- `rho`: Operator-space `MPS` on sites of a uniform local dimension `d`.
+- `op`: Dense local operator of size `d^span x d^span`.
+- `start`: Left-edge site index of `op`'s support.
+
+# Keyword Arguments
+- `normalize`: See [`operator_expectation_profile`](@ref).
 
 # Returns
 - A `ComplexF64` expectation value (real up to numerical noise for Hermitian inputs).
 """
-function pauli_expectation(rho::MPS, op::AbstractMatrix, start::Integer; normalize::Bool=true)
-  return only(pauli_expectation_profile(rho, [(Int(start), op)]; normalize=normalize))
+function operator_expectation(rho::MPS, op::AbstractMatrix, start::Integer; normalize::Bool=true)
+  return only(operator_expectation_profile(rho, [(Int(start), op)]; normalize=normalize))
 end
+
+"""
+    pauli_expectation(rho, op, start; normalize=true)
+
+Spin-1/2 case of [`operator_expectation`](@ref): evaluate `tr(ρ O) / tr(ρ)` for one dense local
+operator `op` applied at `start` against a vectorized operator `rho` on Pauli sites.
+
+# Arguments
+- `rho`: Operator-space `MPS` on dimension-4 Pauli sites.
+- `op`: Dense local Pauli-space operator.
+- `start`: Left-edge site index of `op`'s support.
+
+# Keyword Arguments
+- `normalize`: See [`operator_expectation_profile`](@ref).
+
+# Returns
+- A `ComplexF64` expectation value (real up to numerical noise for Hermitian inputs).
+"""
+pauli_expectation(rho::MPS, op::AbstractMatrix, start::Integer; normalize::Bool=true) =
+  operator_expectation(rho, op, start; normalize=normalize)

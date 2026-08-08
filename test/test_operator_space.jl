@@ -537,3 +537,61 @@ end
     @test_throws ArgumentError MPSToolkit._operator_span(8, 3)
   end
 end
+
+@testset "generic operator-space measurement" begin
+  @testset "trace and expectations at d = 3 match dense linear algebra" begin
+    d = 3
+    nsites = 3
+    sites = operator_siteinds(nsites; d = d)
+    sz = ComplexF64[1 0 0; 0 0 0; 0 0 -1]
+    identity_matrix = Matrix{ComplexF64}(I, d, d)
+    # rho = I x I x I  +  0.4 * (I x S^z x I) : a genuine near-infinite-temperature operator
+    rho = add(
+      operator_product_state(sites, [identity_matrix, identity_matrix, identity_matrix]),
+      operator_product_state(sites, [identity_matrix, sz, identity_matrix]; coefficient = 0.4);
+      maxdim = 4, cutoff = 0.0)
+
+    dense = kron(kron(identity_matrix, identity_matrix), identity_matrix) +
+            0.4 * kron(kron(identity_matrix, sz), identity_matrix)
+    @test operator_trace(rho) ≈ tr(dense) atol = 1e-10
+
+    for (start, op) in ((2, sz), (1, kron(sz, sz)))
+      span = start == 1 ? 2 : 1
+      padded = start == 1 ? kron(op, identity_matrix) : kron(kron(identity_matrix, op), identity_matrix)
+      @test operator_expectation(rho, op, start; normalize = false) ≈ tr(dense * padded) atol = 1e-10
+      @test operator_expectation(rho, op, start) ≈ tr(dense * padded) / tr(dense) atol = 1e-10
+    end
+  end
+
+  @testset "pauli_* measurement wrappers are unchanged" begin
+    sites = pauli_siteinds(4)
+    rho = add(pauli_basis_state(sites, fill(1, 4)),
+              pauli_domain_wall_state(sites; kink = 2); maxdim = 4, cutoff = 0.0)
+    z = pauli_matrices().Z
+    terms = [(x, ComplexF64.(z)) for x in 1:4]
+    @test pauli_trace(rho) ≈ operator_trace(rho) atol = 1e-12
+    @test pauli_expectation_profile(rho, terms; normalize = false) ≈
+          operator_expectation_profile(rho, terms; normalize = false) atol = 1e-12
+  end
+
+  @testset "operator_state_from_mpo round-trips at d = 3" begin
+    d = 3
+    nsites = 3
+    phys = siteinds("S=1", nsites)
+    sites = operator_siteinds(nsites; d = d)
+    mpo = MPO(phys, "Id")
+    vectorized = operator_state_from_mpo(mpo, sites)
+    @test operator_trace(vectorized) ≈ ComplexF64(d^nsites) atol = 1e-10
+  end
+end
+
+@testset "spin-1/2-only helpers reject higher local dimension" begin
+  # DAOE and the PXP constraint helpers key off the Pauli (I, X, Y, Z) label ordering and the
+  # two-level PXP blockade construction; they are out of scope for the higher-spin
+  # generalization and must say so rather than silently producing nonsense at d = 3.
+  sites = operator_siteinds(4; d = 3)
+  @test_throws ArgumentError pauli_daoe_projector(sites; lstar = 2, gamma = 0.5)
+  @test_throws ArgumentError pauli_fdaoe_projector(sites; wstar = 2, gamma = 0.5)
+  @test_throws ArgumentError pauli_pxp_constraint_state(sites)
+  @test_throws ArgumentError pauli_pxp_constraint_projector(sites)
+end
