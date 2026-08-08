@@ -309,6 +309,9 @@ end
   @testset "error and edge paths" begin
     @test isempty(pauli_expectation_profile(rho, Tuple{Int,Matrix{ComplexF64}}[]))
     @test_throws ArgumentError pauli_expectation_profile(rho, [(0, _random_hermitian(1, 1))])
+    # Regression: start beyond the chain length used to reach siteind(rho, start) while
+    # computing span, raising a raw BoundsError instead of this ArgumentError.
+    @test_throws ArgumentError pauli_expectation_profile(rho, [(length(rho) + 1, _random_hermitian(1, 1))])
     @test_throws ArgumentError pauli_expectation_profile(rho, [(nsites, _random_hermitian(2, 1))])
     @test_throws ArgumentError pauli_expectation_profile(rho, [(1, ones(ComplexF64, 2, 3))])
     # numerics-1: a numerically-negligible (not exactly zero) trace is rejected under

@@ -455,11 +455,29 @@ end
 end
 
 @testset "generic operator-space gates" begin
-  @testset "pauli_gate is the d = 2 case, bit-for-bit" begin
+  @testset "pauli_gate matches the explicit d = 2 definition" begin
+    # Ground truth independent of operator_gate's own implementation: recompute
+    # G[a, b] = tr(P_a' * u * P_b * u') directly from operator_basis_matrices(2), the same
+    # definition operator_gate's docstring states. pauli_gate(u) is literally
+    # operator_gate(u; d=2) (see gates.jl), so comparing pauli_gate against operator_gate
+    # would be tautological -- this checks the convention itself, independently.
     x = ComplexF64[0 1; 1 0]
     z = ComplexF64[1 0; 0 -1]
-    u = exp(-0.3im * kron(x, z))
-    @test pauli_gate(u) ≈ operator_gate(u; d = 2) atol = 1e-14
+    dt = 0.3
+    u = exp(-dt * im * kron(x, z))
+    # Genuinely non-Hermitian: a real-time evolution gate is unitary, not Hermitian in
+    # general. A Hermitian u would not distinguish the correct A*P*A' from a wrong
+    # conjugation such as A*P*A, so pin this so a future edit can't silently make u Hermitian.
+    @test norm(u - u') > 0
+    basis = operator_basis_matrices(2)
+    two_site = [kron(a, b) for a in basis for b in basis]
+    expected = ComplexF64[
+      tr(two_site[row]' * u * two_site[col] * u') for row in eachindex(two_site), col in eachindex(two_site)
+    ]
+    @test pauli_gate(u) ≈ expected atol = 1e-12
+  end
+
+  @testset "pauli_gate_from_hamiltonian delegates to operator_gate_from_hamiltonian" begin
     h = spinhalf_xyz_bond_hamiltonian(; Jx = 1.0, Jy = 0.7, Jz = 0.3)
     @test pauli_gate_from_hamiltonian(h, 0.1) ≈ operator_gate_from_hamiltonian(h, 0.1; d = 2) atol = 1e-14
   end
@@ -497,6 +515,16 @@ end
     @test h isa AbstractSparseMatrix
     dense_gate = operator_gate_from_hamiltonian(Matrix(h), 0.1; d = d)
     @test operator_gate_from_hamiltonian(h, 0.1; d = d) ≈ dense_gate atol = 1e-12
+  end
+
+  @testset "operator_gate densifies sparse input directly" begin
+    # The test above only exercises sparse input through operator_gate_from_hamiltonian,
+    # whose exp(...) densifies before operator_gate ever sees it. Call operator_gate itself
+    # on a sparse matrix to exercise its own Matrix{ComplexF64}(op) densification.
+    d = 3
+    sz = sparse(ComplexF64[1 0 0; 0 0 0; 0 0 -1])
+    @test sz isa AbstractSparseMatrix
+    @test operator_gate(sz; d = d) ≈ operator_gate(Matrix(sz); d = d) atol = 1e-12
   end
 
   @testset "span inference rejects incompatible sizes" begin
