@@ -1,11 +1,12 @@
 """
     pauli_gate_from_imaginary_time(h, dbeta)
 
-Build the dense Pauli-basis superoperator implementing one two-sided imaginary-time slice
+Spin-1/2 case of [`operator_gate_from_imaginary_time`](@ref): build the dense Pauli-basis
+superoperator implementing one two-sided imaginary-time slice
 
 `ρ ↦ e^{-(dbeta/2) h} ρ e^{-(dbeta/2) h}`
 
-for a dense local Hermitian `h`. This reuses [`pauli_gate`](@ref), whose construction
+for a dense local Hermitian `h`. This reuses [`operator_gate`](@ref), whose construction
 `G[α', α] = tr(P_α'† A P_α A†)` implements conjugation by any matrix `A`, not just a
 unitary; for Hermitian `h` the slice `A = e^{-(dbeta/2) h}` is Hermitian and positive.
 
@@ -17,10 +18,7 @@ unitary; for Hermitian `h` the slice `A = e^{-(dbeta/2) h}` is Hermitian and pos
 - A dense operator-space gate suitable for `tebd_evolve!` on Pauli sites.
 """
 function pauli_gate_from_imaginary_time(h::AbstractMatrix, dbeta::Real)
-  size(h, 1) == size(h, 2) || throw(ArgumentError("imaginary-time Hamiltonian must be square"))
-  norm(h - h') <= sqrt(eps(Float64)) * max(norm(h), one(Float64)) ||
-    throw(ArgumentError("imaginary-time Hamiltonian must be Hermitian"))
-  return pauli_gate(exp(-(dbeta / 2) * Matrix{ComplexF64}(h)))
+  return operator_gate_from_imaginary_time(h, dbeta; d=2)
 end
 
 """

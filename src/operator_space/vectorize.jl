@@ -45,7 +45,7 @@ operator-space helpers: the coefficient of the basis product `α = (α_1, …, �
 """
 function pauli_state_from_mpo(op::MPO, sites)
   _validate_vectorization_sites(op, sites)
-  basis = _pauli_basis_operators(1)
+  basis = operator_basis_matrices(2)
   tensors = ITensor[]
   for n in 1:length(op)
     phys = _mpo_unprimed_site_index(op, n)
@@ -86,7 +86,7 @@ the two-sided sandwich `ρ ↦ M ρ M†` in the normalized Pauli basis.
 function pauli_superoperator_mpo(op::MPO, sites)
   _validate_vectorization_sites(op, sites)
   nsites = length(op)
-  basis = _pauli_basis_operators(1)
+  basis = operator_basis_matrices(2)
   ket_links = [commonind(op[n], op[n + 1]) for n in 1:(nsites - 1)]
   bra_links = [sim(link) for link in ket_links]
 

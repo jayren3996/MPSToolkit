@@ -2,6 +2,7 @@ using ITensors
 using ITensorMPS
 using LinearAlgebra
 using MPSToolkit
+using SparseArrays
 using Test
 
 function _basis_product_mps(sites, labels::Vector{Int})
@@ -450,5 +451,61 @@ end
     @test_throws ArgumentError operator_basis_state(operator_siteinds(2; d = 3), [10, 1])
     # Pauli letter labels are only meaningful at d = 2.
     @test_throws ArgumentError operator_basis_state(operator_siteinds(2; d = 3), ["X", "I"])
+  end
+end
+
+@testset "generic operator-space gates" begin
+  @testset "pauli_gate is the d = 2 case, bit-for-bit" begin
+    x = ComplexF64[0 1; 1 0]
+    z = ComplexF64[1 0; 0 -1]
+    u = exp(-0.3im * kron(x, z))
+    @test pauli_gate(u) ≈ operator_gate(u; d = 2) atol = 1e-14
+    h = spinhalf_xyz_bond_hamiltonian(; Jx = 1.0, Jy = 0.7, Jz = 0.3)
+    @test pauli_gate_from_hamiltonian(h, 0.1) ≈ operator_gate_from_hamiltonian(h, 0.1; d = 2) atol = 1e-14
+  end
+
+  @testset "d = 3 gate conjugates correctly" begin
+    d = 3
+    basis = operator_basis_matrices(d)
+    sz = ComplexF64[1 0 0; 0 0 0; 0 0 -1]
+    sx = ComplexF64[0 1 0; 1 0 1; 0 1 0] / sqrt(2)
+    h = kron(sx, sx) + kron(sz, sz)
+    dt = 0.13
+    gate = operator_gate_from_hamiltonian(h, dt; d = d)
+    @test size(gate) == (d^4, d^4)
+    # Compare against the definition on a few random two-site operators.
+    u = exp(-im * dt * Matrix{ComplexF64}(h))
+    two_site = [kron(a, b) for a in basis for b in basis]
+    for column in (1, 7, 40, d^4)
+      evolved = u * two_site[column] * u'
+      expected = ComplexF64[tr(two_site[row]' * evolved) for row in eachindex(two_site)]
+      @test gate[:, column] ≈ expected atol = 1e-10
+    end
+  end
+
+  @testset "identity Hamiltonian gives the identity superoperator" begin
+    for d in (2, 3, 4)
+      gate = operator_gate(Matrix{ComplexF64}(I, d, d); d = d)
+      @test gate ≈ Matrix{ComplexF64}(I, d^2, d^2) atol = 1e-12
+    end
+  end
+
+  @testset "sparse Hamiltonians from EDKit-style builders are accepted" begin
+    d = 3
+    sz = sparse(ComplexF64[1 0 0; 0 0 0; 0 0 -1])
+    h = kron(sz, sz)
+    @test h isa AbstractSparseMatrix
+    dense_gate = operator_gate_from_hamiltonian(Matrix(h), 0.1; d = d)
+    @test operator_gate_from_hamiltonian(h, 0.1; d = d) ≈ dense_gate atol = 1e-12
+  end
+
+  @testset "span inference rejects incompatible sizes" begin
+    # A dense physical matrix of size d^span x d^span acts on `span` sites of local dimension
+    # d: 3^2 = 9 is two sites, 3^4 = 81 is four sites (matches the "d = 3 gate conjugates
+    # correctly" testset above, which independently pins a 9x9 two-site Hamiltonian to a
+    # d^4 x d^4 gate).
+    @test MPSToolkit._operator_span(9, 3) == 2
+    @test MPSToolkit._operator_span(81, 3) == 4
+    @test_throws ArgumentError MPSToolkit._operator_span(8, 3)
   end
 end
