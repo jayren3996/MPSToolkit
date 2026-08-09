@@ -17,9 +17,15 @@ Refael to follow thermalization and hydrodynamic transport in regimes where ordi
 product state (or matrix product operator) truncation fails. The setting is operator space:
 the object being evolved is not a wavefunction but a density matrix ``\rho`` (or, more
 generally, a mixed operator) written as a matrix product state over a *vectorized* local
-basis. MPSToolkit uses the normalized Pauli basis ``(I, X, Y, Z)`` for this; see the
-[Operator Space](operator-space.md) page for the vectorization conventions, `pauli_siteinds`,
-`pauli_basis_state`, and the gate builders.
+basis. MPSToolkit vectorizes onto a normalized, Hermitian, orthonormal onsite basis (a
+generalized Gell-Mann basis, identity first) for a local Hilbert space of any dimension ``d``;
+at ``d = 2`` this basis is *exactly* the normalized Pauli basis ``(I, X, Y, Z)/\sqrt2``, so
+every `pauli_*` helper is the ``d = 2`` case of the generic `operator_*` one. See
+[Operator Space](operator-space.md) for the vectorization conventions, `operator_siteinds` /
+`pauli_siteinds`, `operator_basis_state` / `pauli_basis_state`, and the gate builders. This
+page's worked examples use the spin-1/2 `pauli_*` names throughout, except the dedicated
+**Higher spin** section below — every DMT entry point (`DMTOptions`, `DMTGateEvolution`,
+`dmt_step!`, `dmt_evolve!`) works unchanged at any local dimension.
 
 ### Why ordinary truncation fails for transport
 
@@ -38,26 +44,43 @@ truncation preferentially *keeps* the scrambled tail and *discards* the low-weig
 that encode the conserved density. The result is that diffusion constants and other transport
 coefficients come out wrong, even when the nominal truncation error looks small.
 
-### The identity-preserving truncation rule
+### The truncation rule
 
-DMT changes which information is protected. At each bond it forms the *reduced* description of
-the two-site (left block, right block) operator as seen through the trace — concretely, it
-contracts the left and right halves of the operator MPS against the local identity
-(trace) environment, so that the matrix being truncated is expressed in a basis whose first
-direction is the identity/trace connector and whose leading directions span the local reduced
-operators on each side. Truncation then proceeds on the *remaining* block only:
+DMT changes which information is protected, and it does so *exactly* rather than by degree. At
+a bond with the orthogonality center placed on it, write the bond matrix (the Schmidt/bond
+tensor connecting the left and right halves of the operator MPS) as ``M``. DMT expresses ``M``
+in a basis whose leading directions span the local-operator subspace on the ``n`` sites
+adjacent to the cut on each side, with ``n = (\texttt{preserve\_diameter} - 1)/2`` (``n = 1``,
+i.e. the first ``d^2`` rows and the first ``d^2`` columns, at the default
+`preserve_diameter = 3`). Those ``d^{2n}`` leading rows *and* the ``d^{2n}`` leading columns of
+``M`` — together with a rank-one trace/identity connector ``C`` that lives inside the same
+protected block — are reinstated **exactly** after truncation; only the doubly-orthogonal
+complement that lies outside both the row and the column protected block is compressed by SVD:
 
 ```math
-M \;=\; \underbrace{C}_{\text{protected connector}} \;+\; \underbrace{M'}_{\text{truncated by SVD}} ,
+M \;=\; \underbrace{C}_{\text{rank-1 trace connector}} \;+\; \underbrace{\text{(protected rows and columns)}}_{\text{kept exactly}} \;+\; \underbrace{D}_{\text{doubly-orthogonal complement: truncated}} .
 ```
 
-where ``C`` is the rank-one identity/trace connector that is subtracted off and reinstated
-*exactly*, and the SVD truncation acts only on ``M'`` after a buffer of leading "connector"
-directions has been set aside. Because the identity direction and a buffer of nearby low-weight
-directions are carried through every bond untouched, the locally conserved densities and their
-slow hydrodynamic tails survive truncation even though they correspond to small singular
-values. What gets compressed is the high-weight, long-range connected correlations, the part
-of the operator that does not feed back into transport.
+Because the protected block is reinstated exactly — not merely weighted more heavily by the
+SVD — **every observable of diameter at most `preserve_diameter` survives the truncation
+exactly** (to floating-point precision), independent of how the complement ``D`` is compressed.
+This exact-preservation property, for the leading ``d^2`` rows and columns at diameter 3, is the
+actual content of the guarantee DMT is defined by (White, Zaletel, Mong, Refael,
+[arXiv:1707.01506](https://arxiv.org/abs/1707.01506), Sec. III). The resulting bond has rank at
+most
+
+```math
+\operatorname{rank}(M') \;\le\; 2\, d^{2n} + \chi' ,
+```
+
+where ``\chi'`` is the number of singular directions kept from the complement — the
+``\chi = \chi_{\text{preserve}} + \chi_{\text{extra}}`` split of Ye, Machado, Mong, Yao
+([arXiv:1902.01859](https://arxiv.org/abs/1902.01859)). `maxdim` is this total rank bound
+(see **Budget semantics** below), so `preserve_diameter` and `maxdim` together fix
+``\chi' = \texttt{maxdim} - 2 d^{2n}``. Locally conserved densities and their slow hydrodynamic
+tails survive truncation exactly even though they may correspond to small singular values; what
+gets compressed is only the high-weight, long-range connected correlations that do not feed
+back into transport.
 
 The trace component is treated with care numerically. A traceless operator (for example a
 transport *current*) has essentially zero identity overlap, so the connector subtraction is
@@ -94,8 +117,8 @@ Four public symbols cover the workflow:
   step count, and the truncation budgets into one configuration object. It is the DMT analogue
   of `LocalGateEvolution`.
 - `DMTOptions` collects just the truncation settings (`maxdim`, `cutoff`, `gate_maxdim`,
-  `connector_buffer`) so they can be passed to a single step without constructing a full
-  evolution.
+  `preserve_diameter`, `truncation`) so they can be passed to a single step without
+  constructing a full evolution.
 - `dmt_step!` is the lowest-level entry point: apply one local gate at a bond and then perform
   the associated DMT truncation. It exists both in a keyword form and in an overload that takes
   a `DMTOptions`.
@@ -103,25 +126,56 @@ Four public symbols cover the workflow:
   with `direction=:R`, then walks the reverse schedule with `direction=:L`, repeats that for
   `evo.nstep` sweeps, and finally normalizes the operator MPS.
 
-`dmt_step!` first applies the raw gate with an inflated bond budget (`gate_maxdim`) and *no*
-cutoff, then truncates the inflated bonds back down to `maxdim` using the DMT rule. In this
-two-stage structure the gate is allowed to expand the bond and the transport-aware kernel then
-compresses it, which is why `gate_maxdim`, `maxdim`, and `connector_buffer` should be chosen
-together rather than independently.
+`dmt_step!` first applies the raw gate — by default with **no cap at all**
+(`gate_maxdim = 0` means "apply the gate exactly") and *no* cutoff — then truncates the
+(possibly much wider) bond back down to `maxdim` using the DMT rule. In this two-stage
+structure the gate is allowed to expand the bond freely and the transport-aware kernel then
+compresses it; a positive `gate_maxdim` pre-truncates the gate-inflated bond with a plain SVD
+*before* DMT ever sees it, discarding small singular values before the kernel can decide which
+of them are protected — exactly the error DMT exists to avoid — so raise it only to bound peak
+memory, never for accuracy.
 
 The truncation budget has a few knobs worth understanding:
 
-- `maxdim`: target bond dimension *after* DMT truncation.
+- `maxdim`: the **total** post-truncation bond dimension, *inclusive* of the protected block
+  (see **Budget semantics** below) — not the complement alone, and not an addition on top of a
+  separately-sized buffer.
 - `cutoff`: cutoff used only in the final "repair" SVD that re-factorizes the truncated bond
   back into MPS form.
 - `gate_maxdim`: temporary bond-dimension ceiling allowed while the raw gate is applied, before
-  DMT compresses the bond. It defaults to `max(maxdim * 16, 64)`.
-- `connector_buffer`: number of leading connector directions (starting with the identity/trace
-  direction) that are carried through every bond untouched. It defaults to `8` and must satisfy
-  `connector_buffer <= maxdim`.
+  DMT compresses the bond back to `maxdim`. Defaults to `0`, meaning no cap: the gate is applied
+  exactly.
+- `preserve_diameter`: the positive odd diameter of the observables preserved exactly (default
+  `3`). `radius = (preserve_diameter - 1) / 2` sites are protected on each side of the cut, and
+  the protected block has dimension `2 d^(2 radius)`. Replaces the removed `connector_buffer`
+  (see the migration note below).
+- `truncation`: `:dense` (default) or `:random` complement truncation. `:random` is faster at
+  large bond dimension and preserves the guarantee to the same tolerance, but is not
+  deterministic — see [`DMTOptions`](@ref) for the measured tradeoff and why `:dense` ships as
+  the default.
 
-DMT assumes the operator MPS lives on dimension-4 Pauli sites ordered `(I, X, Y, Z)`; the step
-validates this and rejects non-Pauli sites. Periodic-boundary local gates are not supported.
+!!! warning "Migration: `connector_buffer` removed"
+    `connector_buffer` no longer exists in `DMTOptions`, `DMTGateEvolution`, or `dmt_step!`;
+    passing it raises an `ArgumentError` explaining the change rather than a bare `MethodError`.
+    Replace it with `preserve_diameter` (odd, default `3`). The other half of the migration is
+    a change in what `maxdim` *means*: it is now the **total** bond dimension, inclusive of the
+    protected block, rather than a target added on top of a separately-sized connector buffer.
+    A script re-run at the same `maxdim` therefore keeps `maxdim - 2 d^(2n)` complement
+    directions (`n = (preserve_diameter - 1) / 2`), not `maxdim` complement directions plus a
+    buffer on top.
+
+`maxdim` must be at least `2 d^(2n) + 1`; an `ArgumentError` naming `d`, `preserve_diameter`,
+and the implied floor is raised at the start of the step or sweep, before anything is mutated.
+
+| `preserve_diameter` | protected block `2 d^(2n)` | minimum `maxdim`, `d = 2` | `d = 3` | `d = 4` |
+|:--|--:|--:|--:|--:|
+| 3 | `2 d^2`  | 9  | 19  | 33  |
+| 5 | `2 d^4`  | 33 | 163 | 513 |
+
+DMT works at any local Hilbert space dimension `d`: the step validates only that every site in
+the gate's window shares a common local dimension (`operator_siteinds(nsites; d)` sites for any
+`d >= 2`, including the `d = 2` `pauli_siteinds` case). Periodic-boundary local gates are not
+supported.
 
 ## Worked example
 
@@ -156,8 +210,9 @@ dmt_evolve!(state, evolution)
 What to expect:
 
 - The gate is a ``16 \times 16`` superoperator: the TFIM bond Hamiltonian acts on two spin-1/2
-  sites, so its induced Pauli-space gate spans two dimension-4 operator sites. `dmt_evolve!`
-  infers this span automatically from the gate size and the site dimensions.
+  sites, so its induced Pauli-space gate spans two dimension-``d^2 = 4`` operator sites.
+  `dmt_evolve!` infers this span automatically from the gate size and the site dimensions — at
+  any `d`, not just `d = 2`.
 - `schedule = 1:(nsites-1)` applies the two-site gate on every adjacent bond in the forward
   pass; `reverse_schedule = reverse(schedule)` undoes that ordering for the backward pass. With
   this default reversal the driver maps reverse-sweep gates back to their forward counterparts
@@ -228,7 +283,7 @@ function transport_trace(Delta)
         spinhalf_xyz_bond_hamiltonian(; Jx=1.0, Jy=1.0, Jz=Delta), dt)
     schedule = collect(1:(nsites - 1))
     evo = DMTGateEvolution(gate, dt; schedule, reverse_schedule=reverse(schedule),
-        maxdim, cutoff=1e-10, gate_maxdim=4 * maxdim, connector_buffer=4)
+        maxdim, cutoff=1e-10, gate_maxdim=4 * maxdim)
     width2(state) = (p = single_z_profile(state);
         sum((x - center)^2 * p[x] for x in 1:nsites) / sum(p))
     times = [0.0]; M2 = [width2(O)]
@@ -255,10 +310,16 @@ for Delta in (0.5, 1.0, 2.0)
     times, M2 = transport_trace(Delta)
     println(Delta, "  ->  z = ", round(fit_z(times, M2, (3.0, 6.5)); digits=3))
 end
-# 0.5  ->  z = 1.09    (ballistic,            z = 1)
-# 1.0  ->  z = 1.45    (superdiffusive / KPZ, z = 3/2)
-# 2.0  ->  z = 1.90    (diffusive,            z = 2)
+# 0.5  ->  z = 1.093   (ballistic,            z = 1)
+# 1.0  ->  z = 1.349   (superdiffusive / KPZ, z = 3/2)
+# 2.0  ->  z = 1.658   (diffusive,            z = 2)
 ```
+
+These values are freshly measured, exactly as configured above (`nsites=30, maxdim=24`,
+~2 minutes total), against the current, faithful DMT kernel. This is a small demonstration
+configuration — a `maxdim = 24` bond at `d = 2` leaves only `chi' = maxdim - 8 = 16` complement
+directions after the protected block — not a converged production run; see the tip below on
+sharpening it.
 
 !!! tip "Fit the intermediate plateau, not the tail"
     A single power-law fit over the whole trace is biased two ways. At **early** times every
@@ -275,6 +336,13 @@ A complete, runnable transport script — using the closely related **domain-wal
 (the charge ``\mathcal{T}(t)\sim t^{1/z}`` transferred across the wall in place of the
 autocorrelation width, with the same front-contamination guard) — is
 [`examples/dmt/domain_wall_melting.jl`](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/domain_wall_melting.jl).
+At production scale (`nsites=80, maxdim=48`, 100 forward+reverse sweeps) that script measures
+``z = 1.021, 1.618, 1.792`` for the same three ``\Delta``, with total ``S^z`` drift
+``\sim 5\text{-}7\times10^{-11}`` — closer to the ballistic/KPZ/diffusive targets ``1, 3/2, 2``
+than the small demonstration above, as expected from the much larger chain and bond dimension.
+This is a genuinely **different measurement** — a different quench protocol (domain-wall melt
+versus autocorrelation width) at a different `(nsites, maxdim)` — not a recalculation of the
+snippet above at higher precision, so do not read the two numbers side by side as before/after.
 
 ## Worked example: constrained energy transport in the PXP chain
 
@@ -356,7 +424,7 @@ rho = pauli_gibbs_state(sites, terms, [weight(j) for j in 1:nsites];
 gates = [pauli_gate_from_hamiltonian(h, dt) for (_, h) in terms]
 schedule = [start for (start, _) in terms]     # 3-site bulk gates, 2-site edge gates
 evo = DMTGateEvolution(gates, dt; schedule, reverse_schedule=reverse(schedule),
-    nstep=1, maxdim=32, cutoff=1e-12, gate_maxdim=128, connector_buffer=8)
+    nstep=1, maxdim=32, cutoff=1e-12, gate_maxdim=128)
 projector = pauli_pxp_constraint_projector(sites)
 
 profile(state) = real.(pauli_expectation_profile(state, terms))   # e_j = tr(rho h_j)/tr(rho)
@@ -400,6 +468,85 @@ leakage accrued by one unprojected sweep):
     `pauli_superoperator_mpo`. The same pattern also fits DAOE-style projectors
     ([DAOE](daoe.md)).
 
+## Higher spin
+
+Every DMT entry point is generic in the local Hilbert space dimension `d`: build sites with
+`operator_siteinds(nsites; d)` instead of `pauli_siteinds(nsites)`, and `DMTGateEvolution`,
+`dmt_step!`, `dmt_evolve!`, and `DMTOptions` all take `d` from the sites without further
+configuration. The onsite basis is the generalized Gell-Mann basis (see
+[Operator Space](operator-space.md)); at `d = 2` it is exactly the Pauli basis used throughout
+the rest of this page, so a spin-1/2 script written against `pauli_*` names is already the
+`d = 2` special case of everything below.
+
+Building the dense local Hamiltonian that `operator_gate_from_hamiltonian` needs is outside
+this package's scope for spin `> 1/2` (`MPSToolkit` supplies the operator-space machinery, not
+spin-`S` model builders — see [Operator Space](operator-space.md)); any source of dense
+`d x d` matrices works, sparse included, since the gate builders densify internally. The
+snippet below uses [EDKit.jl](https://github.com/jayren3996/EDKit.jl) — **not a dependency of
+MPSToolkit** — as one convenient source, because its multi-site string convention (`kron`
+applied left-to-right, first character = leftmost site) matches MPSToolkit's own:
+
+```julia
+using MPSToolkit, ITensors, ITensorMPS
+using LinearAlgebra: I
+using EDKit: spin                       # illustrative only: EDKit.jl is not an MPSToolkit
+                                         # dependency; any source of dense d x d matrices works
+
+d, nsites, dt, maxdim = 3, 40, 0.1, 64
+sites = operator_siteinds(nsites; d = d)
+
+h = spin((1, "xx"), (1, "yy"), (1, "zz"); D = d)      # sparse spin-1 Heisenberg bond
+gate = operator_gate_from_hamiltonian(h, dt; d = d)   # sparse input densified internally
+
+sz = Matrix(spin("z"; D = d))
+identity_matrix = Matrix{ComplexF64}(I, d, d)
+rho = add(operator_product_state(sites, fill(identity_matrix, nsites)),
+          operator_local_sum_state(sites, sz, [j <= nsites ÷ 2 ? -0.25 : 0.25 for j in 1:nsites]);
+          maxdim = 8, cutoff = 0.0)
+
+schedule = collect(1:(nsites - 1))
+evo = DMTGateEvolution(gate, dt; schedule, reverse_schedule = reverse(schedule),
+                       maxdim = maxdim, cutoff = 1e-12)
+profile(state) = real.(operator_expectation_profile(state, [(x, sz) for x in 1:nsites]))
+
+println("t=0.0  center = ", round.(profile(rho)[19:22]; digits=4))
+for k in 1:3
+    dmt_evolve!(rho, evo)
+    println("t=", round(2dt * k; digits=2), "  center = ", round.(profile(rho)[19:22]; digits=4),
+            "  maxlinkdim=", maxlinkdim(rho))
+end
+# t=0.0  center = [-0.1667, -0.1667, 0.1667, 0.1667]
+# t=0.2  center = [-0.1666, -0.1581, 0.1581, 0.1666]  maxlinkdim=59
+# t=0.4  center = [-0.1658, -0.1349, 0.1349, 0.1658]  maxlinkdim=63
+# t=0.6  center = [-0.1628, -0.1039, 0.1039, 0.1628]  maxlinkdim=63
+```
+
+`rho` is the `S^z` domain wall ``I + \sum_j c_j S^z_j`` (``c_j = \mp 0.25``) on top of the
+literal identity, exactly analogous to the spin-1/2 melts above. Read back through
+`operator_expectation_profile`, the physical ``S^z`` profile starts at the clean value
+``\pm 1/6`` (the normalized-basis overlap of ``S^z`` with itself at `d = 3`) and smooths from a
+step toward the chain center as the DMT-truncated Heisenberg evolution proceeds — the same
+melting behavior as the `d = 2` examples, now at spin 1.
+
+At `d = 3` the floor for `preserve_diameter = 3` is `maxdim >= 2*3^2 + 1 = 19` (see the budget
+table above); `maxdim = 64` here leaves `chi' = 64 - 18 = 46` complement directions, a
+demonstration-scale budget well below the `chi = 128-256` that arXiv:2205.02853 used for
+converged spin-1 SU(3) transport.
+
+!!! warning "`S^z` is not a single basis element at `d >= 3`"
+    Unlike at `d = 2`, where `pauli_basis_state(sites, ["Z", ...])` selects the single-`Z`
+    direction directly, the physical `S^z = diag(1, 0, -1)` at `d = 3` is a **combination** of
+    two diagonal Gell-Mann generators, not a scalar multiple of either alone — so no integer
+    basis label represents it, and `operator_basis_state` cannot build it (it only ever selects
+    one basis direction). Build it from the dense matrix with `operator_product_state` /
+    `operator_local_sum_state` instead, as above. See [Operator Space](operator-space.md) for
+    the full basis ordering and this caveat in more detail.
+
+`spin(...; D = d)` composes multi-site operator strings with `kron` applied left-to-right,
+first character = leftmost site — the same convention `operator_gate` and every
+operator-space state builder in MPSToolkit use — so dense Hamiltonians from EDKit.jl (or any
+other source following the same convention) plug in with no site relabeling.
+
 ## Relation to TEBD
 
 DMT and TEBD share one scheduling abstraction and differ only in the truncation kernel:
@@ -431,11 +578,13 @@ For *when* to prefer DMT, DAOE, or plain TEBD — and in particular why a dynami
   out-of-time-order correlators, or an arbitrary observable's Heisenberg evolution — that bias is
   wrong (there is no trace component to anchor it), and ordinary operator-space TEBD truncation
   ([`LocalGateEvolution`](@ref) with `tebd_evolve!`) is the right tool.
-- **Tune `maxdim`, `gate_maxdim`, and `connector_buffer` together.** A large `gate_maxdim`
-  lets a gate inflate the bond a lot before DMT truncates it back to `maxdim`; with a small
-  `connector_buffer` that can reduce accuracy, because fewer low-weight directions are
-  protected through the compression. Treat the three as a single budget. The constraint
-  `connector_buffer <= maxdim` is enforced by the constructors.
+- **Tune `maxdim` and `gate_maxdim` together; `preserve_diameter` sets a floor, not a dial to
+  balance against them.** A large `gate_maxdim` lets a gate inflate the bond a lot before DMT
+  truncates it back to `maxdim`; the default `gate_maxdim = 0` (apply the gate exactly) is safe
+  everywhere this package's own tests reach (`d <= 4`) and is a correctness fix at `d >= 5`, so
+  raise it above `0` only to cap peak memory, never for accuracy. `preserve_diameter` is fixed
+  by which diameter of observable needs preserving, not traded off against the others; `maxdim`
+  must simply clear the floor `2 d^(2n) + 1` it implies (see the budget table above).
 - **Pick `maxdim` by convergence, not by guesswork.** As with any MPS method, increase
   `maxdim` until the transport observable of interest (e.g. a diffusion constant or a density
   profile) stops moving. DMT typically reaches converged hydrodynamics at far smaller bond
@@ -443,10 +592,12 @@ For *when* to prefer DMT, DAOE, or plain TEBD — and in particular why a dynami
   advantage.
 - **`cutoff` is a repair-SVD setting, not the primary control.** It governs only the final
   re-factorization of the already-truncated bond. The transport-relevant decision is made by
-  the connector-preserving step, so `maxdim` and `connector_buffer` are the dials that matter.
-- **Pauli sites only.** DMT requires dimension-4 ``(I, X, Y, Z)`` operator sites and rejects
-  anything else; it is not a state-space or arbitrary-local-dimension method. Periodic-boundary
-  local gates are not implemented.
+  the DMT rule itself, so `maxdim` and `preserve_diameter` are the dials that matter.
+- **Higher-spin budgets grow fast.** The protected block has dimension `2 d^(2n)`
+  (`n = (preserve_diameter - 1) / 2`), so at fixed `preserve_diameter` a spin-1 (`d = 3`) run
+  needs a substantially larger `maxdim` than the equivalent spin-1/2 (`d = 2`) run for the same
+  complement resolution — compare the `d = 2` and `d = 3` columns of the budget table above.
+  arXiv:2205.02853 ran `d = 3` at `chi = 128-256`.
 
 ## API
 
@@ -478,7 +629,9 @@ pauli_pxp_constraint_projector
 
 ## References
 
-- C. David White, Michael Zaletel, Roger S. K. Mong, and Gil Refael, [Quantum dynamics of thermalizing systems](https://arxiv.org/abs/1707.01506)
+- C. David White, Michael Zaletel, Roger S. K. Mong, and Gil Refael, [Quantum dynamics of thermalizing systems](https://arxiv.org/abs/1707.01506) — the DMT algorithm; Sec. III for the exact-preservation guarantee.
+- Bingtian Ye, Francisco Machado, Christopher David White, Roger S. K. Mong, and Norman Y. Yao, [Emergent hydrodynamics in nonequilibrium quantum systems](https://arxiv.org/abs/1902.01859) — the `maxdim = chi_preserve + chi_extra` total-bond-dimension convention used here.
+- Bingtian Ye, Francisco Machado, Jack Kemp, Ross B. Hutson, and Norman Y. Yao, [Universal KPZ dynamics in integrable quantum systems](https://arxiv.org/abs/2205.02853) — precedent for DMT at `d = 3` (SU(3) spin-1) and `d = 4`, at `chi` up to 256-512.
 - Stuart Yi-Thomas, Brayden Ware, Jay D. Sau, and Christopher David White, [Comparing numerical methods for hydrodynamics in a one-dimensional lattice spin model](https://arxiv.org/abs/2310.06886)
 - En-Jui Kuo, Brayden Ware, Peter Lunts, Mohammad Hafezi, and Christopher David White, [Energy diffusion in weakly interacting chains with fermionic dissipation-assisted operator evolution](https://arxiv.org/abs/2311.17148)
 - Marko Ljubotina, Jean-Yves Desaules, Maksym Serbyn, and Zlatko Papić, [Superdiffusive energy transport in kinetically constrained models](https://doi.org/10.1103/PhysRevX.13.011033), Phys. Rev. X 13, 011033 (2023) — PXP energy transport and the KPZ exponent.

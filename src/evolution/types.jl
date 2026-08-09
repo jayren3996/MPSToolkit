@@ -143,7 +143,10 @@ Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
   1.05x-1.2x faster on a whole sweep at moderate budgets and ~1.4x once the gate-inflated bond
   passes ~2500, and preserves the guarantee to the same `1e-15` — but it draws from the global
   RNG, so it is **not deterministic**: two truncations of the same bond agree only to
-  randomized-SVD accuracy. See [`DMTOptions`](@ref).
+  randomized-SVD accuracy. `dmt_evolve!` truncates every bond twice per sweep
+  (`direction=:R` on the forward schedule, `:L` on the reverse), so `:random` would make those
+  two halves sketch independently instead of reproducing the same physical state. See
+  [`DMTOptions`](@ref).
 - `normalize`: Default normalization choice carried by the object; `evolve!` / `dmt_evolve!`
   use it unless overridden by their own `normalize` keyword. Set `false` for traceless
   operators (see [`dmt_evolve!`](@ref)).

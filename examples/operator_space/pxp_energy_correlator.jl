@@ -44,6 +44,20 @@
 #     chi=32: plateaus lower, ~1.32-1.38 — truncation suppresses M2 growth, so the slope
 #             UNDERSHOOTS the converged value (landing near 4/3 by partial cancellation,
 #             not by having reached the asymptote).
+#
+# CAVEAT (2026-08, higher-spin-dmt rebuild): the chi=48 / chi=32 reference bands above were
+# measured BEFORE the DMT truncation kernel was rewritten to actually deliver its
+# diameter-preservation guarantee (see docs/src/manual/dmt.md and the DMTOptions docstring) —
+# the OLD kernel's measured preservation error on a diameter-<=3 probe was ~0.3-0.5; the current
+# kernel measures ~1e-13 on the same class of probe. They have not been re-measured since, and
+# test/test_transport_reference.jl does NOT cover this script: it only re-fits the committed CSV
+# that this file's companion (pxp_energy_correlator_reference.jl) produced back then, and runs
+# no DMT at all, so a green test suite does not confirm the current kernel reproduces these
+# numbers. Re-generating them means an N=64, chi=48, t<=14 run that the reference script's own
+# header calls "expensive" (that's why it is committed rather than run in CI) — out of scope
+# here. Treat the two bands above as historical calibration, not a live regression target, until
+# they are re-measured under the current kernel.
+#
 # So: raise maxdim until the slope stops moving UP (truncation converged), then extend in
 # time and watch it descend toward 4/3. The default parameters here are sized for a
 # few-minute demonstration run; treat the printed exponent as an effective crossover value.

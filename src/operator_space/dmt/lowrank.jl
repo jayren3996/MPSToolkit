@@ -102,10 +102,13 @@ the matrix-free products `mul` and `adj`.
   of its input: it draws from the global RNG, so two truncations of the *same* bond disagree at
   the randomized-SVD level. That is a property, not a test artifact — with `:random` the `:R`
   and `:L` branches of [`_dmt_bond_truncate!`](@ref), which must produce the same physical state,
-  agree only to ~1e-3 instead of ~1e-15. What that buys, measured: up to 1.8x on the DMT
-  truncation itself, which dilutes to 1.05x-1.2x on a whole sweep at moderate budgets (~1.4x at
-  the largest measured bond), because the gate application `:random` does not touch is about
-  half of a step. `dev/bench_dmt.jl` tables 2 and 3 have the numbers.
+  agree only to ~1e-3 instead of ~1e-15. This is not a narrow edge case: `dmt_evolve!` truncates
+  every bond twice per sweep exactly this way (`direction=:R` on the forward schedule, `:L` on
+  the reverse), so a `:random` default would make the two halves of *every* production sweep
+  sketch independently. What that buys, measured: up to 1.8x on the DMT truncation itself, which
+  dilutes to 1.05x-1.2x on a whole sweep at moderate budgets (~1.4x at the largest measured
+  bond), because the gate application `:random` does not touch is about half of a step.
+  `dev/bench_dmt.jl` tables 2 and 3 have the numbers.
 """
 function _truncated_svd(mul, adj, chi::Integer, rank::Integer; mode::Symbol=:dense,
                         oversample::Integer=10, power::Integer=2)

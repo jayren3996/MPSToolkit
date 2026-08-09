@@ -27,11 +27,14 @@ Options controlling operator-space density matrix truncation (DMT).
 - `preserve_diameter`: Positive odd diameter of the observables preserved exactly;
   `radius = (preserve_diameter - 1) / 2` sites are protected on each side of the cut.
 - `truncation`: `:dense` (default) or `:random` complement truncation. `:random` preserves the
-  guarantee to the same `1e-15` (see [`_truncated_svd`](@ref)) and is measurably faster —
+  guarantee to the same `1e-15` (see `_truncated_svd` internally) and is measurably faster —
   1.05x-1.2x on a whole sweep at moderate budgets, ~1.4x once the gate-inflated bond passes
   ~2500, and up to 1.8x on the DMT truncation alone, which is the only part it touches. It is
   not the default because it is **not deterministic**: it draws from the global RNG, so two
-  truncations of the same bond agree only to randomized-SVD accuracy (~1e-3). Opt in for large
+  truncations of the same bond agree only to randomized-SVD accuracy (~1e-3) — and
+  `dmt_evolve!` truncates every bond twice per sweep (`direction=:R` on the forward schedule,
+  `:L` on the reverse), so a `:random` default would make the two halves of *every* production
+  sweep sketch independently instead of reproducing the same physical state. Opt in for large
   runs where the speedup matters and reproducibility is handled by seeding.
 
 # Notes
