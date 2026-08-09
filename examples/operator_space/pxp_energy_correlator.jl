@@ -61,7 +61,6 @@ dt     = 0.1            # per-sweep gate time; one constrained call advances t b
 ncall  = 60             # measurement sweeps -> t_max = 2*dt*ncall = 12.0
 cutoff = 1e-12
 gate_maxdim = 4 * maxdim
-connector_buffer = 8
 project_every = 1       # constraint checkpoint after every forward+reverse sweep
 fit_window = (5.0, 12.0) # late-window fit for the (crossover) effective exponent
 edge_tol = 1e-4          # drop fit times once the spreading front reaches the chain edges
@@ -82,7 +81,6 @@ evo = DMTGateEvolution(
   maxdim=maxdim,
   cutoff=cutoff,
   gate_maxdim=gate_maxdim,
-  connector_buffer=connector_buffer,
 )
 
 # Initial operator: the PXP term at the center, vectorized and projected into the sector.

@@ -30,9 +30,11 @@
 #    invariant to any overall rescaling (the unknown Pauli-basis prefactor, residual norm drift).
 #  * sum_x m(x,t) is conserved at 0 (total S^z commutes with every XXZ bond); its drift away from
 #    0 is the truncation error bar, printed as max|Sigma m|.
-#  * B1 caveat (documented in docs/src/manual/dmt.md): DMT connector preservation is O(per-bond
-#    truncation) at connector_buffer > 0, so we use connector_buffer = 4 and a converged maxdim,
-#    read z(t) in the intermediate plateau, and treat it as an effective, resource-bound exponent.
+#  * The DMT kernel preserves every observable of diameter <= preserve_diameter (default 3,
+#    used here) EXACTLY (machine precision), so z(t) is limited only by finite t_max / nsites,
+#    not by truncation bias on the connector. We use the default preserve_diameter and a
+#    converged maxdim, and read z(t) in the intermediate plateau as an effective, resource-bound
+#    exponent.
 #
 # References:
 #   - Ljubotina, Znidaric, Prosen, PRL 122, 210602 (2019)  (KPZ in the Heisenberg magnet).
@@ -50,7 +52,6 @@ const MAXDIM           = 48
 const DT               = 0.1                 # per-sweep gate time; one evolve! advances t by 2*DT
 const T_MAX            = 20.0
 const NCALL            = round(Int, T_MAX / (2 * DT))   # forward+reverse DMT sweeps
-const CONNECTOR_BUFFER = 4
 const GATE_MAXDIM      = 4 * MAXDIM
 const CUTOFF           = 1e-10
 const K_ANCHOR         = 4                    # outermost sites (each side) defining the bulk anchor
@@ -116,7 +117,7 @@ function _build_evolution(Delta)
     schedule = collect(1:(NSITES - 1))
     evo = DMTGateEvolution(gate, DT; schedule=schedule, reverse_schedule=reverse(schedule),
         maxdim=MAXDIM, cutoff=CUTOFF, gate_maxdim=GATE_MAXDIM,
-        connector_buffer=CONNECTOR_BUFFER, normalize=false)  # traceless operator -> no rescaling
+        normalize=false)  # traceless operator -> no rescaling
     return D, evo
 end
 
@@ -153,7 +154,7 @@ function main(; probe=true)
     end
 
     println("\nDomain-wall melting via operator-space DMT")
-    println("  nsites=$NSITES  maxdim=$MAXDIM  connector_buffer=$CONNECTOR_BUFFER  dt=$DT  t_max=$T_MAX  kink=$KINK")
+    println("  nsites=$NSITES  maxdim=$MAXDIM  preserve_diameter=3 (default)  dt=$DT  t_max=$T_MAX  kink=$KINK")
     println(rpad("Delta", 7), rpad("regime", 22), rpad("z(target)", 11), rpad("z(t_max)", 11),
             rpad("T(t_max)", 11), "max|Sigma m|")
 

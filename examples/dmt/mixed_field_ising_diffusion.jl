@@ -79,7 +79,6 @@ const MELT_TMAX        = 16.0
 const MELT_NCALL       = round(Int, MELT_TMAX / (2 * DT))
 const MELT_MAXDIM      = 48
 const MELT_GATE_MAXDIM = 4 * MELT_MAXDIM
-const MELT_CONNECTOR_BUFFER = 8
 const GIBBS_NSTEPS     = 6
 const MELT_FIT_WINDOW  = (6.0, 16.0)
 const EDGE_TOL         = 0.05
@@ -187,7 +186,7 @@ end
 # ===== (A) melt -> z : DMT on the trace-ful energy domain wall ====================================
 
 function _build_melt(; nsites=NSITES, wall=WALL, beta=BETA, dt=DT, maxdim=MELT_MAXDIM,
-                     gate_maxdim=MELT_GATE_MAXDIM, connector_buffer=MELT_CONNECTOR_BUFFER,
+                     gate_maxdim=MELT_GATE_MAXDIM,
                      cutoff=CUTOFF, gibbs_nsteps=GIBBS_NSTEPS)
     sites = pauli_siteinds(nsites)
     terms = bond_terms(nsites)
@@ -198,7 +197,7 @@ function _build_melt(; nsites=NSITES, wall=WALL, beta=BETA, dt=DT, maxdim=MELT_M
     gates = [pauli_gate_from_hamiltonian(h, dt) for (_, h) in terms]
     schedule = [b for (b, _) in terms]
     evo = DMTGateEvolution(gates, dt; schedule=schedule, reverse_schedule=reverse(schedule),
-        maxdim=maxdim, cutoff=cutoff, gate_maxdim=gate_maxdim, connector_buffer=connector_buffer)
+        maxdim=maxdim, cutoff=cutoff, gate_maxdim=gate_maxdim)
     return rho, evo, terms
 end
 
