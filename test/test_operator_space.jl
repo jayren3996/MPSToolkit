@@ -29,6 +29,48 @@ function _dense_operator_from_basis(labels::Vector{Int})
   return dense
 end
 
+# Contract an MPO into a dense matrix in the big-endian (site-1-slowest) ordering `kron` uses,
+# which is the ordering `operator_product_state` and `operator_expectation` assume.
+function _dense_matrix_from_mpo(op::MPO, phys)
+  contracted = op[1]
+  for n in 2:length(op)
+    contracted *= op[n]
+  end
+  arr = Array(contracted, prime.(phys)..., phys...)
+  nsites = length(phys)
+  perm = vcat(reverse(1:nsites), reverse((nsites + 1):(2nsites)))
+  total = prod(dim.(phys))
+  return reshape(permutedims(arr, perm), total, total)
+end
+
+# Pad a dense operator on `span` consecutive sites starting at `start` with identities, so it can
+# be traced against a dense whole-chain operator.
+function _embed_dense(op::AbstractMatrix, start::Int, nsites::Int, d::Int)
+  span = round(Int, log(size(op, 1)) / log(d))
+  identity_matrix = Matrix{ComplexF64}(I, d, d)
+  blocks = Matrix{ComplexF64}[identity_matrix for _ in 1:(start - 1)]
+  push!(blocks, ComplexF64.(op))
+  append!(blocks, [identity_matrix for _ in (start + span):nsites])
+  return foldl(kron, blocks)
+end
+
+# Spin-1 matrices in the (m = +1, 0, -1) basis, shared by the d = 3 tests below.
+const _S1_Z = ComplexF64[1 0 0; 0 0 0; 0 0 -1]
+const _S1_X = ComplexF64[0 1 0; 1 0 1; 0 1 0] / sqrt(2)
+const _S1_PLUS = sqrt(2) * ComplexF64[0 1 0; 0 0 1; 0 0 0]
+
+# A deliberately non-Hermitian, bond-dimension > 1 spin-1 MPO for the vectorization tests.
+function _spin1_test_mpo(phys)
+  os = OpSum()
+  os += 0.7, "Id", 1
+  os += 1.0, "Sz", 1
+  os += 0.5, "Sx", 2
+  os += 0.4im, "Sz", 3
+  os += 0.6, "Sz", 1, "Sx", 2
+  os += 0.3, "Sz", 1, "Sz", 3
+  return MPO(os, phys)
+end
+
 @testset "operator-space projector MPOs" begin
   sites = pauli_siteinds(4)
 
@@ -501,6 +543,73 @@ end
     end
   end
 
+  @testset "operator_gate_from_imaginary_time matches the dense sandwich at d = 3" begin
+    # The generic entry point is only reached through `pauli_gate_from_imaginary_time` elsewhere
+    # in the suite, i.e. never at d != 2. Ground truth is the docstring's definition
+    # G[a, b] = tr(P_a' A P_b A') with A = e^{-(dbeta/2) h}, recomputed here from
+    # operator_basis_matrices(3) rather than from the implementation's own basis helper.
+    d = 3
+    h = kron(_S1_Z, _S1_Z) + 0.3 * kron(_S1_X, _S1_X)
+    dbeta = 0.35
+    a_matrix = exp(-(dbeta / 2) * h)
+    basis = operator_basis_matrices(d)
+    two_site = [kron(a, b) for a in basis for b in basis]
+    expected = ComplexF64[
+      tr(two_site[row]' * a_matrix * two_site[col] * a_matrix')
+      for row in eachindex(two_site), col in eachindex(two_site)
+    ]
+    gate = operator_gate_from_imaginary_time(h, dbeta; d = d)
+    @test size(gate) == (d^4, d^4)
+    @test gate ≈ expected atol = 1e-10
+    # `A` is Hermitian positive here, so this case cannot distinguish `A P A'` from `A P A`; the
+    # conjugation convention is pinned by the unitary "d = 3 gate conjugates correctly" above.
+    # What this case does own is the Hermiticity guard, checked at d = 3 rather than only at 2.
+    @test_throws ArgumentError operator_gate_from_imaginary_time(_S1_PLUS, dbeta; d = d)
+  end
+
+  @testset "operator_lindblad_generator matches the dense Lindbladian at d = 3" begin
+    # Ground truth from the documented action L(X) = -i[h, X] + sum_j (L_j X L_j' -
+    # {L_j'L_j, X}/2), read off as G[r, c] = tr(P_r' L(P_c)) with basis products built here.
+    d = 3
+    identity_matrix = Matrix{ComplexF64}(I, d, d)
+    h = kron(_S1_X, _S1_X) + 0.5 * kron(_S1_Z, _S1_Z) + 0.25 * kron(_S1_Z, identity_matrix)
+    jumps = [0.7 * kron(_S1_PLUS, identity_matrix), 0.4 * kron(identity_matrix, _S1_Z)]
+    dt = 0.2
+
+    basis = operator_basis_matrices(d)
+    two_site = [kron(a, b) for a in basis for b in basis]
+    function dense_generator(jump_list)
+      lindblad(x) = -im * (h * x - x * h) +
+                    sum(jump * x * jump' - 0.5 * (jump' * jump * x + x * jump' * jump)
+                        for jump in jump_list)
+      return ComplexF64[
+        tr(two_site[row]' * lindblad(two_site[col]))
+        for row in eachindex(two_site), col in eachindex(two_site)
+      ]
+    end
+    expected = dense_generator(jumps)
+
+    generator = operator_lindblad_generator(h, jumps; d = d)
+    @test size(generator) == (d^4, d^4)
+    @test generator ≈ expected atol = 1e-10
+    # The gate is the matrix exponential of that generator, checked against the dense generator
+    # rather than against `operator_lindblad_generator`'s own output.
+    @test operator_gate_from_lindbladian(h, jumps, dt; d = d) ≈ exp(dt * expected) atol = 1e-10
+    # Dissipation is load-bearing: without jumps the generator would be anti-Hermitian and a
+    # sign error in the dissipator could hide.
+    @test norm(generator + generator') > 0.1
+
+    # Sparse jump operators (as produced by EDKit-style builders) go through both the bare-matrix
+    # and the vector overload of `_lindblad_jump_list`, and are densified internally.
+    sparse_jump = sparse(0.7 * kron(_S1_PLUS, identity_matrix))
+    @test sparse_jump isa AbstractSparseMatrix
+    single_expected = dense_generator([Matrix{ComplexF64}(sparse_jump)])
+    @test operator_lindblad_generator(h, sparse_jump; d = d) ≈ single_expected atol = 1e-10
+    @test operator_lindblad_generator(h, [sparse_jump]; d = d) ≈ single_expected atol = 1e-10
+    @test operator_gate_from_lindbladian(h, sparse_jump, dt; d = d) ≈
+          exp(dt * single_expected) atol = 1e-10
+  end
+
   @testset "identity Hamiltonian gives the identity superoperator" begin
     for d in (2, 3, 4)
       gate = operator_gate(Matrix{ComplexF64}(I, d, d); d = d)
@@ -613,6 +722,98 @@ end
     mpo = MPO(phys, "Id")
     vectorized = operator_state_from_mpo(mpo, sites)
     @test operator_trace(vectorized) ≈ ComplexF64(d^nsites) atol = 1e-10
+
+    # The identity alone leaves the whole vectorization on basis label 1 of every site, so it
+    # cannot see a wrong basis element, a wrong site ordering, or a missing conjugation. Vectorize
+    # a bond-dimension > 1, non-Hermitian MPO and read every observable back out against the
+    # dense matrix contracted from the same MPO.
+    op = _spin1_test_mpo(phys)
+    dense = _dense_matrix_from_mpo(op, phys)
+    @test maxlinkdim(op) > 1
+    @test norm(dense - dense') > 0.1
+    round_tripped = operator_state_from_mpo(op, sites)
+    # The converter reuses the MPO link indices, so the bond dimension is carried over unchanged.
+    @test maxlinkdim(round_tripped) == maxlinkdim(op)
+    @test operator_trace(round_tripped) ≈ tr(dense) atol = 1e-10
+    for (start, probe) in ((1, _S1_Z), (2, _S1_X), (3, _S1_Z), (1, kron(_S1_Z, _S1_X)))
+      want = tr(dense * _embed_dense(probe, start, nsites, d))
+      @test abs(want) > 1e-3          # not a zero-against-zero comparison
+      @test operator_expectation(round_tripped, probe, start; normalize = false) ≈ want atol = 1e-10
+    end
+  end
+end
+
+@testset "generic operator-space vectorization" begin
+  @testset "operator_superoperator_mpo sandwiches M rho M' at d = 3" begin
+    # `operator_superoperator_mpo` is reached only through `pauli_superoperator_mpo` elsewhere in
+    # the suite, so its generic conversion tensors and its (ket, bra) link fusion have never run
+    # at d != 2. Check the lifted map against dense linear algebra: a non-Hermitian M so the
+    # bra-side conjugation matters, and a traceful rho so the probes below are not all zero.
+    d, nsites = 3, 3
+    phys = siteinds("S=1", nsites)
+    sites = operator_siteinds(nsites; d = d)
+    m_mpo = _spin1_test_mpo(phys)
+    dense_m = _dense_matrix_from_mpo(m_mpo, phys)
+    @test maxlinkdim(m_mpo) > 1
+    @test norm(dense_m - dense_m') > 0.1
+
+    identity_matrix = Matrix{ComplexF64}(I, d, d)
+    rho = add(operator_product_state(sites, fill(identity_matrix, nsites)),
+              operator_product_state(sites, [_S1_Z, identity_matrix, identity_matrix];
+                                     coefficient = 0.4); maxdim = 16, cutoff = 0.0)
+    rho = add(rho, operator_product_state(sites, [identity_matrix, _S1_X, _S1_Z];
+                                          coefficient = 0.3); maxdim = 16, cutoff = 0.0)
+    dense_rho = foldl(kron, (identity_matrix, identity_matrix, identity_matrix)) +
+                0.4 * foldl(kron, (_S1_Z, identity_matrix, identity_matrix)) +
+                0.3 * foldl(kron, (identity_matrix, _S1_X, _S1_Z))
+
+    super = operator_superoperator_mpo(m_mpo, sites)
+    # A bond-dimension-k physical MPO lifts to bond dimension k^2 (the fused ket/bra links).
+    @test maxlinkdim(super) == maxlinkdim(m_mpo)^2
+    sandwiched = apply(super, rho; maxdim = 200, cutoff = 0.0)
+    expected = dense_m * dense_rho * dense_m'
+
+    @test operator_trace(sandwiched) ≈ tr(expected) atol = 1e-10
+    for (start, probe) in ((1, _S1_Z), (2, _S1_X), (3, _S1_Z),
+                           (1, kron(_S1_Z, _S1_X)), (2, kron(_S1_X, _S1_Z)))
+      want = tr(expected * _embed_dense(probe, start, nsites, d))
+      @test abs(want) > 1e-3          # not a zero-against-zero comparison
+      @test operator_expectation(sandwiched, probe, start; normalize = false) ≈ want atol = 1e-10
+    end
+  end
+end
+
+@testset "generic operator-space thermal preparation" begin
+  @testset "operator_gibbs_state matches the dense Gibbs state at d = 3" begin
+    # `operator_gibbs_state` is exercised only at d = 2 (through `pauli_gibbs_state` in the PXP
+    # tests). At 4 spin-1 sites the largest bond is 9^2 = 81, so `maxdim = 200` with
+    # `cutoff = 0.0` truncates nothing: the ONLY error left is the Trotter splitting, and the
+    # comparison against the dense e^{-K} is exact up to it.
+    d, nsites = 3, 4
+    sites = operator_siteinds(nsites; d = d)
+    h_bond = kron(_S1_Z, _S1_Z) + 0.5 * kron(_S1_X, _S1_X)
+    terms = [(j, h_bond) for j in 1:(nsites - 1)]
+    beta = 0.4
+    weights = fill(beta, length(terms))
+    kdense = sum(w * _embed_dense(h, start, nsites, d) for ((start, h), w) in zip(terms, weights))
+    gibbs = exp(-Matrix(kdense))
+    wanted = [tr(gibbs * _embed_dense(h_bond, start, nsites, d)) / tr(gibbs) for (start, _) in terms]
+
+    function bond_energy_error(nsteps)
+      rho = operator_gibbs_state(sites, terms, weights; nsteps = nsteps, maxdim = 200, cutoff = 0.0)
+      return maximum(abs(operator_expectation(rho, h_bond, start) - want)
+                     for ((start, _), want) in zip(terms, wanted))
+    end
+    coarse = bond_energy_error(8)
+    fine = bond_energy_error(16)
+    @info "operator_gibbs_state at d = 3: worst <h_j> error $(fine) at nsteps = 16, " *
+          "$(coarse) at nsteps = 8 (ratio $(coarse / fine))"
+    @test fine < 3e-6
+    # ... and the residue is the second-order Trotter error of the symmetrized sweep, not a wrong
+    # state: halving the slice quarters it. Without this, "3e-6" would only say "small".
+    @test coarse / fine > 3
+    # The bond energies themselves are far from zero, so the agreement above has content.
+    @test minimum(abs, wanted) > 0.1
   end
 end
 
