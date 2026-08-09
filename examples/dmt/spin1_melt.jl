@@ -70,7 +70,7 @@
 #    Trotterized circuit retains the symmetry EXACTLY. The universality class -- and hence z -- is
 #    therefore unchanged by the time step; what dt buys is the amplitude of T, not its power. The
 #    residual is small anyway: at N = 20, t = 2, halving dt to 0.05 moves T by 1.2e-3 (Heisenberg)
-#    and 3.7e-3 (ULS), and since the shift is a slowly varying prefactor it largely cancels in the
+#    and 3.6e-3 (ULS), and since the shift is a slowly varying prefactor it largely cancels in the
 #    log-log SLOPE over [6, t_max], which is the quantity being reported.
 #
 # CONVERGENCE IS THE POINT. Each Hamiltonian is run at three bond dimensions so a reader can see
