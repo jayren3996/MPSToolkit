@@ -555,6 +555,11 @@ table above); `maxdim = 64` here leaves `chi' = 64 - 18 = 46` complement directi
 demonstration-scale budget well below the `chi = 128-256` that arXiv:2205.02853 used for
 converged spin-1 SU(3) transport.
 
+For the production version of this melt — spin-1 Heisenberg against the integrable ULS/SU(3)
+point, a `maxdim` convergence ladder, the front-containment guard, and the extracted dynamical
+exponents — see
+[examples/dmt/spin1_melt.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_melt.jl).
+
 !!! warning "`S^z` is not a single basis element at `d >= 3`"
     Unlike at `d = 2`, where `pauli_basis_state(sites, ["Z", ...])` selects the single-`Z`
     direction directly, the physical `S^z = diag(1, 0, -1)` at `d = 3` is a **combination** of
@@ -646,6 +651,7 @@ pauli_pxp_constraint_projector
 - [examples/operator_space/dmt_scheduler.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/dmt_scheduler.ipynb)
 - [examples/dmt/domain_wall_melting.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/domain_wall_melting.jl)
 - [examples/dmt/pxp_energy_melting.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/pxp_energy_melting.jl) — the energy domain-wall melt (the DMT protocol)
+- [examples/dmt/spin1_melt.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_melt.jl) — higher spin (`d = 3`): spin-1 magnetization melt, diffusive Heisenberg vs. KPZ at the integrable ULS/SU(3) point, with a `maxdim` convergence ladder
 - [examples/operator_space/pxp_energy_correlator.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl) — *off-label*: evolves a traceless operator with DMT (see the warning above); prefer TEBD for correlators
 - [examples/open_systems/pauli_lindblad_tebd.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/open_systems/pauli_lindblad_tebd.ipynb)
 
