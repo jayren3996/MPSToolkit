@@ -126,46 +126,51 @@
 #
 #   THE NEGATIVE RESULT IS THE HEADLINE, AND IT IS ROBUST. At the tightest budget the kernel
 #   admits, DMT is decisively WORSE than the plain SVD it replaces, in every model, at both d, in
-#   both metrics, and with the floor accounted for. Guaranteed bounds at each case's LAST
-#   FRONT-CONTAINED time, cutoff 0, eps = 0.25:
-#       d = 3 Heisenberg  chi' =  2, t = 1.2   DMT 1.75e-2 vs SVD 4.48e-4   DMT >= 39x worse
-#       d = 3 ULS         chi' =  2, t = 1.2   DMT 8.06e-2 vs SVD 1.84e-3   DMT >= 44x worse
-#       d = 2 Heisenberg  chi' =  2, t = 2.6   DMT 9.71e-2 vs SVD 7.40e-3   DMT >= 13x worse
-#       d = 2 Heisenberg  chi' = 10, t = 2.6   DMT 1.44e-3 vs SVD 3.26e-5   DMT >= 29x worse
-#   The magnitude depends on eps and on time and should be quoted as a range, never as one number:
-#   at d = 3 Heisenberg chi' = 2 the loss is 39x at t = 1.2, 11x at t = 1.6 and 6.5x at t = 1.8 for
-#   eps = 0.25, and 2.9x (t = 1.6) to 1.7x (t = 1.8) for eps = 0.01. The SIGN is the same in all
-#   four (cutoff, eps) cells at every time past t = 0.2; only the size moves. Note the loss SHRINKS
-#   with time as the SVD arm's own error catches up -- it is largest early, not late.
+#   both metrics. Guaranteed loss factors (1 / hi, truncated DOWN) at each case's last
+#   FLOOR-COVERED time -- which is NOT the same as its last front-contained time, see below --
+#   cutoff 0, eps = 0.25:
+#       d = 3 Heisenberg  chi' =  2, t = 1.2   DMT 1.75e-2 vs SVD 4.48e-4   DMT >= 38.7x worse
+#       d = 3 ULS         chi' =  2, t = 1.2   DMT 8.06e-2 vs SVD 1.84e-3   DMT >= 43.7x worse
+#       d = 2 Heisenberg  chi' =  2, t = 2.6   DMT 9.71e-2 vs SVD 7.40e-3   DMT >= 13.0x worse
+#       d = 2 Heisenberg  chi' = 10, t = 2.6   DMT 1.44e-3 vs SVD 3.26e-5   DMT >= 28.9x worse
+#       d = 3 Heisenberg  chi' = 22, t = 1.2   DMT 7.47e-5 vs SVD 3.76e-5   DMT >= 1.7x worse
+#   TWO CLOCKS, DO NOT CONFLATE THEM. The floor probe reaches t = 1.2 at d = 3 and t = 6.0 at
+#   d = 2; front containment holds to t = 1.6 (Heisenberg d = 3), t = 1.2 (ULS) and t = 2.6
+#   (d = 2). They coincide only for ULS and for d = 2. For Heisenberg d = 3 the last contained
+#   time is t = 1.6, where the raw loss is 11.2x but the floor is UNMEASURED, and the last
+#   floor-covered time is t = 1.2, where the guaranteed loss is >= 38.7x. Quote whichever you
+#   mean, and never the 38.7x under the label "last contained time".
+#   The magnitude is a range, not a number: at d = 3 Heisenberg chi' = 2 the guaranteed loss is
+#   38.7x at t = 1.2 for eps = 0.25 and 18.1x for eps = 0.01, and the raw ratio falls to 11.2x
+#   (t = 1.6) and 6.5x (t = 1.8) as the SVD arm's own error catches up. The SIGN is the same in
+#   all four (cutoff, eps) cells at every floor-covered time past t = 0.2; only the size moves.
 #
 #   THE POSITIVE HALF IS MUCH WEAKER THAN THE RAW TABLE SUGGESTS, AND MOST OF IT IS THE FLOOR.
 #   At chi' = 46, cutoff 0, the DMT arm sits AT or BELOW the reference's own error at every time
 #   the floor is measured: 1.00x, 1.59x, 1.51x, 0.77x, 0.86x, 1.08x of the floor at t = 0.2 .. 1.2.
 #   So is the SVD arm (0.73x-1.05x from t = 0.8). The apparent trend "0.97 -> 1.34 -> 2.08 -> 2.98"
 #   over t = 1.2 .. 1.8 therefore BEGINS INSIDE THE NOISE, and since the d = 3 floor is unmeasured
-#   past t = 1.2 -- and, on the d = 2 evidence, floors keep growing into the 1e-5 range -- the
-#   t = 1.6 and t = 1.8 values (2.60e-5 and 6.33e-5) may be floor-limited too. NO KERNEL-ONLY WIN
-#   IS CLAIMED AT chi' = 46. The same applies to the d = 2 control at that rung: at t = 2.6 its two
-#   arms read 1.6154e-5 and 1.6184e-5 against a floor of 1.66e-5, i.e. both are reporting the
-#   reference's error to four significant figures, and the "ratio" 1.002 is that error over itself.
-#   THE d = 2 CONTROL THEREFORE CORROBORATES THE LOSS AT chi' = 2 AND 10 AND NOTHING MORE; at
-#   chi' = 22 its interval is [0.21, 1.73] and at chi' = 46 it is pure floor.
+#   past t = 1.2 the t = 1.6 and t = 1.8 values cannot be shown to be above it either. NO
+#   KERNEL-ONLY WIN IS CLAIMED AT chi' = 46. The d = 2 control at that rung is the same story: at
+#   t = 2.6 its arms read 1.6154e-5 and 1.6184e-5 against a floor of 1.66e-5 -- both reporting the
+#   reference's error to four figures, interval [0, Inf].
 #
-#   WHAT SURVIVES ON THE POSITIVE SIDE -- AND IT IS THE PRACTICALLY IMPORTANT ONE -- IS IMMUNITY
-#   TO A NORM-RELATIVE CUTOFF. At eps = 0.01 with the ordinary cutoff = 1e-10 that BOTH sibling
-#   melts set, the SVD arm's error stops depending on maxdim (d = 3, t = 1.0: 1.02e-4 at chi' = 22
-#   against 1.03e-4 at chi' = 46) and is even non-monotone in time, because a cutoff bounds
-#   discarded weight relative to the FULL Hilbert-Schmidt norm and the signal is 2.8% of it. Those
-#   SVD errors are 35x-170x the floor, i.e. solidly resolved, while DMT stays at the floor -- so
-#   these bounds are real:
-#       d = 3 Heisenberg  chi' = 22, t = 1.2   DMT >= 2.2x better
-#       d = 3 Heisenberg  chi' = 46, t = 1.2   DMT >= 29x better
-#       d = 2 Heisenberg  chi' = 22, t = 2.6   DMT >= 19x better
-#       d = 2 Heisenberg  chi' = 46, t = 2.6   DMT >= 35x better
-#   This is the one claim corroborated at BOTH local dimensions with the floor accounted for, and
-#   it is exactly the infinitesimal-wall linear-response regime the DMT literature works in.
-#   Its structural counterpart: DMT holds tr(rho) to 6e-14..8e-13 in every cell while plain SVD
-#   drifts up to 1.3e-4 (d = 2, eps = 0.25).
+#   WHAT SURVIVES ON THE POSITIVE SIDE IS IMMUNITY TO A NORM-RELATIVE CUTOFF. At eps = 0.01 with
+#   the ordinary cutoff = 1e-10 that BOTH sibling melts set, the SVD arm's error stops depending on
+#   maxdim (d = 3, t = 1.0: 1.02e-4 at chi' = 22 against 1.03e-4 at chi' = 46) and is even
+#   non-monotone in time, because a cutoff bounds discarded weight relative to the FULL
+#   Hilbert-Schmidt norm and the signal is 2.8% of it. Those SVD errors are 35x-170x the floor, so
+#   these bounds are real (guaranteed advantage lo, truncated down):
+#       d = 3 Heisenberg  chi' = 22, t = 1.2   DMT >= 2.1x better
+#       d = 3 Heisenberg  chi' = 46, t = 1.2   DMT >= 29.0x better
+#       d = 2 Heisenberg  chi' = 22, t = 2.6   DMT >= 19.1x better
+#       d = 2 Heisenberg  chi' = 46, t = 2.6   DMT >= 34.7x better
+#   IT IS NOT UNIVERSAL EITHER, AND THE COUNTEREXAMPLE IS IN THIS RUN: ULS at chi' = 46 in the same
+#   cell is a resolved WIN of >= 3.5x at t = 1.0 and a resolved LOSS of >= 1.5x at t = 1.2. DMT's
+#   cutoff INVARIANCE holds there (its error moves <= 0.02% between cutoffs); what fails is the
+#   inference that invariance must translate into an advantage over SVD at every rung and time.
+#   Its structural counterpart does hold everywhere measured: DMT holds tr(rho) to 6e-14..8e-13 in
+#   every cell while plain SVD drifts up to 1.3e-4 (d = 2, eps = 0.25).
 #
 #   SPLIT THE TWO INVARIANCE CLAIMS -- ONLY ONE OF THEM IS TRUE. Measured at d = 3, t = 1.6:
 #       CUTOFF-invariance (clean): DMT moves 0.019% / 0.001% / 0.019% between cutoff 0 and 1e-10
@@ -173,26 +178,30 @@
 #         DMT's error (1.09e-3) is three orders above the floor and the claim is fully resolved.
 #       eps-invariance (FALSE at tight budgets): DMT's eps-spread is 272% at chi' = 2 and 3.7% at
 #         chi' = 10 (rising to 28% at t = 1.8), settling to 0.6% / 0.1% at chi' = 22 / 46. The
-#         6.5x-vs-1.7x spread in the headline loss above IS this non-invariance. The identity is a
-#         PRODUCT operator occupying one Schmidt direction, so a pure maxdim ranking is eps-blind
-#         and these rows SHOULD be flat; they are, but only once chi' >= 22.
+#         38.7x-vs-18.1x spread in the headline loss IS this non-invariance.
 #
-#   THE MECHANISM IS NOT THE OVERHEAD FRACTION -- THE CONTROL FALSIFIES THAT. It is tempting to
-#   say the protected block is 90% of maxdim = 20 but only 28% of maxdim = 64, so the fraction
-#   decides. It does not: at d = 2, maxdim = 30 the overhead is 26.7%, essentially the same 28%,
-#   and DMT loses there. Absolute chi' orders the extremes at both d (chi' = 2 loses everywhere,
-#   chi' = 46 is never resolved as a loss), but it does not order the middle either -- at d = 3
-#   chi' = 10 reads 1.37 at t = 1.6 and 0.69 at t = 1.8, and its verdict flips between metrics
-#   (err_inf 0.689 vs err_l1 1.108 at t = 1.8). The honest statement is that only the ENDS of this
-#   ladder are ordered, the middle is non-monotonic, and no single-parameter rule fits it.
+#   NO BUDGET-ONLY RULE FITS THIS DATA, AND TWO RESOLVED CELLS SETTLE IT. At the SAME d = 3 and the
+#   SAME chi' = 22 and the same time t = 1.2, spin-1 Heisenberg is a resolved LOSS (>= 1.7x) and
+#   ULS is a resolved WIN (>= 1.7x). The MODEL, not the budget, decides. Two corollaries:
+#     * The protected-block FRACTION does not predict the verdict. ULS at chi' = 10 (overhead
+#       64.3% of maxdim = 28) is a resolved WIN, >= 5.0x at t = 0.8 and >= 1.7x at t = 1.2, while
+#       d = 2 Heisenberg at the same chi' = 10 (overhead only 44.4% of maxdim = 18) is a resolved
+#       LOSS of >= 28.9x. The HIGHER-overhead cell is the one that wins.
+#     * Absolute chi' does not predict it either, by the same pair.
+#   WHAT IS NOT ESTABLISHED HERE: that a RATIO rule ("maxdim a few times 2 d^2") specifically
+#   fails. Every cell such a rule would license is unresolved in this data (d = 2 chi' = 22 and 46,
+#   d = 3 chi' = 46), so it has no resolved counterexample -- and at d = 3 the ratio and absolute
+#   readings coincide at maxdim = 64 anyway. The reason to reject a lookup constant is not that one
+#   particular constant was falsified; it is that no budget-only rule of ANY form can be right when
+#   the same (d, chi', t) gives opposite resolved verdicts in two models.
 #
-#   PRACTICAL RULE (a convergence check, not a constant). Do NOT use a ratio rule like "maxdim a
-#   few times 2 d^2": at d = 2 that licenses maxdim ~ 24-32, i.e. chi' ~ 16-24, where this run
-#   shows DMT still behind. What the data supports is an ABSOLUTE complement budget of order
-#   chi' ~ 40-50 (maxdim >~ 2 d^2 + 45) before DMT is competitive on this observable -- with the
-#   caveat that the crossover moved by ~2x in chi' between two models at the SAME d (ULS is ahead
-#   already at chi' = 22, 1.67x at t = 1.6; Heisenberg is not). Treat DMT-vs-SVD at equal maxdim
-#   as a check to RUN for your model, exactly as this script does, not as a number to look up.
+#   PRACTICAL RULE. Run the equal-maxdim DMT-vs-SVD comparison for YOUR model, as this script does;
+#   that is the only recommendation the data supports. As a starting budget, chi' = 2 is a resolved
+#   loss everywhere tested and chi' = 10 is a resolved loss in one of three models and a resolved
+#   win in another, so budget chi' of at least a few tens and verify. Do not read a crossover value
+#   off this run: between two models at the SAME d it moves by at least 2.2x in chi' (ULS resolved
+#   win at chi' = 10, Heisenberg resolved loss at chi' = 22) and the true spread may be larger,
+#   since neither model's crossover is bracketed from both sides by resolved cells.
 #
 #   FRONT CONTAINMENT (measured, not assumed; edge drift over the outermost 2 sites per side,
 #   printed per time). Heisenberg d = 3 stays under 1e-3 through t = 1.6 (9.0e-4) and reaches
@@ -287,14 +296,42 @@ reference carrying its own error `floor` at the same time.
 
 Each measured `m = |arm - reference|` bounds the true error only as
 `|arm - exact| in [m - floor, m + floor]` (triangle inequality), so the raw quotient of two such
-numbers is not a measurement. This returns `(lo, hi)`; only `lo` may be quoted, and an interval
-containing 1 means the cell has not established a winner in either direction.
+numbers is not a measurement. This returns `(lo, hi)`. An interval containing 1 means the cell has
+established no winner in either direction. Otherwise the quotable number is the end of the interval
+NEAREST 1: `lo` when DMT wins (a guaranteed advantage factor) and `1 / hi` when DMT loses (a
+guaranteed loss factor). Quoting `lo` for a loss is vacuous -- it is a bound in the direction the
+cell does not support -- which is why [`verdict_label`](@ref) emits whichever end is informative.
+
+`floor` itself is `|loose - tight|`, which bounds the reference's error only to the extent the
+tighter run is itself converged; it is a good estimate, not a certificate. Inflating every floor by
+50% moves no verdict in the shipped data, so the SIGNS here are robust, but the second digit of any
+bound is not.
 """
 function ratio_bounds(dmt_err, svd_err, floor)
   isnan(floor) && return (NaN, NaN)
   lo = max(svd_err - floor, 0.0) / (dmt_err + floor)
   hi = dmt_err - floor <= 0 ? Inf : (svd_err + floor) / (dmt_err - floor)
   return (lo, hi)
+end
+
+# Bounds are truncated TOWARD 1, never rounded: a lower bound that has been rounded up is not a
+# lower bound. `>= 38.7` below is the honest rendering of an exact 38.78.
+_trunc_down(x) = floor(x * 10) / 10
+
+"""
+    verdict_label(lo, hi)
+
+Render a `ratio_bounds` interval as the one statement it supports.
+
+Returns `"WIN >= x"` (guaranteed DMT advantage `lo`), `"LOSS >= x"` (guaranteed DMT loss factor
+`1 / hi`), `"UNRESOLVED"` when the interval contains 1, or `"no floor"` when the reference's error
+is unknown at that time -- which is a statement about this benchmark's reach, not about the arms.
+"""
+function verdict_label(lo, hi)
+  isnan(lo) && return "no floor"
+  lo > 1 && return @sprintf("WIN  >= %.1fx", _trunc_down(lo))
+  hi < 1 && return @sprintf("LOSS >= %.1fx", _trunc_down(1 / hi))
+  return "UNRESOLVED"
 end
 const EDGE_BAND     = 2           # outermost sites per side used by the front-containment guard
 const FRONT_TOL     = 1e-3        # a reference whose front exceeds this is measuring its own edge
@@ -662,7 +699,7 @@ function run_case(case; nsites = NSITES, dt = DT, verbose = true)
     @printf("\n  arm cutoff = %.0e   eps = %.3f\n", cut, eps)
     println("  ", rpad("maxdim", 8), rpad("chi'", 6), rpad("t", 6), rpad("err_inf DMT", 14),
         rpad("err_inf SVD", 14), rpad("SVD/DMT", 10), rpad("err_l1 DMT", 13),
-        rpad("err_l1 SVD", 13), rpad("chi_ref", 8), "guaranteed SVD/DMT")
+        rpad("err_l1 SVD", 13), rpad("chi_ref", 8), "floor-corrected verdict")
     for maxdim in case.maxdims
       dmt, svd = arms[(cut, eps, :dmt, maxdim)], arms[(cut, eps, :svd, maxdim)]
       for k in 2:(reached + 1)
@@ -673,7 +710,7 @@ function run_case(case; nsites = NSITES, dt = DT, verbose = true)
         # interval straddles 1 has not established a winner at all.
         lo, hi = ratio_bounds(dmt.errs_inf[k], svd.errs_inf[k],
                               k <= length(fl.floors) ? fl.floors[k] : NaN)
-        flag = isnan(lo) ? "no floor" : (lo <= 1 <= hi ? "UNRESOLVED" : @sprintf(">= %.3g", lo))
+        flag = verdict_label(lo, hi)
         @printf("  %-8d%-6d%-6.1f%-14.3e%-14.3e%-10.3g%-13.3e%-13.3e%-8d%s\n",
             maxdim, maxdim - protected, reference.times[k], dmt.errs_inf[k],
             svd.errs_inf[k], ratio, dmt.errs_l1[k], svd.errs_l1[k], reference.chis[k], flag)
@@ -686,20 +723,21 @@ end
 
 function append_csv(io, result)
   case, reference, arms = result.case, result.reference, result.arms
+  floor_at(k) = k <= length(result.floor.floors) ? result.floor.floors[k] : NaN
   for k in 1:(result.reached + 1)
-    @printf(io, "%s,%d,%s,reference,%.1e,%.4f,0,0,%.4f,%d,%.6e,%.6e,%.6e,%.6e\n",
+    @printf(io, "%s,%d,%s,reference,%.1e,%.4f,0,0,%.4f,%d,%.6e,%.6e,%.6e,%.6e,%.6e\n",
         case.label, case.d, case.model, CUTOFF, EPS_WALL, reference.times[k],
         reference.chis[k], 0.0, 0.0,
-        abs(reference.traces[k] / reference.traces[1] - 1), result.front)
+        abs(reference.traces[k] / reference.traces[1] - 1), result.front, floor_at(k))
   end
   for cut in ARM_CUTOFFS, eps in EPS_LADDER, maxdim in case.maxdims, kind in (:dmt, :svd)
     arm = arms[(cut, eps, kind, maxdim)]
     for k in 1:(result.reached + 1)
-      @printf(io, "%s,%d,%s,%s,%.1e,%.4f,%d,%d,%.4f,%d,%.6e,%.6e,%.6e,%.6e\n",
+      @printf(io, "%s,%d,%s,%s,%.1e,%.4f,%d,%d,%.4f,%d,%.6e,%.6e,%.6e,%.6e,%.6e\n",
           case.label, case.d, case.model, kind, cut, eps, maxdim,
           maxdim - result.protected, reference.times[k], arm.chis[k],
           arm.errs_inf[k], arm.errs_l1[k],
-          abs(arm.traces[k] / arm.traces[1] - 1), result.front)
+          abs(arm.traces[k] / arm.traces[1] - 1), result.front, floor_at(k))
     end
   end
   flush(io)
@@ -726,7 +764,10 @@ function main(; cases = CASES, nsites = NSITES, dt = DT, csv_path = CSV_PATH, ve
 
   results = NamedTuple[]
   open(csv_path, "w") do io
-    println(io, "case,d,model,arm,cutoff,eps,maxdim,chi_prime,t,chi,err_inf,err_l1,trace_rel_err,front_ref")
+    # `floor` is the reference's OWN error at that time (NaN where the floor probe did not
+    # reach). Every guaranteed bound in the write-up is reproducible from this file alone:
+    # lo = (svd - floor) / (dmt + floor), hi = (svd + floor) / (dmt - floor).
+    println(io, "case,d,model,arm,cutoff,eps,maxdim,chi_prime,t,chi,err_inf,err_l1,trace_rel_err,front_ref,floor")
     for case in cases
       result = run_case(case; nsites = nsites, dt = dt, verbose = verbose)
       append_csv(io, result)
@@ -734,20 +775,37 @@ function main(; cases = CASES, nsites = NSITES, dt = DT, csv_path = CSV_PATH, ve
     end
   end
 
-  println("\n", "="^108)
-  println("VERDICT TABLE -- profile error at the LAST time each reference reached")
-  println(rpad("case", 16), rpad("t_ref", 7), rpad("cutoff", 9), rpad("eps", 7), rpad("maxdim", 8),
-      rpad("chi'", 6), rpad("err_inf DMT", 14), rpad("err_inf SVD", 14), rpad("SVD/DMT", 10),
-      "front")
+  println("\n", "="^116)
+  println("VERDICT TABLE -- every cell at the last time that is BOTH floor-covered AND")
+  println("front-contained, floor-corrected. THREE CLOCKS RUN AT DIFFERENT SPEEDS HERE and the")
+  println("summary is only honest at the slowest: the reference reaches furthest, the front guard")
+  println("stops earlier, and the floor probe earlier still (d = 3) or later (d = 2). A ratio at a")
+  println("time with no floor cannot be signed; a ratio past containment is signed but is about a")
+  println("saturated box rather than a melt -- at d = 2, t = 6.0 the floor IS known and chi' = 2")
+  println("reads 'WIN', which is a fact about the box, not about DMT. Both excluded here; the full")
+  println("per-time grid, including the excluded columns, is in the tables above and the CSV.")
+  println(rpad("case", 16), rpad("t", 6), rpad("cutoff", 9), rpad("eps", 7), rpad("maxdim", 8),
+      rpad("chi'", 6), rpad("err_inf DMT", 14), rpad("err_inf SVD", 14), rpad("raw ratio", 11),
+      "floor-corrected verdict")
   for result in results
+    # Slowest of the three clocks: floor coverage, front containment, reference reach.
+    fronts = front_curve(result.reference.profiles, EDGE_BAND)
+    kcontained = something(findfirst(>=(FRONT_TOL), fronts), length(fronts) + 1) - 1
+    kfloor = min(length(result.floor.floors), result.reached + 1, max(kcontained, 1))
+    tf = result.reference.times[kfloor]
     for cut in ARM_CUTOFFS, eps in EPS_LADDER, maxdim in result.case.maxdims
       dmt = result.arms[(cut, eps, :dmt, maxdim)]
       svd = result.arms[(cut, eps, :svd, maxdim)]
-      de, se = dmt.errs_inf[end], svd.errs_inf[end]
-      @printf("%-16s%-7.1f%-9.0e%-7.3f%-8d%-6d%-14.3e%-14.3e%-10.3g%.1e\n",
-          result.case.label, result.reference.times[end], cut, eps, maxdim,
-          maxdim - result.protected, de, se, de > 0 ? se / de : NaN, result.front)
+      de, se = dmt.errs_inf[kfloor], svd.errs_inf[kfloor]
+      lo, hi = ratio_bounds(de, se, result.floor.floors[kfloor])
+      @printf("%-16s%-6.1f%-9.0e%-7.3f%-8d%-6d%-14.3e%-14.3e%-11.3g%s\n",
+          result.case.label, tf, cut, eps, maxdim, maxdim - result.protected, de, se,
+          de > 0 ? se / de : NaN, verdict_label(lo, hi))
     end
+    @printf("%-16s(reference reached t = %.1f; floor known to t = %.1f; front contained to t = %.1f; summarized at t = %.1f)\n",
+        "", result.reference.times[end],
+        result.reference.times[min(length(result.floor.floors), result.reached + 1)],
+        result.reference.times[max(kcontained, 1)], tf)
   end
   println("\nwrote $csv_path")
   println("READ THIS BEFORE THE TABLE. 'SVD/DMT' is the ratio of plain-SVD to DMT profile error")

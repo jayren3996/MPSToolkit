@@ -562,34 +562,44 @@ exponents — see
 
 !!! warning "Near the DMT budget floor, DMT is measurably worse than the plain SVD it replaces"
     [examples/dmt/spin1_semiexact_validation.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_semiexact_validation.jl)
-    runs the same melt at `N = 12` against an **uncapped reference** (`maxdim = typemax(Int)`,
-    reachable to `t = 1.8` at `chi = 1433`) and scores DMT against plain SVD `LocalGateEvolution`
-    at the *same* `maxdim`, same gates, same schedule, with the reference's own resolution
-    measured per case and per time so that unresolved cells can be excluded.
+    runs the same melt at `N = 12` against an **uncapped reference** and scores DMT against plain
+    SVD `LocalGateEvolution` at the *same* `maxdim`, same gates, same schedule. The reference is
+    itself cutoff-limited, so its own error is measured per case and per time and subtracted: every
+    figure below is a guaranteed bound from the interval
+    `[(svd − floor)/(dmt + floor), (svd + floor)/(dmt − floor)]`, truncated toward 1, and cells
+    whose interval contains 1 are reported as unresolved rather than as results.
 
-    **The robust result is negative.** At the tightest budget the kernel admits (`chi' = 2`,
-    i.e. `maxdim = 20` at `d = 3`), DMT's profile error at each case's last front-contained time
-    is **≥ 39x worse** than plain SVD's for spin-1 Heisenberg, **≥ 44x worse** for ULS/SU(3), and
-    **≥ 13x worse** in a `chi'`-matched `d = 2` control — guaranteed bounds after subtracting the
-    reference's own error, with the same sign in every wall-amplitude and cutoff cell. The `d = 2`
-    control reproduces the loss at `chi' = 2` and `10`, so this is a property of the method, not
-    of higher spin.
+    **The robust result is negative.** At the tightest budget the kernel admits (`chi' = 2`, i.e.
+    `maxdim = 20` at `d = 3`), DMT's profile error at each case's last **floor-covered** time is
+    **≥ 38.7x worse** than plain SVD's for spin-1 Heisenberg (`t = 1.2`), **≥ 43.7x worse** for
+    ULS/SU(3) (`t = 1.2`), and **≥ 13.0x worse** in a `chi'`-matched `d = 2` control (`t = 2.6`) —
+    same sign in every wall-amplitude and cutoff cell. (At Heisenberg's last front-*contained*
+    time, `t = 1.6`, the raw loss is 11.2x, but the reference's error is unmeasured there; the two
+    clocks are different and the labels matter.) The `d = 2` control reproduces the loss at
+    `chi' = 2` and `chi' = 10`, so this is a property of the method, not of higher spin.
 
-    **No kernel-only win is claimed at large `chi'`.** At `chi' = 46` both arms sit at or below
-    the reference's resolution wherever that resolution is known, so the raw table's `2.98` is
-    not a measurement.
+    **No kernel-only win is claimed at large `chi'`.** At `chi' = 46` both arms sit at or below the
+    reference's resolution wherever that resolution is known.
+
+    **No budget-only rule fits the data.** At the same `d = 3`, same `chi' = 22`, same `t = 1.2`,
+    spin-1 Heisenberg is a resolved **loss** (≥ 1.7x) while ULS is a resolved **win** (≥ 1.7x) —
+    the model decides, not the budget. The protected-block *fraction* does not predict it either:
+    ULS at `chi' = 10` (64% overhead) wins by ≥ 5.0x while `d = 2` Heisenberg at the same `chi'`
+    (44% overhead) loses by ≥ 28.9x. So run the equal-`maxdim` comparison for your own model
+    rather than trusting any constant; `chi' = 2` is a resolved loss everywhere tested, and the
+    crossover moves by at least 2.2x in `chi'` between two models at the same `d`.
 
     **What is resolved on the positive side is immunity to a norm-relative cutoff.** With an
     infinitesimal wall and the ordinary `cutoff = 1e-10`, the plain-SVD arm hits an error floor
     that more bond dimension does not remove (`1.02e-4` at `chi' = 22` versus `1.03e-4` at
     `chi' = 46`), because `cutoff` bounds discarded weight relative to the *full* Hilbert-Schmidt
-    norm while the signal is a few percent of it. DMT is structurally immune: **≥ 2.2x** better at
-    `chi' = 22` and **≥ 29x** at `chi' = 46` (`d = 3`), **≥ 19x** and **≥ 35x** at the matched
-    `d = 2` rungs. DMT is likewise invariant to the cutoff itself (error moves ≤ 0.02% at
-    `chi' >= 10`, against 34–268% for plain SVD) and holds `tr(rho)` to `~1e-13` where plain SVD
-    drifts to `1e-4`. Note the *wall-amplitude* invariance is **not** unconditional — DMT's error
-    spreads 272% across `eps` at `chi' = 2` — and that per-rung verdicts are model-dependent:
-    at `chi' = 22` spin-1 Heisenberg is behind while ULS is 1.67x ahead.
+    norm while the signal is a few percent of it. DMT is structurally immune: **≥ 2.1x** better at
+    `chi' = 22` and **≥ 29.0x** at `chi' = 46` (`d = 3`), **≥ 19.1x** and **≥ 34.7x** at the
+    matched `d = 2` rungs. Not universal, though — ULS at `chi' = 46` is a resolved win of ≥ 3.5x
+    at `t = 1.0` and a resolved *loss* of ≥ 1.5x at `t = 1.2` in that same cell. DMT is separately
+    invariant to the cutoff itself (error moves ≤ 0.02% at `chi' >= 10`, against 34–268% for plain
+    SVD) and holds `tr(rho)` to `~1e-13` where plain SVD drifts to `1e-4`. Its *wall-amplitude*
+    invariance is **not** unconditional: 272% spread across `eps` at `chi' = 2`.
 
 !!! warning "`S^z` is not a single basis element at `d >= 3`"
     Unlike at `d = 2`, where `pauli_basis_state(sites, ["Z", ...])` selects the single-`Z`
@@ -649,14 +659,14 @@ For *when* to prefer DMT, DAOE, or plain TEBD — and in particular why a dynami
   dimensions than plain SVD truncation would for the same operator, which is its main practical
   advantage — but this is not automatic, and near the budget floor it inverts. At a budget close
   to the protected block, DMT spends nearly everything on structure and is measurably *worse* than
-  the plain SVD it replaces. The useful control is the **absolute complement budget**
-  `chi' = maxdim - 2 d^(2n)`, not its ratio to the protected block: the `d = 3` measurement in
+  the plain SVD it replaces. No budget-only rule predicts where that changes: the `d = 3`
+  measurement in
   [examples/dmt/spin1_semiexact_validation.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_semiexact_validation.jl)
-  finds DMT behind at `chi' = 2` in every model tested, and its `d = 2` control is still behind at
-  `chi' = 22` even though the overhead there is only 27% of `maxdim`. Budget `chi'` of order 40–50
-  as a starting point, treat the crossover as model-dependent (it moved ~2x in `chi'` between two
-  models at the same `d`), and run the equal-`maxdim` DMT-vs-SVD check for your own model rather
-  than trusting a constant.
+  finds DMT behind at `chi' = maxdim - 2 d^(2n) = 2` in every model tested, and finds spin-1
+  Heisenberg behind while ULS is ahead **at the same `d`, the same `chi' = 22` and the same time**.
+  So treat the equal-`maxdim` DMT-vs-SVD comparison as a convergence check to run for your own
+  model, budget `chi'` well into the tens, and do not read a crossover constant off any single
+  model — it moved by at least 2.2x in `chi'` between two models here.
 - **`cutoff` is a repair-SVD setting, not the primary control.** It governs only the final
   re-factorization of the already-truncated bond. The transport-relevant decision is made by
   the DMT rule itself, so `maxdim` and `preserve_diameter` are the dials that matter.
