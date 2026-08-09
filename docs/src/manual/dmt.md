@@ -283,7 +283,7 @@ function transport_trace(Delta)
         spinhalf_xyz_bond_hamiltonian(; Jx=1.0, Jy=1.0, Jz=Delta), dt)
     schedule = collect(1:(nsites - 1))
     evo = DMTGateEvolution(gate, dt; schedule, reverse_schedule=reverse(schedule),
-        maxdim, cutoff=1e-10, gate_maxdim=4 * maxdim)
+        maxdim, cutoff=1e-10, gate_maxdim=4 * maxdim)   # == the default (0, no cap) at d=2, since d^2=4
     width2(state) = (p = single_z_profile(state);
         sum((x - center)^2 * p[x] for x in 1:nsites) / sum(p))
     times = [0.0]; M2 = [width2(O)]
@@ -320,6 +320,17 @@ These values are freshly measured, exactly as configured above (`nsites=30, maxd
 configuration — a `maxdim = 24` bond at `d = 2` leaves only `chi' = maxdim - 8 = 16` complement
 directions after the protected block — not a converged production run; see the tip below on
 sharpening it.
+
+The three values above sit a little further from `1, 3/2, 2` than the old `1.09/1.45/1.90` this
+same snippet used to report, at the identical `nsites=30, maxdim=24` — not because the kernel got
+less accurate, but because the fixed `maxdim` budget is now spent differently. This snippet used
+to pass `connector_buffer = 4`, so the old kernel's complement got `maxdim - connector_buffer =
+20` directions. The new kernel's protected block is not a tunable buffer but the structural
+`2 d^2 = 8` directions the guarantee requires, leaving `maxdim - 8 = 16` for the complement — four
+fewer than before, at the same nominal `maxdim`. That is the price of the guarantee the old
+kernel only advertised: its `connector_buffer` mechanism measured diameter-`<=3` preservation
+errors of order `0.3-0.5` (it reinstated the protected corner and then let its own repair SVD clip
+part of it away), against `~1e-14` for this kernel on the same class of probe.
 
 !!! tip "Fit the intermediate plateau, not the tail"
     A single power-law fit over the whole trace is biased two ways. At **early** times every
