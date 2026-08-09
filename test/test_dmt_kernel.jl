@@ -200,12 +200,14 @@ end
   @test operator_trace(via_qr) ≈ operator_trace(base) rtol = 1e-11
 end
 
-@testset "the complement machinery never forms a chi x chi matrix" begin
+@testset "the randomized complement machinery never forms a chi x chi matrix" begin
   # This is the promise of the basis-free kernel, pinned where it is unambiguous: at chi = 6000 a
   # single dense chi x chi ComplexF64 matrix is 576 MB, while the matrix-free path only ever
   # touches chi x (rank + oversample) blocks -- measured 250 MB, and falling as 1/chi relative to
-  # the bound (0.46x here, 0.68x at chi = 4000). `:dense` is excluded by construction: it
-  # materializes the operator and calls LAPACK on it, so the guard is on `:random`.
+  # the bound (0.46x here, 0.68x at chi = 4000). `:dense` -- the shipped DEFAULT -- is excluded by
+  # construction: it materializes the operator and calls LAPACK on it, for a measured transient of
+  # ~6.4 chi x chi matrices against ~2.2 for `:random`. Hence the name: this is a property of the
+  # randomized path, not of every DMT run (see the `truncation` bullet of `DMTOptions`).
   chi, rank_target = 6000, 40
   bond_matrix = Diagonal(ComplexF64.(sort(rand(chi); rev = true)))
   QL = MPSToolkit._protected_basis(randn(ComplexF64, chi, 4))
@@ -305,6 +307,44 @@ end
     # ... and the approximation of the discarded weight is good.
     @test overlap > 0.99
   end
+end
+
+@testset "truncation = :random reaches the kernel through DMTOptions and DMTGateEvolution" begin
+  # The testset above drives `:random` through the private kernel. The public knob is a field on
+  # `DMTOptions` / `DMTGateEvolution` that has to be forwarded through `dmt_step!` and
+  # `dmt_evolve!`; a wiring mistake there would leave every documented `:random` run silently
+  # `:dense`, and every existing assertion would still pass.
+  Random.seed!(20260809)
+  d, nsites, chi, bond = 2, 6, 60, 3
+  maxdim = 2 * d^2 + 16
+  sites = operator_siteinds(nsites; d = d)
+  gate = operator_gate_from_hamiltonian(
+    spinhalf_xyz_bond_hamiltonian(; Jx = 1.0, Jy = 0.7, Jz = 0.3), 0.1; d = d)
+  base = add(operator_basis_state(sites, fill(1, nsites)),
+    0.3 * random_mps(ComplexF64, sites; linkdims = chi); maxdim = chi + 1, cutoff = 0.0)
+  @test dim(linkind(base, bond)) > maxdim         # the truncation really fires
+
+  stepped = copy(base)
+  dmt_step!(stepped, gate, bond, DMTOptions(maxdim = maxdim, cutoff = 1e-14, truncation = :random))
+  @test dim(linkind(stepped, bond)) <= maxdim
+
+  schedule = collect(1:(nsites - 1))
+  random_sweep = copy(base)
+  dmt_evolve!(random_sweep, DMTGateEvolution(gate, 0.1; schedule = schedule, nstep = 1,
+    maxdim = maxdim, cutoff = 1e-14, truncation = :random, normalize = false))
+  dense_sweep = copy(base)
+  dmt_evolve!(dense_sweep, DMTGateEvolution(gate, 0.1; schedule = schedule, nstep = 1,
+    maxdim = maxdim, cutoff = 1e-14, truncation = :dense, normalize = false))
+  @test maximum(dim(linkind(random_sweep, b)) for b in 1:(nsites - 1)) <= maxdim
+  overlap = abs(inner(random_sweep, dense_sweep)) / (norm(random_sweep) * norm(dense_sweep))
+  @info "sweep overlap :random vs :dense $(overlap)"
+  # Two-sided on purpose. Above: a whole sweep sketched with `:random` still tracks the `:dense`
+  # sweep, the end-to-end form of the per-bond overlap checked in the testset above. Below: it is
+  # not the SAME state, so the field really did reach the kernel -- an option that was silently
+  # dropped on the way down would reproduce `:dense` to ~1e-15 and pass every other assertion
+  # here. The measured deficit is ~2e-4, four orders of magnitude clear of the bar.
+  @test overlap > 0.99
+  @test 1 - overlap > 1e-8
 end
 
 @testset "gate_maxdim = 0 applies the gate exactly" begin
