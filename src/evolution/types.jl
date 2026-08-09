@@ -76,8 +76,9 @@ Configuration for scheduled operator-space DMT evolution.
 - `gate_maxdim`: Temporary bond dimension cap for raw gate application; `0` means no cap, i.e.
   the gate is applied exactly.
 - `preserve_diameter`: Positive odd diameter of the observables DMT preserves exactly.
-- `truncation`: `:dense` (default) or `:random` complement truncation; `:random` is faster at
-  large bond dimension but not deterministic. See [`DMTOptions`](@ref).
+- `truncation`: `:dense` (default) or `:random` complement truncation; `:random` is faster and
+  materially lighter on peak memory at large bond dimension, but not deterministic. See
+  [`DMTOptions`](@ref).
 - `normalize`: Whether `evolve!` / `dmt_evolve!` renormalize the state after evolution.
   Default `true`; set `false` to track unnormalized traces of a traceless operator.
 """
@@ -145,8 +146,13 @@ Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
   RNG, so it is **not deterministic**: two truncations of the same bond agree only to
   randomized-SVD accuracy. `dmt_evolve!` truncates every bond twice per sweep
   (`direction=:R` on the forward schedule, `:L` on the reverse), so `:random` would make those
-  two halves sketch independently instead of reproducing the same physical state. See
-  [`DMTOptions`](@ref).
+  two halves sketch independently instead of reproducing the same physical state. `:dense` also
+  sets peak memory, not just speed: it materializes the `chi x chi` complement and factorizes it,
+  where `chi` is the **gate-inflated** bond `d^2 maxdim`, for a measured transient of ~6.4
+  `chi x chi` `ComplexF64` matrices against ~2.2 for `:random` — 0.33 GB at `d = 3, maxdim = 200`,
+  1.1 GB at `d = 4, maxdim = 200`, and ~7 GB at `d = 4, preserve_diameter = 5, maxdim = 513` — so
+  at `d >= 4`, or at `preserve_diameter = 5`, choosing `:random` is a memory decision and not only
+  a speed one. See [`DMTOptions`](@ref).
 - `normalize`: Default normalization choice carried by the object; `evolve!` / `dmt_evolve!`
   use it unless overridden by their own `normalize` keyword. Set `false` for traceless
   operators (see [`dmt_evolve!`](@ref)).
