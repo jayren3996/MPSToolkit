@@ -1,5 +1,5 @@
 """
-    DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=max(maxdim * 16, 64), preserve_diameter=3, truncation=:dense)
+    DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=0, preserve_diameter=3, truncation=:dense)
 
 Options controlling operator-space density matrix truncation (DMT).
 
@@ -19,10 +19,26 @@ Options controlling operator-space density matrix truncation (DMT).
   The complement is truncated to `maxdim - 2 d^(preserve_diameter - 1)` directions, so `maxdim`
   must be at least `2 d^(preserve_diameter - 1) + 1` for the local dimension `d` in use.
 - `cutoff`: Truncation cutoff used in the final refactorization.
-- `gate_maxdim`: Temporary bond dimension budget used during raw gate application.
+- `gate_maxdim`: Temporary bond dimension cap applied while the raw gate is applied, before DMT
+  truncates the bond back to `maxdim`. **`0` (the default) means no cap: the gate is applied
+  exactly.** A positive cap pre-truncates the inflated bond with a plain SVD, which discards the
+  smallest singular values *before* DMT sees them — exactly the error DMT exists to avoid — so
+  set one only to bound peak cost, never for accuracy.
 - `preserve_diameter`: Positive odd diameter of the observables preserved exactly;
   `radius = (preserve_diameter - 1) / 2` sites are protected on each side of the cut.
-- `truncation`: `:dense` or `:random` complement truncation.
+- `truncation`: `:dense` (default) or `:random` complement truncation. `:random` preserves the
+  guarantee to the same `1e-15` (see [`_truncated_svd`](@ref)) and is measurably faster —
+  1.05x-1.2x on a whole sweep at moderate budgets, ~1.4x once the gate-inflated bond passes
+  ~2500, and up to 1.8x on the DMT truncation alone, which is the only part it touches. It is
+  not the default because it is **not deterministic**: it draws from the global RNG, so two
+  truncations of the same bond agree only to randomized-SVD accuracy (~1e-3). Opt in for large
+  runs where the speedup matters and reproducibility is handled by seeding.
+
+# Notes
+- The `gate_maxdim` default was `max(maxdim * 16, 64)`, which capped nothing: a two-site gate
+  inflates the bond only to `d^2 * maxdim`, so `16 * maxdim` was already unreachable for every
+  `d <= 4`. `0` makes the shipped behaviour explicit and extends it to `d >= 5`, where the old
+  formula did silently pre-truncate.
 """
 struct DMTOptions
   maxdim::Int
@@ -34,7 +50,7 @@ struct DMTOptions
   function DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, truncation)
     maxdim >= 1 || throw(ArgumentError("DMTOptions requires maxdim >= 1"))
     cutoff >= 0 || throw(ArgumentError("DMTOptions requires cutoff >= 0"))
-    gate_maxdim >= 1 || throw(ArgumentError("DMTOptions requires gate_maxdim >= 1"))
+    gate_maxdim >= 0 || throw(ArgumentError("DMTOptions requires gate_maxdim >= 0 (0 = no cap)"))
     isodd(preserve_diameter) && preserve_diameter >= 1 || throw(ArgumentError(
       "DMTOptions requires a positive odd preserve_diameter, got $(preserve_diameter)"))
     truncation in (:dense, :random) ||
@@ -42,7 +58,7 @@ struct DMTOptions
     return new(Int(maxdim), Float64(cutoff), Int(gate_maxdim), Int(preserve_diameter), Symbol(truncation))
   end
 
-  function DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=max(maxdim * 16, 64),
+  function DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=0,
     preserve_diameter=3, truncation=:dense, connector_buffer=nothing)
     _reject_connector_buffer(connector_buffer)
     return DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, truncation)
@@ -319,7 +335,7 @@ function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::
 end
 
 """
-    dmt_step!(psi, gate, bond; maxdim=30, cutoff=1e-12, direction=:R, gate_maxdim=max(maxdim * 16, 64), preserve_diameter=3, truncation=:dense)
+    dmt_step!(psi, gate, bond; maxdim=30, cutoff=1e-12, direction=:R, gate_maxdim=0, preserve_diameter=3, truncation=:dense)
 
 Apply one local operator-space gate and then perform DMT-preserving truncation.
 
@@ -336,14 +352,21 @@ is (and is not) the appropriate choice.
   be at least `2 d^(preserve_diameter - 1) + 1`.
 - `cutoff`: Truncation cutoff used in the final refactorization.
 - `direction`: Sweep direction, either `:R` or `:L`.
-- `gate_maxdim`: Temporary bond dimension budget used for the raw gate application before DMT
-  truncates the bond back to `maxdim`. A large `gate_maxdim` lets the gate inflate the bond
-  prior to truncation; choose it together with `maxdim` rather than independently.
+- `gate_maxdim`: Temporary bond dimension cap for the raw gate application, before DMT truncates
+  the bond back to `maxdim`. `0` (the default) means no cap, i.e. the gate is applied exactly;
+  see [`DMTOptions`](@ref) for why pre-truncation is the error DMT exists to avoid.
 - `preserve_diameter`: Positive odd diameter of the observables preserved exactly.
-- `truncation`: `:dense` or `:random` complement truncation.
+- `truncation`: `:dense` (default) or `:random` complement truncation; see [`DMTOptions`](@ref)
+  for the measured speedup and the determinism it costs.
 
 # Returns
 - The mutated `psi`.
+
+# Notes
+- Applying the gate exactly inflates the bond from `maxdim` to `d^2 * maxdim` before DMT
+  truncates it back, so the bond tensor the kernel factorizes is `d^2` times wider than
+  `maxdim` suggests. That is the dominant cost of a step, and it is the cost of not throwing
+  away protected data.
 """
 function dmt_step!(
   psi::MPS,
@@ -352,7 +375,7 @@ function dmt_step!(
   maxdim::Integer=30,
   cutoff::Real=1e-12,
   direction::Symbol=:R,
-  gate_maxdim::Integer=max(Int(maxdim) * 16, 64),
+  gate_maxdim::Integer=0,
   preserve_diameter::Integer=3,
   truncation::Symbol=:dense,
   cache::Union{Nothing,_DMTEnvCache}=nothing,
@@ -361,6 +384,9 @@ function dmt_step!(
   _reject_connector_buffer(connector_buffer)
   start = _bond_start(bond)
   span = _operator_span_at(psi, gate, start)
+  # Checked before the gate runs, like every other budget here, so a rejected call leaves `psi`
+  # untouched. `0` is the "no cap" sentinel; anything below it is a typo, not a smaller cap.
+  gate_maxdim >= 0 || throw(ArgumentError("DMT gate_maxdim must be >= 0 (0 = no cap)"))
   _validate_dmt_step(psi, gate, start, span, direction, Int(maxdim), Int(preserve_diameter))
   # `tebd_evolve!` (ITensorMPS `product`) re-gauges the path between the old orthocenter and the
   # gate window. Capture the limits first so the env cache can invalidate that bounded range.
@@ -368,6 +394,11 @@ function dmt_step!(
     ll = ITensorMPS.leftlim(psi)
     rl = ITensorMPS.rightlim(psi)
   end
+  # `gate_maxdim == 0` means "apply the gate exactly": `_tebd_truncation_kwargs` omits `maxdim`
+  # from the ITensor call for a non-positive budget, which is the same "no cap" convention
+  # `LocalGateEvolution` already uses for its own `maxdim`. Passing the sentinel straight through
+  # is preferred over substituting `typemax(Int)`, which would push a sentinel-sized budget into
+  # ITensors' truncation arithmetic instead of taking the branch that skips it.
   tebd_evolve!(psi, gate, start; maxdim=Int(gate_maxdim), cutoff=0.0)
   if !isnothing(cache)
     _invalidate_env!(

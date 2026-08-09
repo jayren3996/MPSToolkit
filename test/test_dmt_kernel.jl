@@ -135,6 +135,16 @@ end
     probes = diameter_probes(nsites, d, 3; full_basis_width = 1, cap = 2, nrandom = 3)
     before = operator_expectation_profile(base, probes; normalize = false)
 
+    # `:qr` silently falls back to `:svd` whenever `R` is not a square upper-triangular matrix
+    # (see the rectangular-fallback testset below). Without this precondition, a future ITensors
+    # that returned a non-thin or permuted `Q` would route every bond to `:svd`, the whole
+    # speedup would vanish, and every assertion below would still pass. Pin the branch.
+    gauged = copy(base)
+    orthogonalize!(gauged, bond)
+    left_inds = (linkind(gauged, bond - 1), siteind(gauged, bond))
+    @test MPSToolkit._dmt_bond_factorize(gauged, bond, left_inds; factorize = :qr)[2] isa
+          UpperTriangular
+
     via_svd = copy(base)
     MPSToolkit._dmt_bond_truncate!(via_svd, bond; maxdim = maxdim, cutoff = 1e-14,
       factorize = :svd)
@@ -246,4 +256,126 @@ end
   # Rejected even though this bond is under budget and short-circuits before factorizing.
   @test_throws ArgumentError MPSToolkit._dmt_bond_truncate!(
     psi, 2; maxdim = 400, cutoff = 0.0, factorize = :lu)
+end
+
+@testset "randomized truncation preserves the guarantee and tracks the dense result" begin
+  # Two independent claims, and the testset makes both:
+  #   1. The GUARANTEE is unaffected. The randomized range finder only approximates the doubly
+  #      orthogonal complement `D`; its range lies inside `range(D)` by construction, and `D` is
+  #      orthogonal to both protected subspaces, so the protected border and the trace connector
+  #      are still reinstated exactly. The guarantee must therefore hold to the SAME tolerance as
+  #      `:dense`, which is what the paired assertions below check.
+  #   2. The APPROXIMATION is good. Only the optimality of the discarded weight is at stake, and
+  #      that is measured against the dense result rather than asserted from theory.
+  Random.seed!(31337)
+  for d in (2, 3)
+    nsites, chi, bond = 6, 60, 3
+    maxdim = 2 * d^2 + 16
+    sites = operator_siteinds(nsites; d = d)
+    probes = diameter_probes(nsites, d, 3)
+    base = add(operator_basis_state(sites, fill(1, nsites)),
+      0.3 * random_mps(ComplexF64, sites; linkdims = chi); maxdim = chi + 1, cutoff = 0.0)
+    # Two paths that both short-circuit would satisfy every assertion below; pin that the
+    # truncation actually fires and really does discard directions.
+    @test dim(linkind(base, bond)) > maxdim
+    before = operator_expectation_profile(base, probes; normalize = false)
+
+    dense_state = copy(base)
+    MPSToolkit._dmt_bond_truncate!(dense_state, bond; maxdim = maxdim, cutoff = 1e-14,
+      truncation = :dense)
+    random_state = copy(base)
+    MPSToolkit._dmt_bond_truncate!(random_state, bond; maxdim = maxdim, cutoff = 1e-14,
+      truncation = :random)
+
+    dense_error = preservation_error(before,
+      operator_expectation_profile(dense_state, probes; normalize = false))
+    random_error = preservation_error(before,
+      operator_expectation_profile(random_state, probes; normalize = false))
+    overlap = abs(inner(dense_state, random_state)) / (norm(dense_state) * norm(random_state))
+    @info "randomized DMT at d = $(d): preservation error $(random_error) (:random) vs " *
+          "$(dense_error) (:dense), overlap $(overlap)"
+
+    # The guarantee is independent of how well the complement is approximated, so `:random`
+    # meets the same bound `:dense` does -- asserted side by side so a regression cannot be
+    # excused as "randomized mode is just less accurate".
+    @test dense_error < 1e-11
+    @test random_error < 1e-11
+    @test dim(linkind(random_state, bond)) <= maxdim
+    @test dim(linkind(random_state, bond)) == dim(linkind(dense_state, bond))
+    # ... and the approximation of the discarded weight is good.
+    @test overlap > 0.99
+  end
+end
+
+@testset "gate_maxdim = 0 applies the gate exactly" begin
+  # `gate_maxdim` pre-truncates with a plain SVD, discarding small singular values BEFORE DMT
+  # ever sees them -- exactly the error DMT exists to avoid. `0` means "no cap", the same
+  # convention `LocalGateEvolution` already uses for `maxdim`, and is now the default.
+  d, nsites, bond = 2, 6, 3
+  sites = operator_siteinds(nsites; d = d)
+  psi = random_mps(ComplexF64, sites; linkdims = 8)
+  normalize!(psi)
+  gate = operator_gate_from_hamiltonian(
+    spinhalf_xyz_bond_hamiltonian(; Jx = 1.0, Jy = 0.5, Jz = 0.3), 0.1; d = d)
+
+  exact = copy(psi)
+  dmt_step!(exact, gate, bond; maxdim = 200, gate_maxdim = 0, cutoff = 1e-14)
+  capped = copy(psi)
+  dmt_step!(capped, gate, bond; maxdim = 200, gate_maxdim = 4096, cutoff = 1e-14)
+  @test abs(inner(exact, capped)) / (norm(exact) * norm(capped)) ≈ 1.0 atol = 1e-10
+
+  # The gate really does inflate the bond (8 -> 32, the full rank the two-site block admits),
+  # and `maxdim = 200` leaves DMT nothing to truncate -- so "exact" is a claim with content.
+  @test dim(linkind(psi, bond)) == 8
+  @test dim(linkind(exact, bond)) == 32
+  # ... and the knob is not a no-op: a genuinely restrictive budget produces a different state,
+  # so the agreement above is evidence that `0` lifts the cap rather than that nothing is capped.
+  clipped = copy(psi)
+  dmt_step!(clipped, gate, bond; maxdim = 200, gate_maxdim = 12, cutoff = 1e-14)
+  @test dim(linkind(clipped, bond)) == 12
+  @test abs(inner(exact, clipped)) / (norm(exact) * norm(clipped)) < 1.0 - 1e-9
+
+  # The option types are where the sentinel used to be rejected outright, and they are the only
+  # way most callers reach `gate_maxdim`, so the semantics are pinned there too: `0` is accepted
+  # and forwarded, a negative budget is still an error.
+  @test DMTOptions(maxdim = 200, gate_maxdim = 0).gate_maxdim == 0
+  @test_throws ArgumentError DMTOptions(maxdim = 200, gate_maxdim = -1)
+  via_opts = copy(psi)
+  dmt_step!(via_opts, gate, bond, DMTOptions(maxdim = 200, cutoff = 1e-14, gate_maxdim = 0))
+  @test abs(inner(exact, via_opts)) / (norm(exact) * norm(via_opts)) ≈ 1.0 atol = 1e-10
+
+  @test DMTGateEvolution(gate, 0.1; schedule = [bond], maxdim = 200, cutoff = 1e-14,
+    gate_maxdim = 0, normalize = false).gate_maxdim == 0
+  @test_throws ArgumentError DMTGateEvolution(gate, 0.1; schedule = [bond], maxdim = 200,
+    gate_maxdim = -1)
+end
+
+@testset "the old gate_maxdim default silently pre-truncated at d >= 5" begin
+  # A two-site gate inflates the bond from `chi` only to `d^2 chi`, so the old default
+  # `max(16 maxdim, 64)` was unreachable -- i.e. no cap at all -- for every `d <= 4`, and the
+  # `gate_maxdim = 0` default is a no-op there. `d = 5` is the first local dimension where
+  # `d^2 > 16` and the old formula really did discard singular values with a plain SVD before
+  # DMT could protect the local-operator content they carry. This is the correctness argument
+  # for the new default, pinned rather than asserted in prose.
+  d, nsites, bond, chi = 5, 6, 3, 51           # 51 = 2 d^2 + 1, the DMT budget floor
+  old_default = max(16 * chi, 64)
+  @test old_default < d^2 * chi                # the old formula bites here and only here
+  sites = operator_siteinds(nsites; d = d)
+  psi = random_mps(ComplexF64, sites; linkdims = chi)
+  normalize!(psi)
+  sz = ComplexF64.(Diagonal(collect(2.0:-1.0:-2.0)))
+  gate = operator_gate_from_hamiltonian(kron(Matrix(sz), Matrix(sz)), 0.1; d = d)
+
+  # `maxdim` well above the inflated bond, so DMT itself truncates nothing and the only
+  # truncation in play is the gate's own pre-truncation.
+  exact = copy(psi)
+  dmt_step!(exact, gate, bond; maxdim = 4 * d^2 * chi, gate_maxdim = 0, cutoff = 0.0)
+  @test dim(linkind(exact, bond)) == d^2 * chi
+  old = copy(psi)
+  dmt_step!(old, gate, bond; maxdim = 4 * d^2 * chi, gate_maxdim = old_default, cutoff = 0.0)
+  @test dim(linkind(old, bond)) == old_default
+  # ... and it is a real loss, not a reordering: the pre-truncated state is strictly shorter and
+  # no longer parallel to the exactly evolved one.
+  @test norm(old) < norm(exact)
+  @test abs(inner(exact, old)) / (norm(exact) * norm(old)) < 1.0 - 1e-12
 end

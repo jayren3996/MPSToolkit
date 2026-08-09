@@ -96,7 +96,16 @@ the matrix-free products `mul` and `adj`.
 - The randomized branch cannot break DMT's preservation guarantee: its range lies inside the
   range of the operator, which is already doubly orthogonal to the protected subspaces, so the
   protected border and connector are still reinstated exactly. It only affects how optimal the
-  discarded weight is (measured overlap 0.998-0.999 with the dense result).
+  discarded weight is (measured overlap 0.997-0.9999 with the dense result, and the same
+  1e-15 preservation error on a diameter-3 probe sweep).
+- `:dense` is nonetheless the shipped default, because `:random` is not a deterministic function
+  of its input: it draws from the global RNG, so two truncations of the *same* bond disagree at
+  the randomized-SVD level. That is a property, not a test artifact — with `:random` the `:R`
+  and `:L` branches of [`_dmt_bond_truncate!`](@ref), which must produce the same physical state,
+  agree only to ~1e-3 instead of ~1e-15. What that buys, measured: up to 1.8x on the DMT
+  truncation itself, which dilutes to 1.05x-1.2x on a whole sweep at moderate budgets (~1.4x at
+  the largest measured bond), because the gate application `:random` does not touch is about
+  half of a step. `dev/bench_dmt.jl` tables 2 and 3 have the numbers.
 """
 function _truncated_svd(mul, adj, chi::Integer, rank::Integer; mode::Symbol=:dense,
                         oversample::Integer=10, power::Integer=2)

@@ -70,15 +70,19 @@ end
     opts = DMTOptions()
     @test opts.maxdim == 30
     @test opts.cutoff == 1e-12
-    @test opts.gate_maxdim == 480
+    @test opts.gate_maxdim == 0
     @test opts.preserve_diameter == 3
     @test opts.truncation == :dense
-    # gate_maxdim default follows the maxdim*16 formula shared with dmt_step!/DMTGateEvolution.
-    @test DMTOptions(maxdim=8).gate_maxdim == max(8 * 16, 64)
+    # gate_maxdim defaults to 0 = "apply the gate exactly, no pre-truncation", independently of
+    # maxdim, and matches DMTGateEvolution / dmt_step!.
+    @test DMTOptions(maxdim=8).gate_maxdim == 0
+    @test DMTGateEvolution(_identity_gate(2), 0.1; schedule=[1]).gate_maxdim == 0
 
     @test_throws ArgumentError DMTOptions(maxdim=0)
     @test_throws ArgumentError DMTOptions(cutoff=-1e-12)
-    @test_throws ArgumentError DMTOptions(gate_maxdim=0)
+    # 0 is the "no cap" sentinel, so only a negative budget is an error.
+    @test DMTOptions(gate_maxdim=0).gate_maxdim == 0
+    @test_throws ArgumentError DMTOptions(gate_maxdim=-1)
     @test_throws ArgumentError DMTOptions(preserve_diameter=0)
     @test_throws ArgumentError DMTOptions(preserve_diameter=4)
     @test_throws ArgumentError DMTOptions(truncation=:bogus)

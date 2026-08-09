@@ -73,9 +73,11 @@ Configuration for scheduled operator-space DMT evolution.
 - `nstep`: Number of complete forward-plus-reverse sweeps per `evolve!` call.
 - `maxdim`: **Total** post-DMT bond dimension, inclusive of the protected block.
 - `cutoff`: Truncation cutoff used in the final refactorization.
-- `gate_maxdim`: Temporary bond dimension budget used for raw gate application.
+- `gate_maxdim`: Temporary bond dimension cap for raw gate application; `0` means no cap, i.e.
+  the gate is applied exactly.
 - `preserve_diameter`: Positive odd diameter of the observables DMT preserves exactly.
-- `truncation`: `:dense` or `:random` complement truncation.
+- `truncation`: `:dense` (default) or `:random` complement truncation; `:random` is faster at
+  large bond dimension but not deterministic. See [`DMTOptions`](@ref).
 - `normalize`: Whether `evolve!` / `dmt_evolve!` renormalize the state after evolution.
   Default `true`; set `false` to track unnormalized traces of a traceless operator.
 """
@@ -113,7 +115,7 @@ function _reject_connector_buffer(connector_buffer)
 end
 
 """
-    DMTGateEvolution(gate, dt; schedule, reverse_schedule=reverse(schedule), nstep=1, maxdim=30, cutoff=1e-12, gate_maxdim=max(maxdim * 16, 64), preserve_diameter=3, truncation=:dense, normalize=true)
+    DMTGateEvolution(gate, dt; schedule, reverse_schedule=reverse(schedule), nstep=1, maxdim=30, cutoff=1e-12, gate_maxdim=0, preserve_diameter=3, truncation=:dense, normalize=true)
 
 Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
 
@@ -128,10 +130,19 @@ Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
 - `maxdim`: **Total** bond dimension after DMT truncation, inclusive of the protected block; it
   must be at least `2 d^(preserve_diameter - 1) + 1` for the local dimension `d` in use.
 - `cutoff`: Truncation cutoff used when refactorizing the compressed bond.
-- `gate_maxdim`: Temporary gate-application bond dimension budget.
+- `gate_maxdim`: Temporary gate-application bond dimension cap. **`0` (the default) means no
+  cap: the gate is applied exactly.** A positive cap pre-truncates the inflated bond with a
+  plain SVD, discarding the smallest singular values *before* DMT can protect the local-operator
+  content they carry, which is precisely the error DMT exists to avoid. The previous default,
+  `max(maxdim * 16, 64)`, capped nothing for any `d <= 4` (a two-site gate inflates the bond only
+  to `d^2 * maxdim`), so this is a no-op there and a correctness fix at `d >= 5`.
 - `preserve_diameter`: Positive odd diameter of the observables preserved exactly;
   `radius = (preserve_diameter - 1) / 2` sites are protected on each side of the cut.
-- `truncation`: `:dense` or `:random` complement truncation.
+- `truncation`: `:dense` (default) or `:random` complement truncation. `:random` measures
+  1.05x-1.2x faster on a whole sweep at moderate budgets and ~1.4x once the gate-inflated bond
+  passes ~2500, and preserves the guarantee to the same `1e-15` — but it draws from the global
+  RNG, so it is **not deterministic**: two truncations of the same bond agree only to
+  randomized-SVD accuracy. See [`DMTOptions`](@ref).
 - `normalize`: Default normalization choice carried by the object; `evolve!` / `dmt_evolve!`
   use it unless overridden by their own `normalize` keyword. Set `false` for traceless
   operators (see [`dmt_evolve!`](@ref)).
@@ -147,7 +158,7 @@ function DMTGateEvolution(
   nstep=1,
   maxdim=30,
   cutoff=1e-12,
-  gate_maxdim=max(Int(maxdim) * 16, 64),
+  gate_maxdim=0,
   preserve_diameter=3,
   truncation=:dense,
   normalize=true,
@@ -157,7 +168,8 @@ function DMTGateEvolution(
   nstep >= 1 || throw(ArgumentError("DMTGateEvolution requires nstep >= 1"))
   maxdim >= 1 || throw(ArgumentError("DMTGateEvolution requires maxdim >= 1"))
   cutoff >= 0 || throw(ArgumentError("DMTGateEvolution requires cutoff >= 0"))
-  gate_maxdim >= 1 || throw(ArgumentError("DMTGateEvolution requires gate_maxdim >= 1"))
+  gate_maxdim >= 0 ||
+    throw(ArgumentError("DMTGateEvolution requires gate_maxdim >= 0 (0 = no cap)"))
   isodd(preserve_diameter) && preserve_diameter >= 1 || throw(ArgumentError(
     "DMTGateEvolution requires a positive odd preserve_diameter, got $(preserve_diameter)"))
   truncation in (:dense, :random) || throw(ArgumentError(

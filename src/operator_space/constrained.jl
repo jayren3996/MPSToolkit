@@ -30,10 +30,11 @@ contaminates transport observables.
   pre-projection state (which DMT just compressed to `evo.maxdim`), so compressing it back
   immediately is benign — the kept subspace rotates by `O(leakage)`, it does not lose the
   DMT-protected components wholesale. The modest `2x` buffer gives the cutoff room to act.
-  Raising this toward `evo.gate_maxdim` hands the compression decision to the next DMT sweep
-  instead, but A/B benchmarks (PXP correlator, N=64) show no measurable accuracy gain while
-  the inflated bonds add substantial cost per sweep (1.3-2x at moderate `maxdim`, growing
-  with `maxdim` as the cubic SVD scaling takes over).
+  Raising this (in the limit, dropping the cap the way `evo.gate_maxdim = 0` does for the gate)
+  hands the compression decision to the next DMT sweep instead, but A/B benchmarks (PXP
+  correlator, N=64) show no measurable accuracy gain while the inflated bonds add substantial
+  cost per sweep (1.3-2x at moderate `maxdim`, growing with `maxdim` as the cubic SVD scaling
+  takes over).
 - `projector_cutoff`: Truncation cutoff for the projector application.
 - `normalize`: Whether to renormalize after each checkpoint (and let the chunked
   `dmt_evolve!` sweeps renormalize). Defaults to `evo.normalize`, so a

@@ -161,7 +161,9 @@ protected block always fits inside `maxdim` and never has to be clipped.
   rather than an adjoint. Omitting the conjugation is silently correct for a Hermitian operator
   and badly wrong otherwise.
 - Both `direction` branches produce the same physical `psi[bond] * psi[bond + 1]`; they differ
-  only in which tensor carries the singular values.
+  only in which tensor carries the singular values. Under `truncation = :random` this holds only
+  to randomized-SVD accuracy, because the two calls draw independent sketches — one of the
+  reasons `:dense` is the default (see [`_truncated_svd`](@ref)).
 """
 function _dmt_bond_truncate!(
   psi::MPS,
