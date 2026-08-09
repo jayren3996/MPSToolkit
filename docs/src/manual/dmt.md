@@ -560,6 +560,23 @@ point, a `maxdim` convergence ladder, the front-containment guard, and the extra
 exponents — see
 [examples/dmt/spin1_melt.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_melt.jl).
 
+!!! warning "At `d = 3`, `maxdim` must be several times the protected block before DMT pays"
+    [examples/dmt/spin1_semiexact_validation.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_semiexact_validation.jl)
+    runs the same melt at `N = 12` against an **uncapped reference** (`maxdim = typemax(Int)`,
+    reachable to `t = 1.8` at `chi = 1433`) and scores DMT against plain SVD `LocalGateEvolution`
+    at the *same* `maxdim`, same gates, same schedule. The measured answer is not uniform:
+    the protected block is a fixed `2 d^2 = 18` directions at `d = 3`, so at `maxdim = 20`
+    (`chi' = 2`) DMT's profile error is **6x worse** than plain SVD's, at `maxdim = 40`
+    (`chi' = 22`) still 2.5x worse, and only at `maxdim = 64` (`chi' = 46`) does it become **3x
+    better** — with the advantage still growing at the last time reached. A `chi'`-matched
+    `d = 2` control reproduces the same pattern, so this is a property of the method, not of
+    higher spin. What DMT delivers unconditionally is **invariance**: its error is flat to 0.1%
+    across wall amplitude and cutoff, it holds `tr(rho)` to `~1e-13` where plain SVD drifts to
+    `1e-4`, and at an infinitesimal wall with the ordinary `cutoff = 1e-10` the plain-SVD arm hits
+    an error floor that **more bond dimension does not remove** (`1.02e-4` at `chi' = 22` versus
+    `1.03e-4` at `chi' = 46`), where DMT is 70x better. Read the sentence about DMT reaching
+    converged hydrodynamics at smaller bond dimensions with that budget caveat attached.
+
 !!! warning "`S^z` is not a single basis element at `d >= 3`"
     Unlike at `d = 2`, where `pauli_basis_state(sites, ["Z", ...])` selects the single-`Z`
     direction directly, the physical `S^z = diag(1, 0, -1)` at `d = 3` is a **combination** of
@@ -616,7 +633,11 @@ For *when* to prefer DMT, DAOE, or plain TEBD — and in particular why a dynami
   `maxdim` until the transport observable of interest (e.g. a diffusion constant or a density
   profile) stops moving. DMT typically reaches converged hydrodynamics at far smaller bond
   dimensions than plain SVD truncation would for the same operator, which is its main practical
-  advantage.
+  advantage — but only once `maxdim` is comfortably larger than the protected block `2 d^(2n)`.
+  At a budget near the floor, DMT spends nearly everything on structure and is measurably *worse*
+  than the plain SVD it replaces; see the `d = 3` measurement in
+  [examples/dmt/spin1_semiexact_validation.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_semiexact_validation.jl)
+  and the Higher spin section.
 - **`cutoff` is a repair-SVD setting, not the primary control.** It governs only the final
   re-factorization of the already-truncated bond. The transport-relevant decision is made by
   the DMT rule itself, so `maxdim` and `preserve_diameter` are the dials that matter.
@@ -652,6 +673,7 @@ pauli_pxp_constraint_projector
 - [examples/dmt/domain_wall_melting.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/domain_wall_melting.jl)
 - [examples/dmt/pxp_energy_melting.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/pxp_energy_melting.jl) — the energy domain-wall melt (the DMT protocol)
 - [examples/dmt/spin1_melt.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_melt.jl) — higher spin (`d = 3`): spin-1 magnetization melt, diffusive Heisenberg vs. KPZ at the integrable ULS/SU(3) point, with a `maxdim` convergence ladder
+- [examples/dmt/spin1_semiexact_validation.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_semiexact_validation.jl) — higher spin (`d = 3`): DMT vs. plain SVD truncation at equal `maxdim` against an uncapped reference, with a `d = 2` control; measures what the truncation kernel buys instead of fitting an exponent
 - [examples/operator_space/pxp_energy_correlator.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/operator_space/pxp_energy_correlator.jl) — *off-label*: evolves a traceless operator with DMT (see the warning above); prefer TEBD for correlators
 - [examples/open_systems/pauli_lindblad_tebd.ipynb](https://github.com/jayren3996/MPSToolkit/blob/main/examples/open_systems/pauli_lindblad_tebd.ipynb)
 
