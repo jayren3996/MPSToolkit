@@ -1,4 +1,7 @@
-dev/
+# dev/ is local scratch, except for the benchmark scripts that are part of the repo. Git cannot
+# re-include a file whose parent directory is excluded, so the directory itself must not be.
+dev/*
+!dev/bench_dmt.jl
 .DS_Store
 .ipynb_checkpoints/
 docs/build/

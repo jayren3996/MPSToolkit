@@ -266,14 +266,15 @@ function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::
   # Truncate every bond inside the gate window as an independent single-bond DMT update, with
   # the orthogonality center restored to that bond before truncating it. The
   # connector-preserving construction in `_dmt_bond_truncate!` assumes a *canonical* gauge: the
-  # bond SVD must return the true Schmidt values and the trace environments must be built from
-  # orthonormal blocks. A multi-bond window cannot satisfy that with a single shared sweep,
-  # because each DMT truncation rewrites the bond tensors and resets the MPS gauge bookkeeping.
-  # Sweeping with cached environments therefore truncates later bonds in a non-canonical gauge:
-  # mildly wrong for a `:R` window, and badly wrong for `:L`, where the orthogonality center
-  # ends up on the wrong site so `svd(psi[bond])` degenerates to `s ≈ I` and the truncation
-  # discards information indiscriminately. Re-gauging per bond keeps a span-`S` window exactly
-  # equal to the verified single-bond path applied to each of its bonds.
+  # bond factorization must see an orthonormal basis on each side of the cut, and the trace
+  # environments must be built from orthonormal blocks. A multi-bond window cannot satisfy that
+  # with a single shared sweep, because each DMT truncation rewrites the bond tensors and resets
+  # the MPS gauge bookkeeping. Sweeping with cached environments therefore truncates later bonds
+  # in a non-canonical gauge: mildly wrong for a `:R` window, and badly wrong for `:L`, where the
+  # orthogonality center ends up on the wrong site so the bond matrix degenerates to a unitary
+  # (every Schmidt weight equal) and the truncation discards information indiscriminately.
+  # Re-gauging per bond keeps a span-`S` window exactly equal to the verified single-bond path
+  # applied to each of its bonds.
   #
   # PERFORMANCE (perf-1, implemented). Rebuilding both identity/trace environments from scratch
   # in every `_dmt_bond_truncate!` (`_left_identity_environment` over `1:bond-radius`,
