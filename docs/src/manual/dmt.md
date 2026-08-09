@@ -152,7 +152,12 @@ The truncation budget has a few knobs worth understanding:
 - `truncation`: `:dense` (default) or `:random` complement truncation. `:random` is faster at
   large bond dimension and preserves the guarantee to the same tolerance, but is not
   deterministic — see [`DMTOptions`](@ref) for the measured tradeoff and why `:dense` ships as
-  the default.
+  the default. `:dense` also sets peak memory, not just speed: it materializes the `chi x chi`
+  complement and factorizes it, where `chi` is the **gate-inflated** bond `d^2 maxdim`, for a
+  measured transient of ~6.4 `chi x chi` `ComplexF64` matrices against ~2.2 for `:random` —
+  0.33 GB at `d = 3, maxdim = 200`, 1.1 GB at `d = 4, maxdim = 200`, and ~7 GB at
+  `d = 4, preserve_diameter = 5, maxdim = 513` — so at `d >= 4`, or at `preserve_diameter = 5`,
+  choosing `:random` is a memory decision and not only a speed one.
 
 !!! warning "Migration: `connector_buffer` removed"
     `connector_buffer` no longer exists in `DMTOptions`, `DMTGateEvolution`, or `dmt_step!`;
@@ -171,6 +176,12 @@ and the implied floor is raised at the start of the step or sweep, before anythi
 |:--|--:|--:|--:|--:|
 | 3 | `2 d^2`  | 9  | 19  | 33  |
 | 5 | `2 d^4`  | 33 | 163 | 513 |
+
+The bottom-right cell is a memory decision as well as a budget: at `d = 4, preserve_diameter = 5`
+the floor `maxdim = 513` gives a gate-inflated bond of `d^2 maxdim = 8208`, and the default
+`truncation = :dense` transiently needs ~7 GB there (see the `truncation` bullet above), against
+~2.4 GB for `:random`. Pass `truncation = :random` at that corner of the table unless the machine
+has the headroom.
 
 DMT works at any local Hilbert space dimension `d`: the step validates only that every site in
 the gate's window shares a common local dimension (`operator_siteinds(nsites; d)` sites for any

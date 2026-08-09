@@ -35,7 +35,13 @@ Options controlling operator-space density matrix truncation (DMT).
   `dmt_evolve!` truncates every bond twice per sweep (`direction=:R` on the forward schedule,
   `:L` on the reverse), so a `:random` default would make the two halves of *every* production
   sweep sketch independently instead of reproducing the same physical state. Opt in for large
-  runs where the speedup matters and reproducibility is handled by seeding.
+  runs where the speedup matters and reproducibility is handled by seeding. `:dense` also sets
+  peak memory, not just speed: it materializes the `chi x chi` complement and factorizes it,
+  where `chi` is the **gate-inflated** bond `d^2 maxdim` (see the Notes of [`dmt_step!`](@ref)),
+  for a measured transient of ~6.4 `chi x chi` `ComplexF64` matrices against ~2.2 for `:random`
+  — 0.33 GB at `d = 3, maxdim = 200`, 1.1 GB at `d = 4, maxdim = 200`, and ~7 GB at
+  `d = 4, preserve_diameter = 5, maxdim = 513` — so at `d >= 4`, or at `preserve_diameter = 5`,
+  choosing `:random` is a memory decision and not only a speed one.
 
 # Notes
 - The `gate_maxdim` default was `max(maxdim * 16, 64)`, which in steady state capped nothing: a
@@ -372,6 +378,15 @@ is (and is not) the appropriate choice.
   truncates it back to `maxdim`, so the bond tensor the kernel factorizes is `d^2` times wider
   than `maxdim` suggests (`chi <= maxdim` in steady state). That is the dominant cost of a step,
   and it is the cost of not throwing away protected data.
+- Fusing the two stages — factorizing the gated two-site block **once** at the target rank
+  instead of applying the gate and then factorizing `psi[bond]` again — was scoped for this
+  rebuild and **not implemented**; the gate application and the DMT truncation below are
+  separate, as the code reads. The measurements point elsewhere: at `d = 3, maxdim = 318` the
+  gate application is 8.85 s of a bond step and the DMT truncation 14.03 s, and *both* spend most
+  of that materializing a tall orthogonal factor, so keeping `Q` in implicit Householder form and
+  applying it to the `chi x maxdim` result would attack ~60% of a step — twice the share the
+  randomized complement and exact gate application together reached. `dev/bench_dmt.jl` table 2
+  has the numbers.
 """
 function dmt_step!(
   psi::MPS,
