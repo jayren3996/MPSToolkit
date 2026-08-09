@@ -28,25 +28,62 @@ include("dmt_test_helpers.jl")
     end
   end
 
-  @testset "the guarantee survives a full sweep" begin
-    nsites, maxdim, dt = 10, 24, 0.1
+  # One d = 2 XXZ domain-wall melt: returns the worst total-S^z drift over `nsweep` sweeps,
+  # relative to the per-site charge scale, and the largest bond dimension reached. The total is
+  # ~0 for a symmetric wall, so the drift has to be judged against the per-site scale.
+  function melt_drift(nsites, maxdim, nsweep)
+    dt = 0.1
     sites = operator_siteinds(nsites; d=2)
     gate = operator_gate_from_hamiltonian(
       spinhalf_xyz_bond_hamiltonian(; Jx=1.0, Jy=1.0, Jz=1.0), dt; d=2)
     rho = add(operator_basis_state(sites, fill(1, nsites)),
       0.25 * pauli_domain_wall_state(sites; kink=nsites ÷ 2); maxdim=8, cutoff=0.0)
     z = ComplexF64[1 0; 0 -1]
-    charge(state) = sum(real.(operator_expectation_profile(
-      state, [(x, z) for x in 1:nsites]; normalize=false)))
+    profile(state) = real.(operator_expectation_profile(
+      state, [(x, z) for x in 1:nsites]; normalize=false))
+    charge(state) = sum(profile(state))
     initial_charge = charge(rho)
+    scale = maximum(abs, profile(rho))
     schedule = collect(1:(nsites - 1))
     evo = DMTGateEvolution(gate, dt; schedule=schedule, reverse_schedule=reverse(schedule),
       nstep=1, maxdim=maxdim, cutoff=1e-14, normalize=false)
-    for _ in 1:15
+    worst = 0.0
+    reached = 0
+    for _ in 1:nsweep
       dmt_evolve!(rho, evo)
-      @test abs(charge(rho) - initial_charge) < 1e-10
+      worst = max(worst, abs(charge(rho) - initial_charge))
+      reached = max(reached, maximum(dim(linkind(rho, b)) for b in 1:(nsites - 1)))
       @test maximum(dim(linkind(rho, b)) for b in 1:(nsites - 1)) <= maxdim
     end
+    return (relative=worst / scale, absolute=worst, scale=scale, maxlink=reached)
+  end
+
+  @testset "the guarantee survives a full sweep" begin
+    nsites, maxdim = 10, 24
+    truncating = melt_drift(nsites, maxdim, 15)
+    # A conserved total is a WEAK probe of the guarantee: it is exactly what stayed at 1e-6 while
+    # individual diameter-3 observables were 26% wrong in the defect this kernel was rebuilt to
+    # fix. Asserted here only in company with the control below.
+    @test truncating.absolute < 1e-10
+    @test truncating.maxlink <= maxdim
+
+    # The control is what gives the testset its name. The same circuit is run with a budget past
+    # the 4^5 = 1024 ceiling of a 10-site operator-space chain, so `_dmt_bond_truncate!`
+    # short-circuits at every bond and no DMT truncation happens at all -- roundoff in the Trotter
+    # circuit and the repeated factorizations is then the only source of drift. If DMT ever does
+    # start shedding charge through the truncation, the truncating run pulls away from the
+    # untruncated one and this comparison fails, where the absolute bound above would not.
+    untruncated = melt_drift(nsites, 4^(nsites ÷ 2), 15)
+    @info "d = 2 melt, $(nsites) sites: per-site charge scale $(truncating.scale); truncating " *
+          "(max bond $(truncating.maxlink)) relative drift $(truncating.relative); untruncated " *
+          "(max bond $(untruncated.maxlink)) relative drift $(untruncated.relative); ratio " *
+          "$(truncating.relative / untruncated.relative)"
+    # The control never truncated: the bond saturated at the full 4^5 the chain admits, which is
+    # the budget it was given, so every bond short-circuited on `dim(link) <= maxdim`.
+    @test untruncated.maxlink == 4^(nsites ÷ 2)
+    @test truncating.relative < 1e-11
+    @test untruncated.relative < 1e-11
+    @test truncating.relative <= 3 * untruncated.relative
   end
 
   @testset "purity monotone: DMT keeps Z >= 1 where plain SVD truncation does not" begin
