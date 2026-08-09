@@ -134,8 +134,9 @@ Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
   cap: the gate is applied exactly.** A positive cap pre-truncates the inflated bond with a
   plain SVD, discarding the smallest singular values *before* DMT can protect the local-operator
   content they carry, which is precisely the error DMT exists to avoid. The previous default,
-  `max(maxdim * 16, 64)`, capped nothing for any `d <= 4` (a two-site gate inflates the bond only
-  to `d^2 * maxdim`), so this is a no-op there and a correctness fix at `d >= 5`.
+  `max(maxdim * 16, 64)`, capped nothing for any `d <= 4` in steady state (a two-site gate
+  inflates the bond from the incoming `chi` to `d^2 * chi`, and `chi <= maxdim` once DMT has
+  truncated that bond), so this is a no-op there and a correctness fix at `d >= 5`.
 - `preserve_diameter`: Positive odd diameter of the observables preserved exactly;
   `radius = (preserve_diameter - 1) / 2` sites are protected on each side of the cut.
 - `truncation`: `:dense` (default) or `:random` complement truncation. `:random` measures

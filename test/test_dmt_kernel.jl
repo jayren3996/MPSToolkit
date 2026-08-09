@@ -348,6 +348,12 @@ end
     gate_maxdim = 0, normalize = false).gate_maxdim == 0
   @test_throws ArgumentError DMTGateEvolution(gate, 0.1; schedule = [bond], maxdim = 200,
     gate_maxdim = -1)
+  # `dmt_step!` carries its OWN check, exercised here directly. Both assertions above enter
+  # through constructors that throw first, so without this line the kernel-side validation is
+  # unreachable from the suite -- and a refactor could move it after `tebd_evolve!`, which is
+  # exactly the "invalid call must not mutate the state" bug an earlier task on this branch
+  # shipped, with everything still green.
+  @test_throws ArgumentError dmt_step!(copy(psi), gate, bond; maxdim = 200, gate_maxdim = -1)
 end
 
 @testset "the old gate_maxdim default silently pre-truncated at d >= 5" begin
@@ -357,14 +363,25 @@ end
   # `d^2 > 16` and the old formula really did discard singular values with a plain SVD before
   # DMT could protect the local-operator content they carry. This is the correctness argument
   # for the new default, pinned rather than asserted in prose.
+  Random.seed!(20260809)
   d, nsites, bond, chi = 5, 6, 3, 51           # 51 = 2 d^2 + 1, the DMT budget floor
   old_default = max(16 * chi, 64)
   @test old_default < d^2 * chi                # the old formula bites here and only here
   sites = operator_siteinds(nsites; d = d)
   psi = random_mps(ComplexF64, sites; linkdims = chi)
   normalize!(psi)
-  sz = ComplexF64.(Diagonal(collect(2.0:-1.0:-2.0)))
-  gate = operator_gate_from_hamiltonian(kron(Matrix(sz), Matrix(sz)), 0.1; d = d)
+  # Spin-2 matrices: Sz = diag(2 .. -2), and Sx = (S+ + S-)/2 with the standard ladder
+  # coefficients sqrt(S(S+1) - m(m+1)) at S = 2.
+  spins = collect(2.0:-1.0:-2.0)
+  ladder = [sqrt(6 - m * (m + 1)) for m in spins[2:end]]
+  sz = Matrix{ComplexF64}(Diagonal(spins))
+  sx = ComplexF64.(diagm(1 => ladder ./ 2, -1 => ladder ./ 2))
+  # `dt` is deliberately large. The discarded directions are the tail of the two-site tensor's
+  # Schmidt spectrum, and a near-identity gate (small `dt`) puts almost nothing there -- at
+  # `dt = 0.1` with a commuting `Sz Sz` the loss is 1.2e-12, which would demonstrate the clip
+  # only at the level of roundoff. A non-commuting `Sx Sx + Sz Sz` at `dt = 2` spreads real
+  # weight into the tail, so the assertion below has ten orders of magnitude of headroom.
+  gate = operator_gate_from_hamiltonian(kron(sx, sx) + kron(sz, sz), 2.0; d = d)
 
   # `maxdim` well above the inflated bond, so DMT itself truncates nothing and the only
   # truncation in play is the gate's own pre-truncation.
@@ -374,8 +391,13 @@ end
   old = copy(psi)
   dmt_step!(old, gate, bond; maxdim = 4 * d^2 * chi, gate_maxdim = old_default, cutoff = 0.0)
   @test dim(linkind(old, bond)) == old_default
-  # ... and it is a real loss, not a reordering: the pre-truncated state is strictly shorter and
-  # no longer parallel to the exactly evolved one.
-  @test norm(old) < norm(exact)
-  @test abs(inner(exact, old)) / (norm(exact) * norm(old)) < 1.0 - 1e-12
+  # ... and it is a substantial loss, not a reordering and not roundoff: the old cap threw away
+  # 459 of the 1275 directions and with them ~1.2% of the norm. Measured deficit 1.2443e-2 here,
+  # and 1.2428e-2 to 1.2467e-2 across five seeds -- a 0.3% spread, so the 1e-3 bar has better
+  # than an order of magnitude of margin and does not depend on the RNG stream.
+  deficit = 1 - abs(inner(exact, old)) / (norm(exact) * norm(old))
+  @info "d = 5 old gate_maxdim default: bond $(d^2 * chi) -> $(old_default), " *
+        "norm $(norm(exact)) -> $(norm(old)), overlap deficit $(deficit)"
+  @test norm(old) < 0.995 * norm(exact)
+  @test deficit > 1e-3
 end

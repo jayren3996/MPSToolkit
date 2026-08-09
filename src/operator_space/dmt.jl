@@ -35,10 +35,12 @@ Options controlling operator-space density matrix truncation (DMT).
   runs where the speedup matters and reproducibility is handled by seeding.
 
 # Notes
-- The `gate_maxdim` default was `max(maxdim * 16, 64)`, which capped nothing: a two-site gate
-  inflates the bond only to `d^2 * maxdim`, so `16 * maxdim` was already unreachable for every
-  `d <= 4`. `0` makes the shipped behaviour explicit and extends it to `d >= 5`, where the old
-  formula did silently pre-truncate.
+- The `gate_maxdim` default was `max(maxdim * 16, 64)`, which in steady state capped nothing: a
+  two-site gate inflates the bond from the incoming `chi` to `d^2 * chi`, and `chi <= maxdim`
+  once DMT has truncated that bond, so `16 * maxdim` was already unreachable for every `d <= 4`.
+  (On a first sweep over a state entering *wider* than `maxdim`, `chi > maxdim` and the old cap
+  could bite even at `d <= 4`.) `0` makes the shipped behaviour explicit and unconditional, and
+  extends it to `d >= 5`, where the old formula pre-truncated even in steady state.
 """
 struct DMTOptions
   maxdim::Int
@@ -363,10 +365,10 @@ is (and is not) the appropriate choice.
 - The mutated `psi`.
 
 # Notes
-- Applying the gate exactly inflates the bond from `maxdim` to `d^2 * maxdim` before DMT
-  truncates it back, so the bond tensor the kernel factorizes is `d^2` times wider than
-  `maxdim` suggests. That is the dominant cost of a step, and it is the cost of not throwing
-  away protected data.
+- Applying the gate exactly inflates the bond from the incoming `chi` to `d^2 * chi` before DMT
+  truncates it back to `maxdim`, so the bond tensor the kernel factorizes is `d^2` times wider
+  than `maxdim` suggests (`chi <= maxdim` in steady state). That is the dominant cost of a step,
+  and it is the cost of not throwing away protected data.
 """
 function dmt_step!(
   psi::MPS,
