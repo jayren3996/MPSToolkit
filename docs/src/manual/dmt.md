@@ -560,22 +560,36 @@ point, a `maxdim` convergence ladder, the front-containment guard, and the extra
 exponents — see
 [examples/dmt/spin1_melt.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_melt.jl).
 
-!!! warning "At `d = 3`, `maxdim` must be several times the protected block before DMT pays"
+!!! warning "Near the DMT budget floor, DMT is measurably worse than the plain SVD it replaces"
     [examples/dmt/spin1_semiexact_validation.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_semiexact_validation.jl)
     runs the same melt at `N = 12` against an **uncapped reference** (`maxdim = typemax(Int)`,
     reachable to `t = 1.8` at `chi = 1433`) and scores DMT against plain SVD `LocalGateEvolution`
-    at the *same* `maxdim`, same gates, same schedule. The measured answer is not uniform:
-    the protected block is a fixed `2 d^2 = 18` directions at `d = 3`, so at `maxdim = 20`
-    (`chi' = 2`) DMT's profile error is **6x worse** than plain SVD's, at `maxdim = 40`
-    (`chi' = 22`) still 2.5x worse, and only at `maxdim = 64` (`chi' = 46`) does it become **3x
-    better** — with the advantage still growing at the last time reached. A `chi'`-matched
-    `d = 2` control reproduces the same pattern, so this is a property of the method, not of
-    higher spin. What DMT delivers unconditionally is **invariance**: its error is flat to 0.1%
-    across wall amplitude and cutoff, it holds `tr(rho)` to `~1e-13` where plain SVD drifts to
-    `1e-4`, and at an infinitesimal wall with the ordinary `cutoff = 1e-10` the plain-SVD arm hits
-    an error floor that **more bond dimension does not remove** (`1.02e-4` at `chi' = 22` versus
-    `1.03e-4` at `chi' = 46`), where DMT is 70x better. Read the sentence about DMT reaching
-    converged hydrodynamics at smaller bond dimensions with that budget caveat attached.
+    at the *same* `maxdim`, same gates, same schedule, with the reference's own resolution
+    measured per case and per time so that unresolved cells can be excluded.
+
+    **The robust result is negative.** At the tightest budget the kernel admits (`chi' = 2`,
+    i.e. `maxdim = 20` at `d = 3`), DMT's profile error at each case's last front-contained time
+    is **≥ 39x worse** than plain SVD's for spin-1 Heisenberg, **≥ 44x worse** for ULS/SU(3), and
+    **≥ 13x worse** in a `chi'`-matched `d = 2` control — guaranteed bounds after subtracting the
+    reference's own error, with the same sign in every wall-amplitude and cutoff cell. The `d = 2`
+    control reproduces the loss at `chi' = 2` and `10`, so this is a property of the method, not
+    of higher spin.
+
+    **No kernel-only win is claimed at large `chi'`.** At `chi' = 46` both arms sit at or below
+    the reference's resolution wherever that resolution is known, so the raw table's `2.98` is
+    not a measurement.
+
+    **What is resolved on the positive side is immunity to a norm-relative cutoff.** With an
+    infinitesimal wall and the ordinary `cutoff = 1e-10`, the plain-SVD arm hits an error floor
+    that more bond dimension does not remove (`1.02e-4` at `chi' = 22` versus `1.03e-4` at
+    `chi' = 46`), because `cutoff` bounds discarded weight relative to the *full* Hilbert-Schmidt
+    norm while the signal is a few percent of it. DMT is structurally immune: **≥ 2.2x** better at
+    `chi' = 22` and **≥ 29x** at `chi' = 46` (`d = 3`), **≥ 19x** and **≥ 35x** at the matched
+    `d = 2` rungs. DMT is likewise invariant to the cutoff itself (error moves ≤ 0.02% at
+    `chi' >= 10`, against 34–268% for plain SVD) and holds `tr(rho)` to `~1e-13` where plain SVD
+    drifts to `1e-4`. Note the *wall-amplitude* invariance is **not** unconditional — DMT's error
+    spreads 272% across `eps` at `chi' = 2` — and that per-rung verdicts are model-dependent:
+    at `chi' = 22` spin-1 Heisenberg is behind while ULS is 1.67x ahead.
 
 !!! warning "`S^z` is not a single basis element at `d >= 3`"
     Unlike at `d = 2`, where `pauli_basis_state(sites, ["Z", ...])` selects the single-`Z`
@@ -633,11 +647,16 @@ For *when* to prefer DMT, DAOE, or plain TEBD — and in particular why a dynami
   `maxdim` until the transport observable of interest (e.g. a diffusion constant or a density
   profile) stops moving. DMT typically reaches converged hydrodynamics at far smaller bond
   dimensions than plain SVD truncation would for the same operator, which is its main practical
-  advantage — but only once `maxdim` is comfortably larger than the protected block `2 d^(2n)`.
-  At a budget near the floor, DMT spends nearly everything on structure and is measurably *worse*
-  than the plain SVD it replaces; see the `d = 3` measurement in
+  advantage — but this is not automatic, and near the budget floor it inverts. At a budget close
+  to the protected block, DMT spends nearly everything on structure and is measurably *worse* than
+  the plain SVD it replaces. The useful control is the **absolute complement budget**
+  `chi' = maxdim - 2 d^(2n)`, not its ratio to the protected block: the `d = 3` measurement in
   [examples/dmt/spin1_semiexact_validation.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_semiexact_validation.jl)
-  and the Higher spin section.
+  finds DMT behind at `chi' = 2` in every model tested, and its `d = 2` control is still behind at
+  `chi' = 22` even though the overhead there is only 27% of `maxdim`. Budget `chi'` of order 40–50
+  as a starting point, treat the crossover as model-dependent (it moved ~2x in `chi'` between two
+  models at the same `d`), and run the equal-`maxdim` DMT-vs-SVD check for your own model rather
+  than trusting a constant.
 - **`cutoff` is a repair-SVD setting, not the primary control.** It governs only the final
   re-factorization of the already-truncated bond. The transport-relevant decision is made by
   the DMT rule itself, so `maxdim` and `preserve_diameter` are the dials that matter.

@@ -105,67 +105,106 @@
 #  * `front` -- the melt must not reach the chain edge, or the reference is measuring a reflection.
 #    Reported as max_x-in-edge-band |p_x(t)/p_x(0) - 1| on the reference.
 #
-# WHAT THIS CONFIGURATION ACTUALLY FINDS (N = 12, dt = 0.1, ~55 min wall on 32 BLAS threads;
-# numbers below are err_inf at each reference's LAST time, from spin1_semiexact_validation.csv).
+# WHAT THIS CONFIGURATION ACTUALLY FINDS (N = 12, dt = 0.1, ~65 min wall on 32 BLAS threads;
+# from spin1_semiexact_validation.csv plus the per-case floor curves this script prints).
 #
-#   REFERENCE REACH. Heisenberg d = 3 got to t = 1.8 (chi = 1433, 15.0 min) before the wall-clock
-#   guard fired; ULS/SU(3) to t = 1.6 (chi = 1465, 10.4 min) -- ULS's operator entanglement grows
-#   about twice as fast, so it buys 0.2 less time for the same money. The d = 2 control ran the
-#   full t = 6.0 in 1.1 min (chi = 620). The reference's OWN error, measured against a 100x tighter
-#   cutoff, is 3.0e-6 at t = 1.2 -- one to four orders of magnitude below every arm error quoted
-#   below, except the maxdim = 64 DMT arm at early times, which is within ~10x of it.
+#   HOW TO READ ANY NUMBER HERE. The reference is cutoff-limited, and the capped arms run at
+#   cutoff 0, so the REFERENCE is the looser of the two. Writing m_A = |A - reference| for a
+#   measured arm error and f for the floor at that same time, the true error obeys
+#   |A - exact| in [m_A - f, m_A + f], so the only defensible statement about a ratio is the
+#   interval [(m_S - f) / (m_D + f), (m_S + f) / (m_D - f)]. Every ratio quoted below is the
+#   LOWER end of that interval -- a guaranteed bound, not a point estimate -- and cells whose
+#   interval straddles 1 are reported as UNRESOLVED rather than as results. Measured floors:
+#       d = 3 Heisenberg  1.6e-9, 4.4e-8, 1.0e-7, 6.1e-7, 1.7e-6, 3.0e-6   (t = 0.2 .. 1.2)
+#       d = 3 ULS         1.5e-9, 2.1e-8, 3.6e-7, 1.8e-6, 4.4e-6, 6.4e-6   (t = 0.2 .. 1.2)
+#       d = 2 Heisenberg  rises to 2.2e-5 by t = 2.2 then SATURATES and drifts down to 3.0e-5 at
+#                         t = 6.0 -- measured over the whole window, unlike the d = 3 cases
+#   The two d = 3 floor probes stop at t = 1.2: the 1e-12 reference costs ~2.4x the shipped one
+#   per sweep and its next sweep was projected at 514 s (Heisenberg) / 836 s (ULS). SO THE d = 3
+#   FLOOR IS UNKNOWN AT t = 1.4 .. 1.8, WHICH IS WHERE THE LAST FEW COLUMNS LIVE. Conclusions
+#   there are only stated when they are insensitive to any plausible floor.
 #
-#   THERE IS NO SINGLE VERDICT: THE ANSWER TURNS ON THE COMPLEMENT BUDGET chi'. At d = 3
-#   Heisenberg, t = 1.8, cutoff 0, eps = 0.25 (DMT / SVD / ratio):
-#       chi' =  2   4.15e-2 / 6.42e-3 / 0.16     DMT 6x WORSE
-#       chi' = 10   3.02e-3 / 2.08e-3 / 0.69     DMT slightly worse
-#       chi' = 22   2.81e-3 / 1.14e-3 / 0.41     DMT 2.5x worse
-#       chi' = 46   6.33e-5 / 1.89e-4 / 2.98     DMT 3x BETTER, and the gap GROWS with time
-#                                                (1.34 at t = 1.4, 2.08 at 1.6, 2.98 at 1.8)
-#   The crossover is the structural overhead: the protected block is a FIXED 18 directions, so at
-#   maxdim = 20 it is 90% of the budget and DMT is spending almost everything on a subspace plain
-#   SVD would not have chosen, losing badly in Frobenius norm (where SVD is optimal by
-#   Eckart-Young) and feeding that error back through the gates. At maxdim = 64 the overhead is
-#   28%, the complement is resolved, and the protection starts paying. THE PRACTICAL READING: at
-#   d = 3, `maxdim` must be several times `2 d^2` before DMT is worth using at all; near the floor
-#   it is actively worse than the plain SVD it replaces.
+#   THE NEGATIVE RESULT IS THE HEADLINE, AND IT IS ROBUST. At the tightest budget the kernel
+#   admits, DMT is decisively WORSE than the plain SVD it replaces, in every model, at both d, in
+#   both metrics, and with the floor accounted for. Guaranteed bounds at each case's LAST
+#   FRONT-CONTAINED time, cutoff 0, eps = 0.25:
+#       d = 3 Heisenberg  chi' =  2, t = 1.2   DMT 1.75e-2 vs SVD 4.48e-4   DMT >= 39x worse
+#       d = 3 ULS         chi' =  2, t = 1.2   DMT 8.06e-2 vs SVD 1.84e-3   DMT >= 44x worse
+#       d = 2 Heisenberg  chi' =  2, t = 2.6   DMT 9.71e-2 vs SVD 7.40e-3   DMT >= 13x worse
+#       d = 2 Heisenberg  chi' = 10, t = 2.6   DMT 1.44e-3 vs SVD 3.26e-5   DMT >= 29x worse
+#   The magnitude depends on eps and on time and should be quoted as a range, never as one number:
+#   at d = 3 Heisenberg chi' = 2 the loss is 39x at t = 1.2, 11x at t = 1.6 and 6.5x at t = 1.8 for
+#   eps = 0.25, and 2.9x (t = 1.6) to 1.7x (t = 1.8) for eps = 0.01. The SIGN is the same in all
+#   four (cutoff, eps) cells at every time past t = 0.2; only the size moves. Note the loss SHRINKS
+#   with time as the SVD arm's own error catches up -- it is largest early, not late.
 #
-#   THE d = 2 CONTROL SAYS d = 3 IS NOT THE PROBLEM. The identical pattern appears at d = 2 with
-#   chi' matched: at t = 6.0, cutoff 0, eps = 0.25 the ratios run 1.23 (chi' = 2) / 0.48 (10) /
-#   0.22 (22) / 2.14 (46), and at chi' = 46 the DMT advantage peaks at 3.5x around t = 4.2. So the
-#   "DMT only wins at generous chi'" behaviour is a property of the METHOD, not of higher spin.
-#   Note the d = 2 window runs well past its own front containment (see below), which is why its
-#   absolute errors reach 10-20% at the tight rungs -- both methods are broken there, and a ratio
-#   between two broken numbers is not worth much.
+#   THE POSITIVE HALF IS MUCH WEAKER THAN THE RAW TABLE SUGGESTS, AND MOST OF IT IS THE FLOOR.
+#   At chi' = 46, cutoff 0, the DMT arm sits AT or BELOW the reference's own error at every time
+#   the floor is measured: 1.00x, 1.59x, 1.51x, 0.77x, 0.86x, 1.08x of the floor at t = 0.2 .. 1.2.
+#   So is the SVD arm (0.73x-1.05x from t = 0.8). The apparent trend "0.97 -> 1.34 -> 2.08 -> 2.98"
+#   over t = 1.2 .. 1.8 therefore BEGINS INSIDE THE NOISE, and since the d = 3 floor is unmeasured
+#   past t = 1.2 -- and, on the d = 2 evidence, floors keep growing into the 1e-5 range -- the
+#   t = 1.6 and t = 1.8 values (2.60e-5 and 6.33e-5) may be floor-limited too. NO KERNEL-ONLY WIN
+#   IS CLAIMED AT chi' = 46. The same applies to the d = 2 control at that rung: at t = 2.6 its two
+#   arms read 1.6154e-5 and 1.6184e-5 against a floor of 1.66e-5, i.e. both are reporting the
+#   reference's error to four significant figures, and the "ratio" 1.002 is that error over itself.
+#   THE d = 2 CONTROL THEREFORE CORROBORATES THE LOSS AT chi' = 2 AND 10 AND NOTHING MORE; at
+#   chi' = 22 its interval is [0.21, 1.73] and at chi' = 46 it is pure floor.
 #
-#   WHAT DMT UNAMBIGUOUSLY BUYS: INVARIANCE. DMT's error barely moves across the eps x cutoff grid
-#   -- at d = 3, maxdim = 64, t = 1.8 it reads 6.326e-5 / 6.320e-5 / 6.326e-5 / 6.321e-5 over all
-#   four cells, a 0.1% spread. Plain SVD's swings by 1.5x at the same rung and by far more earlier.
-#   Two concrete consequences:
-#     * TRACE. DMT holds tr(rho) to 6e-14..8e-13 in every cell; plain SVD drifts up to 1.3e-4
-#       (d = 2, eps = 0.25). The trace is protected structurally, not because it wins a weight
-#       contest.
-#     * THE CUTOFF FLOOR. At eps = 0.01 with the ordinary cutoff = 1e-10 that both sibling melts
-#       set, the SVD arm's error stops depending on maxdim: at t = 1.0 it is 1.02e-4 at chi' = 22
-#       and 1.03e-4 at chi' = 46, and it is even NON-MONOTONE in time (2.26e-4 at t = 1.4 ->
-#       1.41e-4 at t = 1.8). Buying bond dimension buys nothing, because a norm-relative cutoff
-#       cannot see a signal that is 2.8% of the norm. DMT at chi' = 46 is 1.47e-6 there -- 70x
-#       better -- and keeps improving with maxdim. THIS is the regime where the method's design
-#       matters, and it is exactly the infinitesimal-wall linear-response regime the DMT
-#       literature works in.
+#   WHAT SURVIVES ON THE POSITIVE SIDE -- AND IT IS THE PRACTICALLY IMPORTANT ONE -- IS IMMUNITY
+#   TO A NORM-RELATIVE CUTOFF. At eps = 0.01 with the ordinary cutoff = 1e-10 that BOTH sibling
+#   melts set, the SVD arm's error stops depending on maxdim (d = 3, t = 1.0: 1.02e-4 at chi' = 22
+#   against 1.03e-4 at chi' = 46) and is even non-monotone in time, because a cutoff bounds
+#   discarded weight relative to the FULL Hilbert-Schmidt norm and the signal is 2.8% of it. Those
+#   SVD errors are 35x-170x the floor, i.e. solidly resolved, while DMT stays at the floor -- so
+#   these bounds are real:
+#       d = 3 Heisenberg  chi' = 22, t = 1.2   DMT >= 2.2x better
+#       d = 3 Heisenberg  chi' = 46, t = 1.2   DMT >= 29x better
+#       d = 2 Heisenberg  chi' = 22, t = 2.6   DMT >= 19x better
+#       d = 2 Heisenberg  chi' = 46, t = 2.6   DMT >= 35x better
+#   This is the one claim corroborated at BOTH local dimensions with the floor accounted for, and
+#   it is exactly the infinitesimal-wall linear-response regime the DMT literature works in.
+#   Its structural counterpart: DMT holds tr(rho) to 6e-14..8e-13 in every cell while plain SVD
+#   drifts up to 1.3e-4 (d = 2, eps = 0.25).
 #
-#   FRONT CONTAINMENT (measured, not assumed; edge drift over the outermost 2 sites per side).
-#   Heisenberg d = 3 stays under 1e-3 through t = 1.6 (9.0e-4) and reaches 2.3e-3 only at the final
-#   t = 1.8. ULS crosses earlier, at t = 1.4 (1.9e-3), reaching 5.4e-3 at t = 1.6. The d = 2
+#   SPLIT THE TWO INVARIANCE CLAIMS -- ONLY ONE OF THEM IS TRUE. Measured at d = 3, t = 1.6:
+#       CUTOFF-invariance (clean): DMT moves 0.019% / 0.001% / 0.019% between cutoff 0 and 1e-10
+#         at chi' = 10 / 22 / 46, against SVD's 34% / 180% / 268%. Quote this at chi' = 22, where
+#         DMT's error (1.09e-3) is three orders above the floor and the claim is fully resolved.
+#       eps-invariance (FALSE at tight budgets): DMT's eps-spread is 272% at chi' = 2 and 3.7% at
+#         chi' = 10 (rising to 28% at t = 1.8), settling to 0.6% / 0.1% at chi' = 22 / 46. The
+#         6.5x-vs-1.7x spread in the headline loss above IS this non-invariance. The identity is a
+#         PRODUCT operator occupying one Schmidt direction, so a pure maxdim ranking is eps-blind
+#         and these rows SHOULD be flat; they are, but only once chi' >= 22.
+#
+#   THE MECHANISM IS NOT THE OVERHEAD FRACTION -- THE CONTROL FALSIFIES THAT. It is tempting to
+#   say the protected block is 90% of maxdim = 20 but only 28% of maxdim = 64, so the fraction
+#   decides. It does not: at d = 2, maxdim = 30 the overhead is 26.7%, essentially the same 28%,
+#   and DMT loses there. Absolute chi' orders the extremes at both d (chi' = 2 loses everywhere,
+#   chi' = 46 is never resolved as a loss), but it does not order the middle either -- at d = 3
+#   chi' = 10 reads 1.37 at t = 1.6 and 0.69 at t = 1.8, and its verdict flips between metrics
+#   (err_inf 0.689 vs err_l1 1.108 at t = 1.8). The honest statement is that only the ENDS of this
+#   ladder are ordered, the middle is non-monotonic, and no single-parameter rule fits it.
+#
+#   PRACTICAL RULE (a convergence check, not a constant). Do NOT use a ratio rule like "maxdim a
+#   few times 2 d^2": at d = 2 that licenses maxdim ~ 24-32, i.e. chi' ~ 16-24, where this run
+#   shows DMT still behind. What the data supports is an ABSOLUTE complement budget of order
+#   chi' ~ 40-50 (maxdim >~ 2 d^2 + 45) before DMT is competitive on this observable -- with the
+#   caveat that the crossover moved by ~2x in chi' between two models at the SAME d (ULS is ahead
+#   already at chi' = 22, 1.67x at t = 1.6; Heisenberg is not). Treat DMT-vs-SVD at equal maxdim
+#   as a check to RUN for your model, exactly as this script does, not as a number to look up.
+#
+#   FRONT CONTAINMENT (measured, not assumed; edge drift over the outermost 2 sites per side,
+#   printed per time). Heisenberg d = 3 stays under 1e-3 through t = 1.6 (9.0e-4) and reaches
+#   2.3e-3 at t = 1.8. ULS crosses at t = 1.4 (1.9e-3), reaching 5.4e-3 at t = 1.6. The d = 2
 #   control is contained only to t = 2.6 (9.6e-4) and is at 1.4e-1 by t = 6.0 -- its late times are
-#   a saturated box, not a melt. This does NOT bias the DMT-vs-SVD comparison, since all three arms
-#   share the same finite chain and the reference is exact FOR THAT CHAIN, but the profiles past
-#   those times are not bulk hydrodynamics and should not be read as such.
+#   a saturated box, not a melt, which is why every d = 2 number above is quoted at t = 2.6 and not
+#   at t = 6.0. Containment does NOT bias the DMT-vs-SVD comparison (all arms share the chain and
+#   the reference is exact FOR THAT CHAIN), but past it the profile is not bulk hydrodynamics.
 #
 #   WHAT THIS DOES NOT SHOW. Nothing about z, and nothing asymptotic: the whole d = 3 window is
-#   t <= 1.8. The tempting extrapolation -- "the chi' = 46 advantage grows with time, so it will be
-#   large at t = 12" -- is exactly the kind of unfalsifiable claim this file exists to avoid.
-#   Testing it needs an exact reference at t ~ 12, which is not reachable at any N.
+#   t <= 1.8 and the floor is only known to t = 1.2. Extrapolating any of this to the N = 100,
+#   t ~ 12 configuration of `spin1_melt.jl` is exactly the move this file exists to avoid.
 #
 # References:
 #   - White, Zaletel, Mong, Refael, PRB 97, 035127 (2018) -- DMT, and the fixed-chi-against-exact
@@ -229,8 +268,34 @@ const CUTOFF        = 1e-10       # the REFERENCE's only truncation
 #                  survives the final refactorization by construction. Whether that immunity is
 #                  worth anything in practice is a measurement, and it is made here.
 const ARM_CUTOFFS   = (0.0, 1e-10)
-const FLOOR_CUTOFF  = 1e-12       # tighter cutoff used to measure the reference's own error
-const FLOOR_NCALL   = 6           # sweeps of the reference-floor probe (t <= 1.2, ~3 min)
+# The reference's own resolution. NOTE THE ASYMMETRY THIS CREATES: the capped arms truncate at
+# cutoff 0, so the REFERENCE is the looser of the two, and an arm whose true error is below the
+# reference's own error reads back as the reference's error and nothing more. That is not a bug to
+# be tuned away -- an exact reference at these times does not exist -- but it does mean any arm
+# number within ~1x of the floor is an UPPER BOUND on that arm's error, not a measurement of it,
+# and a ratio between two such numbers is meaningless. The probe measures the floor as a function
+# of TIME (it grows at roughly the rate the arm errors do, so an early number licenses nothing at a
+# late one) and runs for EVERY case, so each cell is checked against its own model's floor at its
+# own time rather than against one number borrowed from one model at one early time.
+const FLOOR_CUTOFF  = 1e-12       # tighter cutoff the shipped reference is scored against
+
+"""
+    ratio_bounds(dmt_err, svd_err, floor)
+
+Guaranteed interval for the true `svd_err / dmt_err` given that both were measured against a
+reference carrying its own error `floor` at the same time.
+
+Each measured `m = |arm - reference|` bounds the true error only as
+`|arm - exact| in [m - floor, m + floor]` (triangle inequality), so the raw quotient of two such
+numbers is not a measurement. This returns `(lo, hi)`; only `lo` may be quoted, and an interval
+containing 1 means the cell has not established a winner in either direction.
+"""
+function ratio_bounds(dmt_err, svd_err, floor)
+  isnan(floor) && return (NaN, NaN)
+  lo = max(svd_err - floor, 0.0) / (dmt_err + floor)
+  hi = dmt_err - floor <= 0 ? Inf : (svd_err + floor) / (dmt_err - floor)
+  return (lo, hi)
+end
 const EDGE_BAND     = 2           # outermost sites per side used by the front-containment guard
 const FRONT_TOL     = 1e-3        # a reference whose front exceeds this is measuring its own edge
 const TINY_NSITES   = 6           # chain for the analytic t = 0 step oracle (no evolution, free)
@@ -247,13 +312,20 @@ const CSV_PATH      = joinpath(@__DIR__, "spin1_semiexact_validation.csv")
 # d = 2. The ladder deliberately spans the point where the structural overhead stops dominating:
 # at maxdim = 20 the protected block is 90% of the d = 3 budget, at maxdim = 64 only 28%, so if
 # DMT's ranking against plain SVD depends on that fraction the ladder will show it.
+# `floor_budget` is the wall-clock allowance for THIS case's reference-floor probe. Every case gets
+# one: a floor measured on one model at one early time cannot certify a cell in another model at a
+# later time, and the d = 2 control in particular turns out to be floor-limited at its loosest rung
+# (its DMT and SVD arms agree there to 4-5 significant figures, which is what a shared floor looks
+# like). The tighter cutoff run is the expensive half and never reaches as far as the shipped
+# reference does, so the floor is known over a SHORTER window than the results -- that is a stated
+# limitation of this benchmark, not something the budgets can fix.
 const CASES = (
   (label = "heisenberg_d3", model = "heisenberg", d = 3, tmax = 2.0,
-   maxdims = (20, 28, 40, 64), ref_budget = 1100.0),
+   maxdims = (20, 28, 40, 64), ref_budget = 1100.0, floor_budget = 700.0),
   (label = "heisenberg_d2", model = "heisenberg", d = 2, tmax = 6.0,
-   maxdims = (10, 18, 30, 54), ref_budget = 900.0),
+   maxdims = (10, 18, 30, 54), ref_budget = 900.0, floor_budget = 700.0),
   (label = "uls_d3", model = "uls", d = 3, tmax = 2.0,
-   maxdims = (20, 28, 40, 64), ref_budget = 1100.0),
+   maxdims = (20, 28, 40, 64), ref_budget = 1100.0, floor_budget = 500.0),
 )
 # -------------------------------------------------------------------------------------------------
 
@@ -509,23 +581,29 @@ function front_contained_until(times, fronts, tol)
 end
 
 """
-    reference_floor(model, d, nsites, dt, ncall)
+    reference_floor(model, d, nsites, dt, ncall; budget)
 
-Measure the reference's own truncation error by re-running it at a 100x tighter cutoff.
+Measure the reference's own truncation error, PER TIME, by re-running it at a 100x tighter cutoff.
 
 The "exact" arm is cutoff-limited, not exact. ITensor's `cutoff` bounds the DISCARDED WEIGHT, so a
 `1e-10` cutoff costs ~`1e-5` in amplitude per truncation and the errors accumulate over the
-`2 (N - 1)` gates of every sweep. This returns the largest profile disagreement between the
-shipped reference and a tighter one over the early window; it must sit far below the DMT and SVD
-errors being reported, and it is printed so a reader can check that rather than take it on trust.
+`2 (N - 1)` gates of every sweep. The floor GROWS with time at roughly the rate the arm errors do,
+so this returns the whole curve rather than one number: an arm error within ~1x of the floor AT ITS
+OWN TIME is an upper bound, not a measurement, and a ratio between two such numbers says nothing.
+
+The tighter run carries its own wall-clock guard, because its bond dimension grows faster than the
+shipped reference's and it is the more expensive of the two; the loose run is then truncated to
+whatever the tight one reached, so the curve is always a like-for-like comparison.
 """
-function reference_floor(model, d, nsites, dt, ncall)
-  loose = run_arm(:svd, model, d, nsites, dt, ncall; maxdim = typemax(Int), cutoff = CUTOFF)
-  tight = run_arm(:svd, model, d, nsites, dt, ncall; maxdim = typemax(Int), cutoff = FLOOR_CUTOFF)
+function reference_floor(model, d, nsites, dt, ncall; budget = Inf)
+  tight = run_arm(:svd, model, d, nsites, dt, ncall;
+                  maxdim = typemax(Int), cutoff = FLOOR_CUTOFF, budget = budget)
+  reached = length(tight.profiles) - 1
+  loose = run_arm(:svd, model, d, nsites, dt, reached; maxdim = typemax(Int), cutoff = CUTOFF)
   n = min(length(loose.profiles), length(tight.profiles))
-  worst = maximum(relative_inf_error(loose.profiles[k], tight.profiles[k]) for k in 1:n)
-  return (; worst, t = 2 * dt * (n - 1), chi_loose = loose.chis[n], chi_tight = tight.chis[n],
-      seconds = loose.seconds + tight.seconds)
+  floors = [relative_inf_error(loose.profiles[k], tight.profiles[k]) for k in 1:n]
+  return (; times = tight.times[1:n], floors, chi_loose = loose.chis[n], chi_tight = tight.chis[n],
+          seconds = loose.seconds + tight.seconds, stopped = tight.stopped)
 end
 
 # One case: the reference, then the DMT and SVD arms at every rung of the ladder, scored on the
@@ -558,6 +636,13 @@ function run_case(case; nsites = NSITES, dt = DT, verbose = true)
   # truth for every rung of the eps ladder, and the eps sweep costs only capped arms.
   qref = [p ./ EPS_WALL for p in reference.profiles]
 
+  fl = reference_floor(case.model, case.d, nsites, dt, ncall; budget = case.floor_budget)
+  @printf("  reference floor (cutoff %.0e vs %.0e), chi %d vs %d, %.1f min -- %s\n",
+      CUTOFF, FLOOR_CUTOFF, fl.chi_loose, fl.chi_tight, fl.seconds / 60, fl.stopped)
+  println("  floor curve: ",
+      join((@sprintf("%.1f:%.1e", fl.times[k], fl.floors[k]) for k in 2:length(fl.times)), "  "))
+  flush(stdout)
+
   arms = Dict{Tuple{Float64,Float64,Symbol,Int},NamedTuple}()
   arm_seconds = 0.0
   for cut in ARM_CUTOFFS, eps in EPS_LADDER, maxdim in case.maxdims, kind in (:dmt, :svd)
@@ -577,19 +662,26 @@ function run_case(case; nsites = NSITES, dt = DT, verbose = true)
     @printf("\n  arm cutoff = %.0e   eps = %.3f\n", cut, eps)
     println("  ", rpad("maxdim", 8), rpad("chi'", 6), rpad("t", 6), rpad("err_inf DMT", 14),
         rpad("err_inf SVD", 14), rpad("SVD/DMT", 10), rpad("err_l1 DMT", 13),
-        rpad("err_l1 SVD", 13), "chi_ref")
+        rpad("err_l1 SVD", 13), rpad("chi_ref", 8), "guaranteed SVD/DMT")
     for maxdim in case.maxdims
       dmt, svd = arms[(cut, eps, :dmt, maxdim)], arms[(cut, eps, :svd, maxdim)]
       for k in 2:(reached + 1)
         ratio = dmt.errs_inf[k] > 0 ? svd.errs_inf[k] / dmt.errs_inf[k] : NaN
-        @printf("  %-8d%-6d%-6.1f%-14.3e%-14.3e%-10.3g%-13.3e%-13.3e%d\n",
+        # The reference carries its own error f at this time, so the raw ratio is not a
+        # measurement: the true ratio is only known to lie in [lo, hi] by the triangle
+        # inequality. `lo` is what may be quoted -- a guaranteed bound -- and a cell whose
+        # interval straddles 1 has not established a winner at all.
+        lo, hi = ratio_bounds(dmt.errs_inf[k], svd.errs_inf[k],
+                              k <= length(fl.floors) ? fl.floors[k] : NaN)
+        flag = isnan(lo) ? "no floor" : (lo <= 1 <= hi ? "UNRESOLVED" : @sprintf(">= %.3g", lo))
+        @printf("  %-8d%-6d%-6.1f%-14.3e%-14.3e%-10.3g%-13.3e%-13.3e%-8d%s\n",
             maxdim, maxdim - protected, reference.times[k], dmt.errs_inf[k],
-            svd.errs_inf[k], ratio, dmt.errs_l1[k], svd.errs_l1[k], reference.chis[k])
+            svd.errs_inf[k], ratio, dmt.errs_l1[k], svd.errs_l1[k], reference.chis[k], flag)
       end
     end
   end
   flush(stdout)
-  return (; case, reference, arms, reached, front, protected)
+  return (; case, reference, arms, reached, front, protected, floor = fl)
 end
 
 function append_csv(io, result)
@@ -614,8 +706,7 @@ function append_csv(io, result)
   return io
 end
 
-function main(; cases = CASES, nsites = NSITES, dt = DT, csv_path = CSV_PATH, verbose = true,
-              floor_probe = true)
+function main(; cases = CASES, nsites = NSITES, dt = DT, csv_path = CSV_PATH, verbose = true)
   println("Semi-exact validation of the DMT truncation kernel at d = 3")
   println("  three arms, identical circuits, differing ONLY in truncation:")
   println("    reference  LocalGateEvolution, maxdim = typemax(Int), cutoff = $(CUTOFF)")
@@ -632,13 +723,6 @@ function main(; cases = CASES, nsites = NSITES, dt = DT, csv_path = CSV_PATH, ve
       worst)
   @printf("eps-linearity %.2e over eps = %s\n", linearity, string(EPS_LADDER))
   flush(stdout)
-
-  if floor_probe
-    fl = reference_floor("heisenberg", 3, nsites, dt, FLOOR_NCALL)
-    @printf("reference floor: cutoff %.0e vs %.0e agree to %.2e up to t = %.1f (chi %d vs %d, %.1f min)\n",
-        CUTOFF, FLOOR_CUTOFF, fl.worst, fl.t, fl.chi_loose, fl.chi_tight, fl.seconds / 60)
-    flush(stdout)
-  end
 
   results = NamedTuple[]
   open(csv_path, "w") do io
@@ -667,15 +751,19 @@ function main(; cases = CASES, nsites = NSITES, dt = DT, csv_path = CSV_PATH, ve
   end
   println("\nwrote $csv_path")
   println("READ THIS BEFORE THE TABLE. 'SVD/DMT' is the ratio of plain-SVD to DMT profile error")
-  println("at the SAME bond dimension, same circuit, same times: > 1 means DMT is buying")
-  println("something, < 1 means plain SVD is strictly better at that budget. It is NOT constant")
-  println("down the maxdim ladder: the DMT protected block is a fixed 2 d^2 directions, so a")
-  println("budget close to that floor is spent almost entirely on structure and DMT loses, while")
-  println("a budget several times larger resolves the complement and DMT wins. Read the cutoff")
-  println("rows too: at cutoff = 0 the eps rows are a null control and should be flat (they are),")
-  println("whereas at a nonzero cutoff -- what a caller actually writes -- the SVD arm can hit an")
-  println("error floor that no extra maxdim removes, because the cutoff is relative to the FULL")
-  println("norm and the identity dominates it at small eps. DMT is structurally immune to that.")
+  println("at the SAME bond dimension, same circuit, same time. It is a RAW ratio of two numbers")
+  println("that each carry the reference's own error: a row flagged UNRESOLVED above has an")
+  println("error interval that straddles 1 once the reference's own error is subtracted, and means")
+  println("nothing. For an unflagged row the guaranteed bound is (svd - floor) / (dmt + floor).")
+  println("Read the ladder as a whole: the protected block is a FIXED 2 d^2 directions, DMT loses")
+  println("decisively at the tightest rung in every model tested, and the middle of the ladder is")
+  println("non-monotonic -- no single-parameter rule fits it, so run the check for your model.")
+  println("Read the cutoff rows too: at cutoff = 0 the eps rows are a null control that should be")
+  println("flat, and they are once chi' >= 22 but NOT below it; at a nonzero cutoff -- what a")
+  println("caller actually writes -- the SVD arm can hit an error floor that no extra maxdim")
+  println("removes, because the cutoff is relative to the FULL norm and the identity dominates it")
+  println("at small eps. DMT is structurally immune to that, and it is the one positive claim")
+  println("here that survives the floor at both local dimensions.")
   println("The window is SHORT by construction (the exact reference dies around t = 2 at d = 3):")
   println("this measures the truncation MECHANISM at severe budgets, and says nothing about")
   println("dynamical exponents or asymptotics.")
