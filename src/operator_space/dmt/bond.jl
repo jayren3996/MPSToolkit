@@ -4,25 +4,11 @@
 Return the number of complement singular directions `chi'` that fit inside a total bond budget
 `maxdim`, given `radius` protected sites per side at local dimension `d`.
 
-`maxdim = chi_preserve + chi_extra` with `chi_preserve = 2 d^(2 radius) - 1`; this is the
-convention of arXiv:1902.01859 and of the reference implementations.
-
-# Notes
-- The reserved `2 d^(2 radius) - 1` is **exactly** the rank the reinstated part costs, not a
-  bound with slack. The reconstruction is `a b^T + QL (QL' B) + BQRc QR' + Uc Sc Vc'` with
-  `B = S - a b^T`, and [`_dmt_connector`](@ref) leaves `B` annihilating the identity directions
-  (`B r0 = 0` and `q0' B = 0`). So `QL' B` has a null row and `B QR` a null column: each
-  protected term contributes `d^(2 radius) - 1` rather than `d^(2 radius)`, and the rank-one
-  connector puts one back. Measured directly: the numerical rank of the reconstructed bond
-  matrix is 19 at `d = 2` and 29 at `d = 3` for `radius = 1, chi' = 12`, matching
-  `2 d^(2 radius) - 1 + chi'` and not the naive `2 d^(2 radius) + 1 + chi'`.
-- Reserving `2 d^(2 radius)` instead — one too many — is not unsafe, merely wasteful: it lands
-  the step at `maxdim - 1` and forfeits one complement direction at every bond. The
-  `- 1` is what makes the arithmetic tight, so [`_dmt_refactor`](@ref)'s cap at `maxdim` is
-  reached exactly and never has to discard anything the rule reinstated.
+`maxdim = chi_preserve + chi_extra` with `chi_preserve = 2 d^(2 radius)`; this is the convention
+of arXiv:1902.01859 and of the reference implementations.
 """
 function _dmt_complement_budget(maxdim::Integer, d::Integer, radius::Integer)
-  return Int(maxdim) - (2 * Int(d)^(2 * Int(radius)) - 1)
+  return Int(maxdim) - 2 * Int(d)^(2 * Int(radius))
 end
 
 """
@@ -41,9 +27,9 @@ function _validate_dmt_budget(psi::MPS, maxdim::Integer, preserve_diameter::Inte
     throw(ArgumentError("DMT preserve_diameter must be a positive odd integer, got $(preserve_diameter)"))
   radius = (Int(preserve_diameter) - 1) ÷ 2
   d = local_dimension(siteind(psi, 1))
-  floor_value = 2 * d^(2 * radius)
+  floor_value = 2 * d^(2 * radius) + 1
   Int(maxdim) >= floor_value || throw(ArgumentError(
-    "DMT requires maxdim >= 2 d^(preserve_diameter - 1) = $(floor_value) " *
+    "DMT requires maxdim >= 2 d^(preserve_diameter - 1) + 1 = $(floor_value) " *
     "for local dimension d = $(d) at preserve_diameter = $(preserve_diameter); got maxdim = $(maxdim). " *
     "maxdim is the total bond dimension, inclusive of the protected block."))
   return nothing
@@ -196,7 +182,7 @@ cut, returning the truncated bond matrix in SVD form `(U, S, V)`.
 
 The protected row and column spaces and the rank-one trace connector are reinstated **exactly**;
 only the doubly-orthogonal complement `D = P_L^perp B P_R^perp` is truncated, to
-`maxdim - (2 d^(2 radius) - 1)` directions.
+`maxdim - 2 d^(2 radius)` directions.
 
 # Arguments
 - `T`: Element type to work in, a promotion over the whole chain (see [`_mps_eltype`](@ref)).
@@ -259,7 +245,7 @@ Perform one DMT-preserving bond truncation.
 The bond matrix is expressed in a basis whose leading directions span the local-operator
 subspace on the sites adjacent to the cut; those `d^(2 radius)` rows and columns, together with
 the rank-one trace connector, are carried through **exactly**, and only the doubly-orthogonal
-complement is truncated — to `chi' = maxdim - (2 d^(2 radius) - 1)` directions, so the reinstated
+complement is truncated — to `chi' = maxdim - 2 d^(2 radius)` directions, so the reinstated
 protected block always fits inside `maxdim` and never has to be clipped.
 
 # Arguments

@@ -111,7 +111,7 @@ function _reject_connector_buffer(connector_buffer)
     "connector_buffer was removed: DMT now protects the d^(preserve_diameter - 1) local-operator " *
     "subspace on each side structurally. Use preserve_diameter (odd, default 3) instead, and note " *
     "that maxdim is now the total bond dimension including the protected block " *
-    "(floor 2 d^(preserve_diameter - 1))."))
+    "(floor 2 d^(preserve_diameter - 1) + 1)."))
   return nothing
 end
 
@@ -129,7 +129,7 @@ Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
 - `reverse_schedule`: Reverse update schedule. By default the forward schedule is reversed.
 - `nstep`: Number of complete forward-plus-reverse sweeps per evolution call.
 - `maxdim`: **Total** bond dimension after DMT truncation, inclusive of the protected block; it
-  must be at least `2 d^(preserve_diameter - 1)` for the local dimension `d` in use.
+  must be at least `2 d^(preserve_diameter - 1) + 1` for the local dimension `d` in use.
 - `cutoff`: Truncation cutoff used when refactorizing the compressed bond.
 - `gate_maxdim`: Temporary gate-application bond dimension cap. **`0` (the default) means no
   cap: the gate is applied exactly.** A positive cap pre-truncates the inflated bond with a

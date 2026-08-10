@@ -16,8 +16,8 @@ Options controlling operator-space density matrix truncation (DMT).
 
 # Fields
 - `maxdim`: **Total** bond dimension after DMT truncation, inclusive of the protected block.
-  The complement is truncated to `maxdim - (2 d^(preserve_diameter - 1) - 1)` directions, so `maxdim`
-  must be at least `2 d^(preserve_diameter - 1)` for the local dimension `d` in use.
+  The complement is truncated to `maxdim - 2 d^(preserve_diameter - 1)` directions, so `maxdim`
+  must be at least `2 d^(preserve_diameter - 1) + 1` for the local dimension `d` in use.
 - `cutoff`: Truncation cutoff used in the final refactorization.
 - `gate_maxdim`: Temporary bond dimension cap applied while the raw gate is applied, before DMT
   truncates the bond back to `maxdim`. **`0` (the default) means no cap: the gate is applied
@@ -369,7 +369,7 @@ is (and is not) the appropriate choice.
 
 # Keyword Arguments
 - `maxdim`: **Total** post-truncation bond dimension, inclusive of the protected block; it must
-  be at least `2 d^(preserve_diameter - 1)`.
+  be at least `2 d^(preserve_diameter - 1) + 1`.
 - `cutoff`: Truncation cutoff used in the final refactorization.
 - `direction`: Sweep direction, either `:R` or `:L`.
 - `gate_maxdim`: Temporary bond dimension cap for the raw gate application, before DMT truncates

@@ -90,10 +90,10 @@ include("dmt_test_helpers.jl")
   end
 
   @testset "budget floor scales with d" begin
-    # 2 d^(preserve_diameter - 1): 18 at d = 3 and 32 at d = 4 for diameter 3, 32 at d = 2 and
-    # 162 at d = 3 for diameter 5. The message must name the local dimension it applies to,
+    # 2 d^(preserve_diameter - 1) + 1: 19 at d = 3 and 33 at d = 4 for diameter 3, 33 at d = 2
+    # and 163 at d = 3 for diameter 5. The message must name the local dimension it applies to,
     # because that is the only way a caller learns which floor bit them.
-    for (d, diameter, floor_value) in ((3, 3, 18), (4, 3, 32), (2, 5, 32), (3, 5, 162))
+    for (d, diameter, floor_value) in ((3, 3, 19), (4, 3, 33), (2, 5, 33), (3, 5, 163))
       sites = operator_siteinds(6; d=d)
       rho = random_mps(ComplexF64, sites; linkdims=20)
       failure = try
@@ -106,17 +106,17 @@ include("dmt_test_helpers.jl")
       @test failure isa ArgumentError
       message = sprint(showerror, failure)
       @test occursin("local dimension d = $(d)", message)
-      @test occursin("- 1) = $(floor_value) ", message)
+      @test occursin("+ 1 = $(floor_value) ", message)
       @test MPSToolkit._dmt_bond_truncate!(rho, 3; maxdim=floor_value, cutoff=0.0,
         preserve_diameter=diameter) === rho
     end
   end
 
   @testset "preserve_diameter = 5 preserves diameter 5" begin
-    for (d, nsites, bond, chi, maxdim) in ((2, 9, 5, 60, 2 * 2^4 + 12),      # 44, floor 32
-      (3, 6, 3, 200, 2 * 3^4 + 12))                                          # 174, floor 162
+    for (d, nsites, bond, chi, maxdim) in ((2, 9, 5, 60, 2 * 2^4 + 12),      # 44, floor 33
+      (3, 6, 3, 200, 2 * 3^4 + 12))                                          # 174, floor 163
       # The d = 3 row is the intersection the task exists to prove: wider radius AND higher
-      # local dimension at once. Its floor is 2 * 3^4 = 162, so the bond has to carry more
+      # local dimension at once. Its floor is 2 * 3^4 + 1 = 163, so the bond has to carry more
       # than 174 for the truncation to fire; six sites is the shortest chain with such a bond
       # (9^3 = 729 at bond 3) whose width-5 measurement windows still touch the chain edges and
       # so stay small enough to contract.
