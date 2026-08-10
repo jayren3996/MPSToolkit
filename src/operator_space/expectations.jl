@@ -123,6 +123,16 @@ computed without ever forming the quantity itself.
   `1e175`, so `norm(rho)` — which forms `||ρ||²` — overflows to `NaN`.
 - The two logs are returned rather than their difference so that a caller can distinguish
   `NaN`/`Inf` inputs (an unrepresentable operator) from a legitimately tiny ratio.
+- Only the norm side is protected. `lognorm` rescales progressively, but `identity_coefficient`
+  arrives as a plain linear-space contraction, so it can overflow before this function is
+  reached: for the *unnormalized* product operator `ρ = ⊗_j e^{-β Z_j}`, whose identity
+  coefficient is exactly `(√d cosh β)^N`, that happens at `β ≥ 2.11` for `N = 400` and `β ≥ 3.90`
+  for `N = 200` (`d = 2`). [`_reject_unresolvable_trace`](@ref) reports the resulting `Inf`/`NaN`
+  as its own error. A `normalize!`d operator is immune at any feasible size: positivity confines
+  its identity coefficient to `[d^(-N/2), 1]`, which stays inside `Float64` for the same
+  `N ≲ 2048 / log2(d)` that bounds the `(√d)^N` prefactor everywhere else in this file. This is
+  why [`operator_gibbs_state`](@ref), which normalizes, never meets it, and why an operator built
+  directly with [`operator_product_state`](@ref) should be normalized before it is measured.
 """
 function _log_trace_resolution(rho::MPS, d::Integer, identity_coefficient::Number)
   log_trace = (length(rho) / 2) * log(Float64(d)) + log(abs(identity_coefficient))
@@ -146,13 +156,18 @@ i.e. unless `|tr(ρ)| > sqrt(eps) ||ρ||_HS`. Used only on the `normalize=true` 
   and rejects legitimate cold thermal states as the chain grows: for the positive,
   bond-dimension-1 product state `ρ = ⊗_j e^{-β Z_j}`, whose trace is exactly `(2 cosh β)^N`,
   the old form threw at `(β, N) = (0.35, 400)`, `(0.5, 240)` and `(1.0, 120)`.
-- In physical units the check cannot reject a positive operator at all: for `λ_i ≥ 0`,
-  `tr(ρ) = Σ_i λ_i ≥ sqrt(Σ_i λ_i²) = ||ρ||_HS`, so *every* positive `ρ` clears the threshold by
-  the full `1 / sqrt(eps) ≈ 6.7e7`, independent of `N`, `d` and temperature. The bound is tight
-  only at rank 1 (`β → ∞`), where the ratio is measured at exactly `1.0` for `N = 400`. That
-  guarantee is what a magnitude threshold cannot have and is why the check is stated this way
-  rather than as a cancellation test on the environment sweep: the identity *component* of a
-  cold Gibbs state decays exponentially in `N`, but its *trace* does not.
+- In physical units the check cannot reject a positive operator *on conditioning grounds*: for
+  `λ_i ≥ 0`, `tr(ρ) = Σ_i λ_i ≥ sqrt(Σ_i λ_i²) = ||ρ||_HS`, so every positive `ρ` clears the
+  threshold by the full `1 / sqrt(eps) ≈ 6.7e7`, independent of `N`, `d` and temperature. The
+  bound is tight only at rank 1 (`β → ∞`), where the ratio is measured at exactly `1.0` for
+  `N = 400`. That guarantee is what a magnitude threshold cannot have and is why the check is
+  stated this way rather than as a cancellation test on the environment sweep: the identity
+  *component* of a cold Gibbs state decays exponentially in `N`, but its *trace* does not.
+- The guarantee is about the *comparison*, not about `Float64` range. An **unnormalized** operator
+  can still be rejected because its identity coefficient overflows before the comparison happens
+  — `β ≥ 2.11` at `N = 400` for `ρ = ⊗_j e^{-β Z_j}` — which is reported as the representability
+  error below, not as a traceless operator. See [`_log_trace_resolution`](@ref); `normalize!` the
+  operator (or build it with [`operator_gibbs_state`](@ref), which does) and it cannot arise.
 - What it still rejects is the case the check exists for: a traceless operator (a transport
   current, an evolved two-point correlator) whose post-truncation trace is an `O(eps)`
   cancellation residue rather than exactly zero, where normalizing amplifies every entry by
@@ -197,7 +212,11 @@ vectorized operator `rho`, in one O(N) sweep with cumulative identity environmen
   immune. `true` throws an `ArgumentError` when `|tr(ρ)| ≤ sqrt(eps) ||ρ||_HS`, which is the
   traceless case (see [`_reject_unresolvable_trace`](@ref)); measure a traceless operator with
   `normalize=false`. A positive `ρ` — any thermal state, at any temperature and chain length —
-  always satisfies `tr(ρ) ≥ ||ρ||_HS` and is never rejected.
+  satisfies `tr(ρ) ≥ ||ρ||_HS` and is never rejected for being ill-conditioned. It can still be
+  rejected for being unrepresentable: an *unnormalized* `⊗_j e^{-β Z_j}` overflows its identity
+  coefficient at `β ≥ 2.11` for `N = 400`, so normalize an operator built directly with
+  [`operator_product_state`](@ref) before measuring it ([`operator_gibbs_state`](@ref) already
+  does).
 
 # Returns
 - A `Vector{ComplexF64}` of expectation values. For Hermitian `ρ` and `O_k` the entries are

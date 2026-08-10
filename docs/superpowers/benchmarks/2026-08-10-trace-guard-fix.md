@@ -247,3 +247,82 @@ to 60 decades better than it. If this is ever revisited, the thing to check is w
    `orthogonalize!`). At that point the centre tensor itself holds `Inf` entries and the operator
    is not representable at all, so the resulting `ArgumentError` is the correct outcome — but it
    is an error raised on the *norm*, not on the trace, and the message says so.
+
+---
+
+## Addendum (2026-08-10, post-review): the guarantee is about conditioning, not about range
+
+**The fix is endorsed and unchanged.** An independent review reproved `tr(ρ) ≥ ‖ρ‖_HS` over 5000
+random PSD trials with zero counterexamples and equality iff rank ≤ 1, cross-checked the log-space
+quantities against its own dense oracle, forced both the `NaN` and `Inf` sub-modes and confirmed
+the explicit branch catches each, verified `normalize=false` and the `pauli_*` delegations are
+untouched, and reproduced the `_dmt_connector` verdict on XXZ Gibbs states at `L = 20/60/120` to
+~9 significant figures. It also reimplemented the cancellation test from a different construction
+— plain TEBD rather than the DMT melt of §4 — and got **0.134 / 0.133 / 0.285 / 0.044** over
+sweeps 1-4 (no detection at all) and then **2.8e-15 / 1.6e-14** at sweeps 5-6. Erratic on exactly
+the case it exists for, which is a sharper statement of §4's finding than §4 makes: the test does
+not merely miss early, it has no monotone relationship to the residue.
+
+**One thing in the write-up was wrong, and it was prose, not code.** Three sentences added by this
+change claimed the guard never rejects a thermal state, full stop:
+
+- `docs/src/manual/operator-space.md` — "no thermal state is ever rejected, at any temperature or
+  chain length"
+- `expectations.jl` `_reject_unresolvable_trace` — "independent of `N`, `d` and temperature"
+- `expectations.jl` `operator_expectation_profile` — "always satisfies `tr(ρ) ≥ ‖ρ‖_HS` and is
+  never rejected"
+
+That is true of the *comparison* and false of the *computation*. `identity_coefficient`
+(`denominator`, the scalar of the identity-environment sweep) is an ordinary linear-space
+contraction with no progressive rescaling, unlike the norm side which goes through `lognorm`. It
+can therefore overflow before the guard compares anything. For `ρ = ⊗_j e^{-β Z_j}` the identity
+coefficient is exactly `(√d cosh β)^N`, and bisecting at `d = 2`:
+
+| N | last finite β | `c_I` there | first non-finite β | `c_I` there |
+|---|---|---|---|---|
+| 400 | 2.10 | 1.538e307 | 2.11 | `Inf` |
+| 200 | 3.89 | 6.522e307 | 3.90 | `Inf` |
+
+(It becomes `Inf` at the crossover and `NaN` a little further past it, once an `Inf × 0` appears in
+the contraction; the review saw the `NaN` at `β = 2.13, N = 400`, closed-form `log10 c_I = 312.2`.
+Both are caught by the same `isnan(…) || … == Inf` branch.)
+
+This is **a different mechanism from residual concern 4** in the original write-up: no prior
+`orthogonalize!` is involved, it hits a fresh ungauged MPS, and it is on the trace side rather
+than the norm side. It is **pre-existing and non-regressing** — the pre-fix code hit the identical
+overflow and then returned `NaN` silently, through exactly the `NaN <= x` mechanism this change
+closes — so no code change was made. It fails loudly with a correctly-labelled representability
+error.
+
+**Scoping, and the escape hatch.** The strong claim survives where it is true: a positive operator
+is never rejected *as ill-conditioned*. The three sentences now say that, and each points at the
+remedy. `normalize!` removes the failure completely, because positivity confines a normalized
+identity coefficient to `[d^(-N/2), 1]`:
+
+| normalized `⊗_j e^{-β Z_j}`, N = 400 | `c_I` | `<Z>` returned | exact |
+|---|---|---|---|
+| β = 2.2 | 1.6e-58 | -0.975743 | -0.975743 |
+| β = 20 | 6.2230152778609e-61 | -1.0 | -1.0 |
+
+The `β = 20` row sits on the `2^-200 = 6.2230152778611e-61` floor to 3e-14 relative — the rank-1
+saturation of the same bound — and the expectation is still exact there. That interval stays
+inside `Float64` for `N ≲ 2048 / log2(d)`, the ceiling the manual already documents for the
+`(√d)^N` prefactor. `operator_gibbs_state` calls `normalize!` internally (measured: `‖ρ‖ = 1.0`,
+`c_I = 8.5e-9` for XXZ at `β = 8, L = 60`) and so cannot meet this; an operator built directly
+with `operator_product_state` / `operator_basis_state` should be normalized before measurement,
+which the manual now says in a `!!! warning` block.
+
+**Test output is pristine again.** `lognorm`'s realness check emitted two
+`log(norm²) is NaN + NaN*im` warnings on the deliberately poisoned fixtures. The four assertions
+are now wrapped in `Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger())` — `Base`, so no
+new test dependency. Warning count in a full `test_operator_space.jl` run: **0**.
+
+**Re-verification** (foreground; executable code unchanged, so the full suite was not re-run):
+
+- `test/test_operator_space.jl` + `test/test_docstrings.jl` — **passed**, 2m04s, 0 warnings.
+  The new testset is now 81 assertions (was 75), the six added ones being the overflow crossover
+  and the normalized-operator immunity above.
+- One assertion had to be loosened during this pass and it is worth recording why: `d^(-N/2)` is
+  an *exact-arithmetic* floor, and the `β = 20` state saturates it to 2 ulp *below*, so
+  `2.0^-200 <= abs(c_I)` fails. The test now allows `1e-9` relative slack — enough for the ulps,
+  far too little to hide a coefficient that had actually fallen through the floor.

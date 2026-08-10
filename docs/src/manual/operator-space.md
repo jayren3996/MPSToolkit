@@ -297,11 +297,23 @@ case:
     The comparison is between the *physical* trace and the Hilbert-Schmidt norm, both evaluated
     in log space so neither has to be representable: a positive `\rho` always satisfies
     ``\mathrm{tr}(\rho) = \sum_i \lambda_i \ge \sqrt{\sum_i \lambda_i^2} = \|\rho\|_{HS}``, so
-    **no thermal state is ever rejected**, at any temperature or chain length. (Before
-    2026-08-10 the check compared the identity *coefficient* ``\mathrm{tr}(\rho)/d^{N/2}``
-    against the same right-hand side, which carried an implicit ``d^{N/2}`` and therefore
-    rejected the positive product state ``\rho = \bigotimes_j e^{-\beta Z_j}`` at
-    ``\beta = 0.5, N = 240``.)
+    **no thermal state is ever rejected as ill-conditioned**, at any temperature or chain
+    length. (Before 2026-08-10 the check compared the identity *coefficient*
+    ``\mathrm{tr}(\rho)/d^{N/2}`` against the same right-hand side, which carried an implicit
+    ``d^{N/2}`` and therefore rejected the positive product state
+    ``\rho = \bigotimes_j e^{-\beta Z_j}`` at ``\beta = 0.5, N = 240``.)
+
+!!! warning "Normalize an operator you built by hand"
+    That guarantee covers the *comparison*, not `Float64` range. The identity coefficient itself
+    is an ordinary linear-space contraction, so an **unnormalized** operator can overflow it
+    before any comparison happens: `operator_product_state(sites, fill(exp(-beta * Z), N))` has
+    identity coefficient ``(\sqrt{d}\cosh\beta)^N`` exactly, which passes `floatmax` at
+    ``\beta \ge 2.11`` for ``N = 400`` and ``\beta \ge 3.90`` for ``N = 200`` at ``d = 2``. You
+    get a loud `ArgumentError` naming the representability failure, not a wrong number — but the
+    fix is to `normalize!` the operator. `operator_gibbs_state` does this internally and so never
+    meets the problem; positivity then confines the identity coefficient to ``[d^{-N/2}, 1]``,
+    which stays inside `Float64` for the same ``N \lesssim 2048/\log_2 d`` that bounds the
+    ``\sqrt{d}^{\,N}`` prefactor above.
 
 ## Related operator-space tools
 

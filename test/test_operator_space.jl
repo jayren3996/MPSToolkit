@@ -852,13 +852,44 @@ end
     # component must be reported.
     poisoned = operator_product_state(pauli_siteinds(8), fill(exp(-0.5 * z), 8))
     poisoned[3] = poisoned[3] * NaN
-    @test_throws ArgumentError operator_expectation(poisoned, z, 4)
-    @test isnan(operator_expectation(poisoned, z, 4; normalize = false))
-
     inflated = operator_product_state(pauli_siteinds(8), fill(exp(-0.5 * z), 8))
     inflated[3][siteind(inflated, 3) => 2] = Inf
-    @test_throws ArgumentError operator_expectation(inflated, z, 4)
-    @test isnan(operator_expectation(inflated, z, 4; normalize = false))
+    # `lognorm`'s realness check warns on these deliberately poisoned fixtures; the warning is
+    # the fixture doing its job, not a finding, so it is silenced rather than left in the log.
+    Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+      @test_throws ArgumentError operator_expectation(poisoned, z, 4)
+      @test isnan(operator_expectation(poisoned, z, 4; normalize = false))
+      @test_throws ArgumentError operator_expectation(inflated, z, 4)
+      @test isnan(operator_expectation(inflated, z, 4; normalize = false))
+    end
+  end
+
+  @testset "the conditioning guarantee does not extend to representing tr(rho)" begin
+    # The `tr(rho) >= ||rho||_HS` floor says a positive operator is never rejected on
+    # *conditioning* grounds. It says nothing about `Float64` range: `identity_coefficient` is a
+    # plain linear-space contraction, so an UNNORMALIZED product operator can overflow it before
+    # the guard ever compares anything. For `rho = prod_j exp(-beta Z_j)` the closed form is
+    # `c_I = (sqrt(2) cosh beta)^L`, which crosses `floatmax` at beta ~ 2.1 for L = 400.
+    # Pre-existing and non-regressing -- the pre-fix code returned NaN here through exactly the
+    # `NaN <= x` path this guard now closes -- but it must fail loudly, and be labelled as a
+    # representability failure rather than as a traceless operator.
+    overflowing = operator_product_state(pauli_siteinds(400), fill(exp(-2.2 * z), 400))
+    @test !isfinite(abs(scalar(MPSToolkit._right_identity_environment(overflowing, 1))))
+    @test_throws ArgumentError operator_expectation(overflowing, z, 200)
+
+    # `normalize!` removes the failure entirely, and is why `operator_gibbs_state` never meets
+    # it: positivity puts a normalized `c_I` in `[d^(-N/2), 1]`, i.e. `[6.2e-61, 1]` at
+    # `d = 2, N = 400`, comfortably inside `Float64` at any feasible chain length. The value is
+    # still exact at the bottom of that range.
+    for beta in (2.2, 20.0)
+      normalized = operator_product_state(pauli_siteinds(400), fill(exp(-beta * z), 400))
+      normalize!(normalized)
+      identity_coefficient = scalar(MPSToolkit._right_identity_environment(normalized, 1))
+      # `d^(-N/2)` is an exact-arithmetic floor and beta = 20 saturates it (rank-1 local blocks),
+      # landing 2 ulp under; the slack is for that, not for a decade of headroom.
+      @test 2.0^-200 * (1 - 1e-9) <= abs(identity_coefficient) <= 1 + 1e-12
+      @test operator_expectation(normalized, z, 200) ≈ ComplexF64(-tanh(beta)) atol = 1e-12
+    end
   end
 
   @testset "pauli_* wrappers stay exactly the d = 2 case" begin
