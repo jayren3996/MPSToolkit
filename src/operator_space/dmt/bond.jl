@@ -174,6 +174,63 @@ function _dmt_bond_factorize(psi::MPS, bond::Integer, left_inds, ::Type{T}=Compl
 end
 
 """
+    _dmt_bond_solve(T, bond_matrix, protected_left, protected_right, d, radius, maxdim, cutoff,
+                    truncation)
+
+Apply the DMT rule to a bond matrix already expressed in orthonormal bases on both sides of the
+cut, returning the truncated bond matrix in SVD form `(U, S, V)`.
+
+The protected row and column spaces and the rank-one trace connector are reinstated **exactly**;
+only the doubly-orthogonal complement `D = P_L^perp B P_R^perp` is truncated, to
+`maxdim - 2 d^(2 radius)` directions.
+
+# Arguments
+- `T`: Element type to work in, a promotion over the whole chain (see [`_mps_eltype`](@ref)).
+- `bond_matrix`: Bond matrix over `(left_link, right_link)` from [`_dmt_bond_factorize`](@ref).
+- `protected_left`, `protected_right`: `chi x d^(2 n)` protected blocks, conjugated on the left,
+  with column 1 the all-identity multi-index (the trace direction).
+- `d`, `radius`: Local dimension and protected sites per side, for the budget arithmetic.
+- `maxdim`, `cutoff`: Total post-truncation bond dimension and refactorization cutoff.
+- `truncation`: `:dense` or `:random` (see [`_truncated_svd`](@ref)).
+
+# Returns
+- `(U, S, V)` with `U * Diagonal(S) * V'` the truncated bond matrix.
+
+# Notes
+- Contains **no ITensors**, only matrices. That buys three things: the DMT algebra is unit-testable
+  without building a state, `T` specializes the whole rule rather than each helper separately, and
+  the [`_dmt_complement_ops`](@ref) closures are created *inside* a body where their captures are
+  concretely typed — so the `mul` that `_truncated_svd`'s power iteration calls `2 power + 1`
+  times per step is a static call rather than a dynamic dispatch.
+- `_protected_basis`/`_dmt_connector` are handed `T` explicitly rather than left to infer it,
+  because their inputs can be narrower than `T`: the `:svd` bond matrix is a real `Diagonal` even
+  for a complex state, and `protected_left` contracts only sites `1:bond` (so it stays real when
+  the sole complex tensor sits to the right of the cut). Convert them all and the two `hcat`s
+  below are homogeneous; convert only some and `hcat` re-promotes the rest silently, which is the
+  failure mode `_DMT_VERIFY_ELTYPE` exists to catch.
+"""
+function _dmt_bond_solve(::Type{T}, bond_matrix::AbstractMatrix, protected_left::AbstractMatrix,
+                         protected_right::AbstractMatrix, d::Integer, radius::Integer,
+                         maxdim::Integer, cutoff::Real, truncation::Symbol) where {T}
+  chi = size(bond_matrix, 1)
+  ql = _protected_basis(protected_left, T)
+  qr_basis = _protected_basis(protected_right, T)
+  # Column 1 of each protected block is the all-identity multi-index, i.e. the trace direction.
+  q0 = _unit_direction(protected_left[:, 1])
+  r0 = _unit_direction(protected_right[:, 1])
+  a, b, _ = _dmt_connector(bond_matrix, q0, r0, T)
+  ops = _dmt_complement_ops(bond_matrix, a, b, ql, qr_basis)
+
+  budget = max(_dmt_complement_budget(maxdim, d, radius), 1)
+  uc, sc, vc = _truncated_svd(ops.mul, ops.adj, chi, budget, T; mode=truncation)
+
+  # M' = C + QL (QL' B) + BQRc QR' + Uc Sc Vc'  in factored form.
+  factor_left = hcat(a, ql, ops.BQRc, uc * Diagonal(sc))
+  factor_right = hcat(conj(b), ops.QLtB', qr_basis, vc)
+  return _dmt_refactor(factor_left, factor_right, Int(maxdim), cutoff)
+end
+
+"""
     _dmt_bond_truncate!(psi, bond; maxdim, cutoff, direction=:R, preserve_diameter=3,
                         truncation=:dense, factorize=:qr, orthogonalize=true, cache=nothing)
 
@@ -310,22 +367,8 @@ function _dmt_bond_truncate!(
   @assert size(protected_left, 2) == d^(2 * left_count)
   @assert size(protected_right, 2) == d^(2 * right_count)
 
-  chi = size(bond_matrix, 1)
-  ql = _protected_basis(protected_left, elt)
-  qr_basis = _protected_basis(protected_right, elt)
-  # Column 1 of each protected block is the all-identity multi-index, i.e. the trace direction.
-  q0 = _unit_direction(protected_left[:, 1])
-  r0 = _unit_direction(protected_right[:, 1])
-  a, b, _ = _dmt_connector(bond_matrix, q0, r0, elt)
-  ops = _dmt_complement_ops(bond_matrix, a, b, ql, qr_basis)
-
-  budget = max(_dmt_complement_budget(maxdim, d, radius), 1)
-  uc, sc, vc = _truncated_svd(ops.mul, ops.adj, chi, budget, elt; mode=truncation)
-
-  # M' = C + QL (QL' B) + BQRc QR' + Uc Sc Vc'  in factored form.
-  factor_left = hcat(a, ql, ops.BQRc, uc * Diagonal(sc))
-  factor_right = hcat(conj(b), ops.QLtB', qr_basis, vc)
-  new_u, new_s, new_v = _dmt_refactor(factor_left, factor_right, Int(maxdim), cutoff)
+  new_u, new_s, new_v = _dmt_bond_solve(elt, bond_matrix, protected_left, protected_right,
+                                        d, radius, maxdim, cutoff, truncation)
 
   # Absorb the singular values on the side the sweep is moving away from, so the orthogonality
   # centre ends up where the next step expects it: at bond + 1 for :R, at bond for :L.
