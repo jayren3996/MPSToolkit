@@ -165,7 +165,7 @@ The truncation budget has a few knobs worth understanding:
     Replace it with `preserve_diameter` (odd, default `3`). The other half of the migration is
     a change in what `maxdim` *means*: it is now the **total** bond dimension, inclusive of the
     protected block, rather than a target added on top of a separately-sized connector buffer.
-    A script re-run at the same `maxdim` therefore keeps `maxdim - 2 d^(2n)` complement
+    A script re-run at the same `maxdim` therefore keeps `maxdim - (2 d^(2n) - 1)` complement
     directions (`n = (preserve_diameter - 1) / 2`), not `maxdim` complement directions plus a
     buffer on top.
 
@@ -662,7 +662,7 @@ For *when* to prefer DMT, DAOE, or plain TEBD — and in particular why a dynami
   the plain SVD it replaces. No budget-only rule predicts where that changes: the `d = 3`
   measurement in
   [examples/dmt/spin1_semiexact_validation.jl](https://github.com/jayren3996/MPSToolkit/blob/main/examples/dmt/spin1_semiexact_validation.jl)
-  finds DMT behind at `chi' = maxdim - 2 d^(2n) = 2` in every model tested, and finds spin-1
+  finds DMT behind at `chi' = maxdim - (2 d^(2n) - 1) = 3` in every model tested, and finds spin-1
   Heisenberg behind while ULS is ahead **at the same `d`, the same `chi' = 22` and the same time**.
   So treat the equal-`maxdim` DMT-vs-SVD comparison as a convergence check to run for your own
   model, budget `chi'` well into the tens, and do not read a crossover constant off any single

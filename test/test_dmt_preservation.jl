@@ -145,7 +145,7 @@ include("dmt_test_helpers.jl")
   @testset "budget validation names the local dimension" begin
     sites = operator_siteinds(6; d=2)
     rho = random_mps(ComplexF64, sites; linkdims=20)
-    # 2 d^2 + 1 = 9 for d = 2. Assert the MESSAGE, not just the type: the whole point of this
+    # 2 d^2 = 8 for d = 2. Assert the MESSAGE, not just the type: the whole point of this
     # error is to tell a caller which floor applies at their local dimension and that `maxdim`
     # changed meaning, and a bare `@test_throws ArgumentError` would pass on any of them.
     failure = try
