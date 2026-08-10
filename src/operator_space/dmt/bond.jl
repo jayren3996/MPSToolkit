@@ -6,6 +6,21 @@ Return the number of complement singular directions `chi'` that fit inside a tot
 
 `maxdim = chi_preserve + chi_extra` with `chi_preserve = 2 d^(2 radius)`; this is the convention
 of arXiv:1902.01859 and of the reference implementations.
+
+# Notes
+- `2 d^(2 radius)` is **not** one too many, and tightening it to `2 d^(2 radius) - 1` is a bug
+  that the suite catches only via the traceless testset. On a trace-carrying bond the reinstated
+  rank really is `2 d^(2 radius) - 1`, because [`_dmt_connector`](@ref) leaves
+  `B = S - a b^T` annihilating the identity directions (`B r0 = 0`, `q0' B = 0`), costing
+  `QL' B` a row and `B QR` a column while the rank-one connector puts one back. But on a
+  *traceless* operator -- a transport current -- the connector is disabled, `B = S`, neither
+  identity is available, and the reinstated rank saturates `maxdim`. Reserving one fewer then
+  makes [`_dmt_refactor`](@ref) clip a protected direction: measured, the trace of a traceless
+  operator drifts to 2e-3. The budget is sized for that worst case.
+- Jack Kemp's reference implementation does reserve `sdimL + sdimR - 1` (`DMT.h:719-720`), but
+  it has no traceless branch to be correct for -- its connector divides by `D[1,1]` unguarded,
+  which is ~0 exactly where this kernel switches the connector off. The one-direction
+  difference buys support for operators that implementation cannot evolve.
 """
 function _dmt_complement_budget(maxdim::Integer, d::Integer, radius::Integer)
   return Int(maxdim) - 2 * Int(d)^(2 * Int(radius))
