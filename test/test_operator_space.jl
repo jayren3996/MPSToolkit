@@ -743,6 +743,167 @@ end
   end
 end
 
+@testset "normalized expectations reject an unresolvable trace and nothing else" begin
+  z = ComplexF64[1 0; 0 -1]
+
+  @testset "a cold thermal product state is measured, not rejected" begin
+    # rho = prod_j exp(-beta Z_j) is positive, bond dimension 1, and has trace exactly
+    # (2 cosh beta)^L, so <Z_x> = -tanh(beta) at every site and every L: an exact oracle with no
+    # truncation anywhere. Every cell of this grid threw before 2026-08-10, because the guard
+    # compared the identity COEFFICIENT c_I = tr(rho) / 2^(L/2) -- not the trace -- against
+    # sqrt(eps) ||rho||_HS. c_I / ||rho||_HS decays exponentially in L for a cold Gibbs state
+    # (cosh(beta) / sqrt(cosh 2beta) per site), so the implicit 2^(L/2) made the rejection a
+    # function of chain length: (0.35, 400), (0.5, 240) and (1.0, 120) all threw.
+    for beta in (0.35, 0.5, 1.0), nsites in (120, 240, 400)
+      sites = pauli_siteinds(nsites)
+      rho = operator_product_state(sites, fill(exp(-beta * z), nsites))
+      for x in (1, nsites ÷ 2, nsites)
+        @test operator_expectation(rho, z, x) ≈ ComplexF64(-tanh(beta)) atol = 1e-12
+      end
+      # The trace is enormous but perfectly resolvable: tr(rho) >= ||rho||_HS holds for every
+      # positive operator, so the margin against sqrt(eps) is 6.7e7 regardless of beta and L.
+      identity_coefficient = scalar(MPSToolkit._right_identity_environment(rho, 1))
+      log_trace, log_norm = MPSToolkit._log_trace_resolution(rho, 2, identity_coefficient)
+      @test log_trace - log_norm > 0
+    end
+  end
+
+  @testset "the guard is not silently disabled by an overflowing norm" begin
+    # At beta = 1, L = 400 the Hilbert-Schmidt norm is 1e175, so ||rho||^2 = 1e350 is not
+    # representable and `norm(rho)` returns NaN. `x <= sqrt(eps) * NaN` is false, so before the
+    # fix the guard went *vacuous* at exactly the sizes where it was firing hardest at smaller L
+    # -- simultaneously too strict and unenforced. Working in log space removes both.
+    nsites = 400
+    rho = operator_product_state(pauli_siteinds(nsites), fill(exp(-1.0 * z), nsites))
+    @test 2 * lognorm(rho) > log(floatmax(Float64))     # ||rho||^2 overflows: norm(rho) is NaN
+    @test isfinite(lognorm(rho))                        # lognorm never forms the square
+    @test operator_expectation(rho, z, nsites ÷ 2) ≈ ComplexF64(-tanh(1.0)) atol = 1e-12
+  end
+
+  @testset "the comparison is |tr(rho)| against ||rho||_HS in physical units" begin
+    # Pin both halves of the criterion against representable ground truth, at d = 2 and d = 3.
+    # The (sqrt(d))^N that turns the identity coefficient into the trace is precisely what the
+    # old form dropped, so a d-generic check of that factor is the regression test.
+    for d in (2, 3), nsites in (3, 4)
+      sites = operator_siteinds(nsites; d = d)
+      local_op = ComplexF64.(diagm(collect(range(0.4, 1.3; length = d))))
+      rho = operator_product_state(sites, fill(local_op, nsites))
+      identity_coefficient = scalar(MPSToolkit._right_identity_environment(rho, 1))
+      log_trace, log_norm = MPSToolkit._log_trace_resolution(rho, d, identity_coefficient)
+      @test exp(log_trace) ≈ abs(operator_trace(rho)) rtol = 1e-12
+      @test exp(log_norm) ≈ norm(rho) rtol = 1e-12
+    end
+  end
+
+  @testset "the threshold sits at sqrt(eps) for an indefinite operator" begin
+    # An indefinite operator has no tr(rho) >= ||rho||_HS floor, so it is what actually
+    # exercises the threshold. rho = prod_j diag(1, -a) has the closed forms
+    # |tr(rho)| / ||rho||_HS = ((1 - a) / sqrt(1 + a^2))^L and tr(rho A_x) / tr(rho) =
+    # tr(A^2) / tr(A), so both the verdict and the value are predictable at every L.
+    a = 0.44
+    local_op = ComplexF64[1 0; 0 -a]
+    per_site = abs(tr(local_op)) / norm(local_op)
+    want = tr(local_op * local_op) / tr(local_op)
+    for nsites in (6, 12, 20, 26, 28, 34)
+      sites = pauli_siteinds(nsites)
+      rho = operator_product_state(sites, fill(local_op, nsites))
+      if per_site^nsites > sqrt(eps(Float64))
+        @test operator_expectation(rho, local_op, 1) ≈ want atol = 1e-12
+      else
+        @test_throws ArgumentError operator_expectation(rho, local_op, 1)
+      end
+      # normalize = false never consults the trace and is unaffected either way.
+      @test operator_expectation(rho, local_op, 1; normalize = false) isa ComplexF64
+    end
+    # The discriminating pair. At L = 20 the ratio is 1.6e-6, four decades of resolvable trace,
+    # and the L = 26 value 2.8e-8 is still above sqrt(eps) -- yet dividing by 2^(L/2) (1024 and
+    # 65536) puts both below it, which is what the pre-fix comparison did. The L = 26 value is
+    # accurate to 1e-15 against the closed form above, so nothing here is near a numerical edge.
+    @test per_site^20 > sqrt(eps(Float64)) > per_site^20 / 2.0^10
+    @test per_site^26 > sqrt(eps(Float64)) > per_site^26 / 2.0^13
+  end
+
+  @testset "a traceless operator is still rejected" begin
+    # `pauli_domain_wall_state` is traceless by construction and stays traceless under XYZ
+    # evolution; truncation turns the exact zero into an O(eps) cancellation residue, and
+    # normalizing by that residue amplifies every entry by ~1/eps. This is the case the guard
+    # exists for and the one the fix must not weaken.
+    nsites = 12
+    sites = pauli_siteinds(nsites)
+    wall = pauli_domain_wall_state(sites; kink = nsites ÷ 2)
+    @test iszero(operator_trace(wall))
+    @test_throws ArgumentError pauli_expectation(wall, z, nsites ÷ 2)
+
+    gate = pauli_gate_from_hamiltonian(
+      spinhalf_xyz_bond_hamiltonian(; Jx = 1.0, Jy = 1.0, Jz = 1.0), 0.1)
+    for _ in 1:4, bond in 1:(nsites - 1)
+      tebd_evolve!(wall, gate, bond; maxdim = 32, cutoff = 1e-14)
+    end
+    # A residue, not an exact zero: the guard has to reject a *nonzero* number here.
+    @test 0 < abs(operator_trace(wall)) < 1e-9
+    @test_throws ArgumentError pauli_expectation(wall, z, nsites ÷ 2)
+    @test_throws ArgumentError pauli_expectation_profile(wall, [(x, z) for x in 1:nsites])
+    @test length(pauli_expectation_profile(wall, [(x, z) for x in 1:nsites]; normalize = false)) == nsites
+  end
+
+  @testset "a non-finite operator is an error, never a silent pass" begin
+    # `x <= sqrt(eps) * NaN` is false, so any comparison that lets NaN through *disables* the
+    # guard instead of tripping it. Both a NaN site tensor and an overflowed non-identity
+    # component must be reported.
+    poisoned = operator_product_state(pauli_siteinds(8), fill(exp(-0.5 * z), 8))
+    poisoned[3] = poisoned[3] * NaN
+    inflated = operator_product_state(pauli_siteinds(8), fill(exp(-0.5 * z), 8))
+    inflated[3][siteind(inflated, 3) => 2] = Inf
+    # `lognorm`'s realness check warns on these deliberately poisoned fixtures; the warning is
+    # the fixture doing its job, not a finding, so it is silenced rather than left in the log.
+    Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+      @test_throws ArgumentError operator_expectation(poisoned, z, 4)
+      @test isnan(operator_expectation(poisoned, z, 4; normalize = false))
+      @test_throws ArgumentError operator_expectation(inflated, z, 4)
+      @test isnan(operator_expectation(inflated, z, 4; normalize = false))
+    end
+  end
+
+  @testset "the conditioning guarantee does not extend to representing tr(rho)" begin
+    # The `tr(rho) >= ||rho||_HS` floor says a positive operator is never rejected on
+    # *conditioning* grounds. It says nothing about `Float64` range: `identity_coefficient` is a
+    # plain linear-space contraction, so an UNNORMALIZED product operator can overflow it before
+    # the guard ever compares anything. For `rho = prod_j exp(-beta Z_j)` the closed form is
+    # `c_I = (sqrt(2) cosh beta)^L`, which crosses `floatmax` at beta ~ 2.1 for L = 400.
+    # Pre-existing and non-regressing -- the pre-fix code returned NaN here through exactly the
+    # `NaN <= x` path this guard now closes -- but it must fail loudly, and be labelled as a
+    # representability failure rather than as a traceless operator.
+    overflowing = operator_product_state(pauli_siteinds(400), fill(exp(-2.2 * z), 400))
+    @test !isfinite(abs(scalar(MPSToolkit._right_identity_environment(overflowing, 1))))
+    @test_throws ArgumentError operator_expectation(overflowing, z, 200)
+
+    # `normalize!` removes the failure entirely, and is why `operator_gibbs_state` never meets
+    # it: positivity puts a normalized `c_I` in `[d^(-N/2), 1]`, i.e. `[6.2e-61, 1]` at
+    # `d = 2, N = 400`, comfortably inside `Float64` at any feasible chain length. The value is
+    # still exact at the bottom of that range.
+    for beta in (2.2, 20.0)
+      normalized = operator_product_state(pauli_siteinds(400), fill(exp(-beta * z), 400))
+      normalize!(normalized)
+      identity_coefficient = scalar(MPSToolkit._right_identity_environment(normalized, 1))
+      # `d^(-N/2)` is an exact-arithmetic floor and beta = 20 saturates it (rank-1 local blocks),
+      # landing 2 ulp under; the slack is for that, not for a decade of headroom.
+      @test 2.0^-200 * (1 - 1e-9) <= abs(identity_coefficient) <= 1 + 1e-12
+      @test operator_expectation(normalized, z, 200) ≈ ComplexF64(-tanh(beta)) atol = 1e-12
+    end
+  end
+
+  @testset "pauli_* wrappers stay exactly the d = 2 case" begin
+    sites = pauli_siteinds(20)
+    rho = operator_product_state(sites, fill(exp(-1.0 * z), 20))
+    terms = [(x, z) for x in 1:20]
+    @test pauli_expectation_profile(rho, terms) == operator_expectation_profile(rho, terms)
+    @test pauli_expectation(rho, z, 10) == operator_expectation(rho, z, 10)
+    wall = pauli_domain_wall_state(sites; kink = 10)
+    @test_throws ArgumentError pauli_expectation_profile(wall, terms)
+    @test_throws ArgumentError operator_expectation_profile(wall, terms)
+  end
+end
+
 @testset "generic operator-space vectorization" begin
   @testset "operator_superoperator_mpo sandwiches M rho M' at d = 3" begin
     # `operator_superoperator_mpo` is reached only through `pauli_superoperator_mpo` elsewhere in

@@ -101,6 +101,99 @@ function _validated_operator_windows(rho::MPS, terms, d::Integer)
 end
 
 """
+    _log_trace_resolution(rho, d, identity_coefficient)
+
+Return `(log|tr(ρ)|, log ||ρ||_HS)` for an operator-space `MPS`, both in natural log and both
+computed without ever forming the quantity itself.
+
+# Arguments
+- `rho`: Operator-space `MPS` on sites of a uniform local dimension `d`.
+- `d`: That local dimension.
+- `identity_coefficient`: The all-identity amplitude `c_{I…I}` of `rho`, i.e. the scalar of its
+  full identity-environment contraction, so that `tr(ρ) = (√d)^N c_{I…I}`.
+
+# Returns
+- A `Tuple{Float64,Float64}` of the two logs. `log|tr(ρ)|` is `-Inf` for an exactly traceless
+  operator; `log ||ρ||_HS` is `-Inf` only for the zero operator.
+
+# Notes
+- Log space is not cosmetic here. Both quantities overflow `Float64` for states that are
+  otherwise perfectly ordinary: `(√d)^N` alone passes `1e308` at `N ≈ 2048 / log2(d)`, and for
+  the cold thermal product state `ρ = ⊗_j e^{-Z_j}` at `N = 400` the Hilbert-Schmidt norm is
+  `1e175`, so `norm(rho)` — which forms `||ρ||²` — overflows to `NaN`.
+- The two logs are returned rather than their difference so that a caller can distinguish
+  `NaN`/`Inf` inputs (an unrepresentable operator) from a legitimately tiny ratio.
+- Only the norm side is protected. `lognorm` rescales progressively, but `identity_coefficient`
+  arrives as a plain linear-space contraction, so it can overflow before this function is
+  reached: for the *unnormalized* product operator `ρ = ⊗_j e^{-β Z_j}`, whose identity
+  coefficient is exactly `(√d cosh β)^N`, that happens at `β ≥ 2.11` for `N = 400` and `β ≥ 3.90`
+  for `N = 200` (`d = 2`). [`_reject_unresolvable_trace`](@ref) reports the resulting `Inf`/`NaN`
+  as its own error. A `normalize!`d operator is immune at any feasible size: positivity confines
+  its identity coefficient to `[d^(-N/2), 1]`, which stays inside `Float64` for the same
+  `N ≲ 2048 / log2(d)` that bounds the `(√d)^N` prefactor everywhere else in this file. This is
+  why [`operator_gibbs_state`](@ref), which normalizes, never meets it, and why an operator built
+  directly with [`operator_product_state`](@ref) should be normalized before it is measured.
+"""
+function _log_trace_resolution(rho::MPS, d::Integer, identity_coefficient::Number)
+  log_trace = (length(rho) / 2) * log(Float64(d)) + log(abs(identity_coefficient))
+  return (log_trace, lognorm(rho))
+end
+
+"""
+    _reject_unresolvable_trace(rho, d, identity_coefficient)
+
+Throw an `ArgumentError` unless `tr(ρ)` is resolvable against `ρ`'s own Hilbert-Schmidt norm,
+i.e. unless `|tr(ρ)| > sqrt(eps) ||ρ||_HS`. Used only on the `normalize=true` path of
+[`operator_expectation_profile`](@ref), where every result is divided by `tr(ρ)`.
+
+# Arguments
+- `rho`, `d`, `identity_coefficient`: See [`_log_trace_resolution`](@ref).
+
+# Notes
+- The comparison is in *physical* units: `tr(ρ) = (√d)^N c_{I…I}` carries a `(√d)^N` that the
+  identity coefficient does not. Dropping that factor — comparing `|c_{I…I}|` against
+  `sqrt(eps) ||ρ||_HS`, as this check did until 2026-08-10 — puts a `d^(N/2)` on the wrong side
+  and rejects legitimate cold thermal states as the chain grows: for the positive,
+  bond-dimension-1 product state `ρ = ⊗_j e^{-β Z_j}`, whose trace is exactly `(2 cosh β)^N`,
+  the old form threw at `(β, N) = (0.35, 400)`, `(0.5, 240)` and `(1.0, 120)`.
+- In physical units the check cannot reject a positive operator *on conditioning grounds*: for
+  `λ_i ≥ 0`, `tr(ρ) = Σ_i λ_i ≥ sqrt(Σ_i λ_i²) = ||ρ||_HS`, so every positive `ρ` clears the
+  threshold by the full `1 / sqrt(eps) ≈ 6.7e7`, independent of `N`, `d` and temperature. The
+  bound is tight only at rank 1 (`β → ∞`), where the ratio is measured at exactly `1.0` for
+  `N = 400`. That guarantee is what a magnitude threshold cannot have and is why the check is
+  stated this way rather than as a cancellation test on the environment sweep: the identity
+  *component* of a cold Gibbs state decays exponentially in `N`, but its *trace* does not.
+- The guarantee is about the *comparison*, not about `Float64` range. An **unnormalized** operator
+  can still be rejected because its identity coefficient overflows before the comparison happens
+  — `β ≥ 2.11` at `N = 400` for `ρ = ⊗_j e^{-β Z_j}` — which is reported as the representability
+  error below, not as a traceless operator. See [`_log_trace_resolution`](@ref); `normalize!` the
+  operator (or build it with [`operator_gibbs_state`](@ref), which does) and it cannot arise.
+- What it still rejects is the case the check exists for: a traceless operator (a transport
+  current, an evolved two-point correlator) whose post-truncation trace is an `O(eps)`
+  cancellation residue rather than exactly zero, where normalizing amplifies every entry by
+  `~1/eps`. A DMT-evolved [`pauli_domain_wall_state`](@ref) measures `|tr(ρ)| / ||ρ||_HS` at
+  7e-14 (`N = 12`) to 2e-12 (`N = 20`) after one sweep, still 4e-11 after twelve.
+- The residue is not bounded uniformly, and the check is a statement about *half precision*, not
+  about tracelessness: the same `N = 40` melt at `maxdim = 24` reaches `3e-8` by sweep twelve and
+  is accepted. That is the criterion behaving as written — by then the trace has more than half
+  its digits, because the truncation error itself has grown past `sqrt(eps) ||ρ||_HS` — and it
+  cannot be tuned away without rejecting positive operators again, whose guaranteed floor is
+  `1.0`. Traceless transport operators should carry `normalize=false` by construction rather
+  than rely on being caught.
+- A non-finite trace or norm is an error, not a pass. The `NaN` that `norm(rho)` used to return
+  for the `N = 400` state above made `x <= sqrt(eps) * NaN` evaluate `false`, so the old check
+  went silently vacuous exactly where it was firing hardest at smaller `N`.
+"""
+function _reject_unresolvable_trace(rho::MPS, d::Integer, identity_coefficient::Number)
+  log_trace, log_norm = _log_trace_resolution(rho, d, identity_coefficient)
+  (isnan(log_trace) || isnan(log_norm) || log_trace == Inf || log_norm == Inf) &&
+    throw(ArgumentError("normalized operator-space expectations require a representable trace and norm; got log|tr(rho)| = $(log_trace) and log||rho||_HS = $(log_norm), so the operator carries NaN or overflowed entries"))
+  log_trace <= log_norm + log(sqrt(eps(Float64))) &&
+    throw(ArgumentError("normalized operator-space expectations require a trace resolvable against the operator's own norm; log10|tr(rho)| = $(log_trace / log(10)) against log10||rho||_HS = $(log_norm / log(10)) leaves |tr(rho)| at or below sqrt(eps) * ||rho||_HS, i.e. a cancellation residue rather than a trace (use normalize=false for a traceless operator)"))
+  return nothing
+end
+
+"""
     operator_expectation_profile(rho, terms; normalize=true)
 
 Evaluate `tr(ρ O_k)` (optionally over `tr(ρ)`) for a list of dense local operators against a
@@ -116,7 +209,14 @@ vectorized operator `rho`, in one O(N) sweep with cumulative identity environmen
 - `normalize`: If `true` (default), return `tr(ρ O_k) / tr(ρ)`; otherwise return the
   unnormalized `tr(ρ O_k)`. The unnormalized branch carries a `(√d)^N` factor that overflows
   `Float64` for `N ≳ 2048 / log2(d)` (far beyond feasible MPS sizes); the normalized ratio is
-  immune.
+  immune. `true` throws an `ArgumentError` when `|tr(ρ)| ≤ sqrt(eps) ||ρ||_HS`, which is the
+  traceless case (see [`_reject_unresolvable_trace`](@ref)); measure a traceless operator with
+  `normalize=false`. A positive `ρ` — any thermal state, at any temperature and chain length —
+  satisfies `tr(ρ) ≥ ||ρ||_HS` and is never rejected for being ill-conditioned. It can still be
+  rejected for being unrepresentable: an *unnormalized* `⊗_j e^{-β Z_j}` overflows its identity
+  coefficient at `β ≥ 2.11` for `N = 400`, so normalize an operator built directly with
+  [`operator_product_state`](@ref) before measuring it ([`operator_gibbs_state`](@ref) already
+  does).
 
 # Returns
 - A `Vector{ComplexF64}` of expectation values. For Hermitian `ρ` and `O_k` the entries are
@@ -141,12 +241,10 @@ function operator_expectation_profile(rho::MPS, terms; normalize::Bool=true)
   end
   denominator = scalar(right[1])
   # Reject a numerically-negligible (not just exactly-zero) trace relative to the operator
-  # scale. For a traceless operator the post-truncation trace is an O(eps) residue rather than
-  # exactly zero, and normalizing by it silently amplifies every entry by ~1/eps. This mirrors
-  # the relative tolerance the DMT kernel (`_dmt_connector`) already uses; traceless operators
-  # should be measured with `normalize=false`.
-  normalize && abs(denominator) <= sqrt(eps(Float64)) * norm(rho) &&
-    throw(ArgumentError("normalized operator-space expectations require a nonzero trace; the operator trace is numerically negligible relative to its norm (use normalize=false for a traceless operator)"))
+  # scale, which is the O(eps) cancellation residue a traceless operator has after truncation.
+  # Evaluated only when `normalize` is true: the `normalize=false` branch never divides by the
+  # trace and must not pay for the norm.
+  normalize && _reject_unresolvable_trace(rho, d, denominator)
 
   results = Vector{ComplexF64}(undef, length(terms))
   left = ITensor(1.0)
