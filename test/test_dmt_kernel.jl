@@ -478,22 +478,40 @@ end
   # and `orthogonalize!` spreads the mixedness through the rest of the chain -- so a real state
   # pays the complex price while every per-tensor check still reads "real". `mps_eltype` is the
   # whole-chain promotion, which is the only view that sees this.
+  #
+  # `_DMT_VERIFY_ELTYPE[]` is on throughout, which catches the same failure one layer further in:
+  # the assembled refactorization factors must be in the threaded element type, and a single
+  # unconverted block re-promotes them at the `hcat` with no error at all.
   Random.seed!(20260810)
-  for (d, nsites, bond, chi) in ((2, 7, 4, 40), (3, 6, 3, 60))
-    maxdim = 2 * d^2 + 12
-    sites = operator_siteinds(nsites; d = d)
-    # Both factorizations and both truncation modes: `:svd` reaches the real-`Diagonal` bond
-    # matrix, and `:random` is the branch that draws `randn(T, ...)`.
-    for factorize in (:qr, :svd), truncation in (:dense, :random)
-      rho = add(operator_basis_state(sites, fill(1, nsites)),
-        0.3 * random_mps(sites; linkdims = chi); maxdim = chi + 1, cutoff = 0.0)
-      @test mps_eltype(rho) === Float64                 # the input really is real ...
-      @test dim(linkind(rho, bond)) > maxdim            # ... and the truncation really fires
-      MPSToolkit._dmt_bond_truncate!(rho, bond; maxdim = maxdim, cutoff = 0.0,
-        factorize = factorize, truncation = truncation)
-      @test mps_eltype(rho) === Float64
-      @test dim(linkind(rho, bond)) <= maxdim
+  previous = MPSToolkit._DMT_VERIFY_ELTYPE[]
+  MPSToolkit._DMT_VERIFY_ELTYPE[] = true
+  try
+    for (d, nsites, bond, chi) in ((2, 7, 4, 40), (3, 6, 3, 60))
+      maxdim = 2 * d^2 + 12
+      sites = operator_siteinds(nsites; d = d)
+      # Both factorizations and both truncation modes: `:svd` reaches the real-`Diagonal` bond
+      # matrix, and `:random` is the branch that draws `randn(T, ...)`.
+      for factorize in (:qr, :svd), truncation in (:dense, :random)
+        rho = add(operator_basis_state(sites, fill(1, nsites)),
+          0.3 * random_mps(sites; linkdims = chi); maxdim = chi + 1, cutoff = 0.0)
+        @test mps_eltype(rho) === Float64               # the input really is real ...
+        @test dim(linkind(rho, bond)) > maxdim          # ... and the truncation really fires
+        MPSToolkit._dmt_bond_truncate!(rho, bond; maxdim = maxdim, cutoff = 0.0,
+          factorize = factorize, truncation = truncation)
+        @test mps_eltype(rho) === Float64
+        @test dim(linkind(rho, bond)) <= maxdim
+      end
     end
+    # ... and the detector is not vacuous. `T = Float32` against `Float64` inputs reproduces the
+    # failure shape it exists for: the protected blocks and the connector convert to `T`, the bond
+    # matrix does not, so the widest block wins the `hcat` and the factors come out `Float64`
+    # instead. Reachable only by calling `_dmt_bond_solve` directly, which is the point -- inside
+    # the kernel `T` comes from `_mps_eltype` and every conversion widens.
+    chi = 40
+    @test_throws ErrorException MPSToolkit._dmt_bond_solve(Float32, Diagonal(rand(chi)),
+      randn(chi, 4), randn(chi, 4), 2, 1, 20, 0.0, :dense)
+  finally
+    MPSToolkit._DMT_VERIFY_ELTYPE[] = previous
   end
 end
 

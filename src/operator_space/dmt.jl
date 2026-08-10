@@ -159,6 +159,15 @@ end
 # ED-oracle tests flip it on to prove the threaded path reproduces the rebuild bit-for-bit.
 const _DMT_VERIFY_ENVS = Ref(false)
 
+# When true, `_dmt_bond_solve` asserts that both refactorization factors really are in the element
+# type threaded through the step. This is the only cheap detector for the failure mode the whole
+# element-type threading exists to avoid: `hcat(::Matrix{Float64}, ::Matrix{ComplexF64})` is
+# `Matrix{ComplexF64}`, so ONE unconverted block re-promotes the assembled factor at that line,
+# with no error, and the step pays the complex price while every input still looks real. Off in
+# production (it is a type check, but it runs per bond); the tests that already flip
+# `_DMT_VERIFY_ENVS` flip this too.
+const _DMT_VERIFY_ELTYPE = Ref(false)
+
 """
     _left_env_at!(cache, psi, k)
 

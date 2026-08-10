@@ -189,8 +189,13 @@ include("dmt_test_helpers.jl")
     # direct check that the widened window is wide enough. The state starts above `maxdim` on the
     # central bonds so that the truncation -- and therefore the environment fetch -- actually
     # runs; a state that stays under budget short-circuits before the cache is ever touched.
+    # `_DMT_VERIFY_ELTYPE[]` rides along: it throws if either refactorization factor is not in the
+    # element type threaded through the step, which `hcat` would otherwise widen silently. Radius 2
+    # is the interesting case for it, because the protected blocks are `d^4` columns wide there.
     previous = MPSToolkit._DMT_VERIFY_ENVS[]
+    previous_eltype = MPSToolkit._DMT_VERIFY_ELTYPE[]
     MPSToolkit._DMT_VERIFY_ENVS[] = true
+    MPSToolkit._DMT_VERIFY_ELTYPE[] = true
     try
       for (d, nsites, diameter, maxdim) in ((2, 8, 5, 44), (3, 6, 3, 30))
         sites = operator_siteinds(nsites; d=d)
@@ -212,6 +217,7 @@ include("dmt_test_helpers.jl")
       end
     finally
       MPSToolkit._DMT_VERIFY_ENVS[] = previous
+      MPSToolkit._DMT_VERIFY_ELTYPE[] = previous_eltype
     end
   end
 

@@ -227,6 +227,12 @@ function _dmt_bond_solve(::Type{T}, bond_matrix::AbstractMatrix, protected_left:
   # M' = C + QL (QL' B) + BQRc QR' + Uc Sc Vc'  in factored form.
   factor_left = hcat(a, ql, ops.BQRc, uc * Diagonal(sc))
   factor_right = hcat(conj(b), ops.QLtB', qr_basis, vc)
+  if _DMT_VERIFY_ELTYPE[]
+    eltype(factor_left) === T && eltype(factor_right) === T || error(
+      "DMT eltype verify: the step is threaded at T = $(T) but the refactorization factors are " *
+      "$(eltype(factor_left)) (left) / $(eltype(factor_right)) (right). `hcat` re-promotes a " *
+      "partially converted factor with no error, so this is a silently widened step.")
+  end
   return _dmt_refactor(factor_left, factor_right, Int(maxdim), cutoff)
 end
 

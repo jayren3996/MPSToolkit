@@ -357,8 +357,14 @@ end
     # PXP energy-transport schedule is the adversarial input: non-monotonic (bond 1 revisited),
     # mixed-span (2 and 3), overlapping multi-bond windows, run forward and reverse over 2 sweeps
     # on a generic high-operator-entanglement state (random_mps) where truncation actually fires.
+    # _DMT_VERIFY_ELTYPE rides along for the whole block: it throws if either refactorization
+    # factor is not in the element type threaded through the step, which `hcat` would otherwise
+    # widen silently. This state is complex, so what it guards here is that a complex step really
+    # stays complex end to end; the real side is covered in test_dmt_kernel.jl.
     old = MPSToolkit._DMT_VERIFY_ENVS[]
+    old_eltype = MPSToolkit._DMT_VERIFY_ELTYPE[]
     MPSToolkit._DMT_VERIFY_ENVS[] = true
+    MPSToolkit._DMT_VERIFY_ELTYPE[] = true
     try
       nsites = 8
       psites = pauli_siteinds(nsites)
@@ -398,6 +404,7 @@ end
       @test _link_dims(threaded) == _link_dims(rebuilt)
     finally
       MPSToolkit._DMT_VERIFY_ENVS[] = old
+      MPSToolkit._DMT_VERIFY_ELTYPE[] = old_eltype
     end
   end
 
