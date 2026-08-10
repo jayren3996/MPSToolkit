@@ -344,11 +344,30 @@ const CSV_PATH      = joinpath(@__DIR__, "spin1_semiexact_validation.csv")
 # Order matters: the core d = 3 Heisenberg comparison runs first, the d = 2 control second, and
 # the more expensive ULS/SU(3) case last, so a truncated run still ships the core result and its
 # control. Each case writes its own rows to the CSV as soon as it finishes.
-# The two ladders are matched in COMPLEMENT budget chi' = maxdim - 2 d^2 = 2 / 10 / 22 / 46, not
-# in raw maxdim -- chi' is the resource DMT spends, and the protected block is 18 at d = 3 vs 8 at
-# d = 2. The ladder deliberately spans the point where the structural overhead stops dominating:
-# at maxdim = 20 the protected block is 90% of the d = 3 budget, at maxdim = 64 only 28%, so if
-# DMT's ranking against plain SVD depends on that fraction the ladder will show it.
+# The two ladders are matched in COMPLEMENT budget chi' = maxdim - 2 d^2 = 2 / 10 / 22 / 46 / 82 /
+# 142, not in raw maxdim -- chi' is the resource DMT spends, and the protected block is 18 at
+# d = 3 vs 8 at d = 2. The ladder deliberately spans the point where the structural overhead stops
+# dominating: at maxdim = 20 the protected block is 90% of the d = 3 budget, at maxdim = 64 it is
+# 28%, and at the saturated rungs below it falls to 18% and 11%, so if DMT's ranking against plain
+# SVD depends on that fraction the ladder will show it.
+#
+# SATURATED RUNGS -- maxdim = 100, 160 at d = 3 (chi' = 82, 142) and maxdim = 90, 150 at d = 2
+# (chi' = 82, 142, preserving the complement-budget match above). The published conclusion from the
+# four rungs above ("DMT is worse than plain SVD at equal maxdim") was measured entirely at
+# protected-block overhead >= 28%, i.e. near DMT's budget floor. The reference C++ implementation
+# this work is checked against (Jack Kemp's dmt, github.com/Jack-Kemp/dmt) defaults to
+# `Cutoff = 1e-16, AbsoluteCutoff = true`, documented as "the DMT algorithm will immediately
+# saturate to MaxDim" -- i.e. its designed regime is complement budget chi' >> protected block, a
+# regime this ladder never reached before. The floor rungs are kept, not replaced: the question is
+# now floor-versus-saturated, and answering it needs both ends in the same run, against the same
+# reference and the same floor probe.
+# `ref_budget` and `floor_budget` did not need raising for the extension: both probes always run
+# uncapped (`maxdim = typemax(Int)`, see `run_arm`'s call sites below), so their cost is set by
+# `tmax` alone and does not depend on the maxdim ladder. The capped DMT/SVD arm loop in `run_case`
+# (the one the two new rungs add 8 arms per case to) passes no `budget` to `run_arm` at all --
+# it defaults to `Inf` -- so those arms cannot be silently truncated by any guard; they simply cost
+# more wall-clock than the old ceiling of maxdim = 64, which is expected and is not this script's
+# concern to bound (the caller owns the wall-clock budget for the whole run).
 # `floor_budget` is the wall-clock allowance for THIS case's reference-floor probe. Every case gets
 # one: a floor measured on one model at one early time cannot certify a cell in another model at a
 # later time, and the d = 2 control in particular turns out to be floor-limited at its loosest rung
@@ -358,11 +377,11 @@ const CSV_PATH      = joinpath(@__DIR__, "spin1_semiexact_validation.csv")
 # limitation of this benchmark, not something the budgets can fix.
 const CASES = (
   (label = "heisenberg_d3", model = "heisenberg", d = 3, tmax = 2.0,
-   maxdims = (20, 28, 40, 64), ref_budget = 1100.0, floor_budget = 700.0),
+   maxdims = (20, 28, 40, 64, 100, 160), ref_budget = 1100.0, floor_budget = 700.0),
   (label = "heisenberg_d2", model = "heisenberg", d = 2, tmax = 6.0,
-   maxdims = (10, 18, 30, 54), ref_budget = 900.0, floor_budget = 700.0),
+   maxdims = (10, 18, 30, 54, 90, 150), ref_budget = 900.0, floor_budget = 700.0),
   (label = "uls_d3", model = "uls", d = 3, tmax = 2.0,
-   maxdims = (20, 28, 40, 64), ref_budget = 1100.0, floor_budget = 500.0),
+   maxdims = (20, 28, 40, 64, 100, 160), ref_budget = 1100.0, floor_budget = 500.0),
 )
 # -------------------------------------------------------------------------------------------------
 
@@ -697,9 +716,10 @@ function run_case(case; nsites = NSITES, dt = DT, verbose = true)
 
   for cut in ARM_CUTOFFS, eps in EPS_LADDER
     @printf("\n  arm cutoff = %.0e   eps = %.3f\n", cut, eps)
-    println("  ", rpad("maxdim", 8), rpad("chi'", 6), rpad("t", 6), rpad("err_inf DMT", 14),
-        rpad("err_inf SVD", 14), rpad("SVD/DMT", 10), rpad("err_l1 DMT", 13),
-        rpad("err_l1 SVD", 13), rpad("chi_ref", 8), "floor-corrected verdict")
+    println("  ", rpad("maxdim", 8), rpad("chi'", 6), rpad("overhd%", 8), rpad("t", 6),
+        rpad("err_inf DMT", 14), rpad("err_inf SVD", 14), rpad("SVD/DMT", 10),
+        rpad("err_l1 DMT", 13), rpad("err_l1 SVD", 13), rpad("chi_ref", 8),
+        "floor-corrected verdict")
     for maxdim in case.maxdims
       dmt, svd = arms[(cut, eps, :dmt, maxdim)], arms[(cut, eps, :svd, maxdim)]
       for k in 2:(reached + 1)
@@ -711,9 +731,13 @@ function run_case(case; nsites = NSITES, dt = DT, verbose = true)
         lo, hi = ratio_bounds(dmt.errs_inf[k], svd.errs_inf[k],
                               k <= length(fl.floors) ? fl.floors[k] : NaN)
         flag = verdict_label(lo, hi)
-        @printf("  %-8d%-6d%-6.1f%-14.3e%-14.3e%-10.3g%-13.3e%-13.3e%-8d%s\n",
-            maxdim, maxdim - protected, reference.times[k], dmt.errs_inf[k],
-            svd.errs_inf[k], ratio, dmt.errs_l1[k], svd.errs_l1[k], reference.chis[k], flag)
+        # `overhd%` is the fraction of `maxdim` spent on the protected block rather than on
+        # truncatable budget -- the variable the floor-vs-saturated question actually turns on
+        # (see the SATURATED RUNGS comment above `CASES`), and otherwise invisible in this table.
+        @printf("  %-8d%-6d%-8.1f%-6.1f%-14.3e%-14.3e%-10.3g%-13.3e%-13.3e%-8d%s\n",
+            maxdim, maxdim - protected, 100 * protected / maxdim, reference.times[k],
+            dmt.errs_inf[k], svd.errs_inf[k], ratio, dmt.errs_l1[k], svd.errs_l1[k],
+            reference.chis[k], flag)
       end
     end
   end
@@ -725,7 +749,9 @@ function append_csv(io, result)
   case, reference, arms = result.case, result.reference, result.arms
   floor_at(k) = k <= length(result.floor.floors) ? result.floor.floors[k] : NaN
   for k in 1:(result.reached + 1)
-    @printf(io, "%s,%d,%s,reference,%.1e,%.4f,0,0,%.4f,%d,%.6e,%.6e,%.6e,%.6e,%.6e\n",
+    # `overhead_frac` (2 d^2 / maxdim) has no meaning for the uncapped reference (maxdim = 0 is
+    # already its "not applicable" sentinel here, matching chi_prime's), so it gets the same 0.
+    @printf(io, "%s,%d,%s,reference,%.1e,%.4f,0,0,0,%.4f,%d,%.6e,%.6e,%.6e,%.6e,%.6e\n",
         case.label, case.d, case.model, CUTOFF, EPS_WALL, reference.times[k],
         reference.chis[k], 0.0, 0.0,
         abs(reference.traces[k] / reference.traces[1] - 1), result.front, floor_at(k))
@@ -733,9 +759,9 @@ function append_csv(io, result)
   for cut in ARM_CUTOFFS, eps in EPS_LADDER, maxdim in case.maxdims, kind in (:dmt, :svd)
     arm = arms[(cut, eps, kind, maxdim)]
     for k in 1:(result.reached + 1)
-      @printf(io, "%s,%d,%s,%s,%.1e,%.4f,%d,%d,%.4f,%d,%.6e,%.6e,%.6e,%.6e,%.6e\n",
+      @printf(io, "%s,%d,%s,%s,%.1e,%.4f,%d,%d,%.4f,%.4f,%d,%.6e,%.6e,%.6e,%.6e,%.6e\n",
           case.label, case.d, case.model, kind, cut, eps, maxdim,
-          maxdim - result.protected, reference.times[k], arm.chis[k],
+          maxdim - result.protected, result.protected / maxdim, reference.times[k], arm.chis[k],
           arm.errs_inf[k], arm.errs_l1[k],
           abs(arm.traces[k] / arm.traces[1] - 1), result.front, floor_at(k))
     end
@@ -767,7 +793,7 @@ function main(; cases = CASES, nsites = NSITES, dt = DT, csv_path = CSV_PATH, ve
     # `floor` is the reference's OWN error at that time (NaN where the floor probe did not
     # reach). Every guaranteed bound in the write-up is reproducible from this file alone:
     # lo = (svd - floor) / (dmt + floor), hi = (svd + floor) / (dmt - floor).
-    println(io, "case,d,model,arm,cutoff,eps,maxdim,chi_prime,t,chi,err_inf,err_l1,trace_rel_err,front_ref,floor")
+    println(io, "case,d,model,arm,cutoff,eps,maxdim,chi_prime,overhead_frac,t,chi,err_inf,err_l1,trace_rel_err,front_ref,floor")
     for case in cases
       result = run_case(case; nsites = nsites, dt = dt, verbose = verbose)
       append_csv(io, result)
@@ -785,8 +811,8 @@ function main(; cases = CASES, nsites = NSITES, dt = DT, csv_path = CSV_PATH, ve
   println("reads 'WIN', which is a fact about the box, not about DMT. Both excluded here; the full")
   println("per-time grid, including the excluded columns, is in the tables above and the CSV.")
   println(rpad("case", 16), rpad("t", 6), rpad("cutoff", 9), rpad("eps", 7), rpad("maxdim", 8),
-      rpad("chi'", 6), rpad("err_inf DMT", 14), rpad("err_inf SVD", 14), rpad("raw ratio", 11),
-      "floor-corrected verdict")
+      rpad("chi'", 6), rpad("overhd%", 8), rpad("err_inf DMT", 14), rpad("err_inf SVD", 14),
+      rpad("raw ratio", 11), "floor-corrected verdict")
   for result in results
     # Slowest of the three clocks: floor coverage, front containment, reference reach.
     fronts = front_curve(result.reference.profiles, EDGE_BAND)
@@ -798,8 +824,9 @@ function main(; cases = CASES, nsites = NSITES, dt = DT, csv_path = CSV_PATH, ve
       svd = result.arms[(cut, eps, :svd, maxdim)]
       de, se = dmt.errs_inf[kfloor], svd.errs_inf[kfloor]
       lo, hi = ratio_bounds(de, se, result.floor.floors[kfloor])
-      @printf("%-16s%-6.1f%-9.0e%-7.3f%-8d%-6d%-14.3e%-14.3e%-11.3g%s\n",
-          result.case.label, tf, cut, eps, maxdim, maxdim - result.protected, de, se,
+      @printf("%-16s%-6.1f%-9.0e%-7.3f%-8d%-6d%-8.1f%-14.3e%-14.3e%-11.3g%s\n",
+          result.case.label, tf, cut, eps, maxdim, maxdim - result.protected,
+          100 * result.protected / maxdim, de, se,
           de > 0 ? se / de : NaN, verdict_label(lo, hi))
     end
     @printf("%-16s(reference reached t = %.1f; floor known to t = %.1f; front contained to t = %.1f; summarized at t = %.1f)\n",
