@@ -289,6 +289,20 @@ case:
     low-`d` chain. Normalized ratio observables (`normalize=true`, the default) are unaffected,
     since the prefactor cancels between numerator and denominator.
 
+!!! note "When `normalize=true` refuses"
+    Dividing by the trace is meaningless when the trace is a cancellation residue rather than a
+    trace, so `normalize=true` raises an `ArgumentError` when
+    ``|\mathrm{tr}(\rho)| \le \sqrt{\varepsilon}\,\|\rho\|_{HS}`` — the traceless case (a
+    transport current, an evolved two-point correlator). Measure those with `normalize=false`.
+    The comparison is between the *physical* trace and the Hilbert-Schmidt norm, both evaluated
+    in log space so neither has to be representable: a positive `\rho` always satisfies
+    ``\mathrm{tr}(\rho) = \sum_i \lambda_i \ge \sqrt{\sum_i \lambda_i^2} = \|\rho\|_{HS}``, so
+    **no thermal state is ever rejected**, at any temperature or chain length. (Before
+    2026-08-10 the check compared the identity *coefficient* ``\mathrm{tr}(\rho)/d^{N/2}``
+    against the same right-hand side, which carried an implicit ``d^{N/2}`` and therefore
+    rejected the positive product state ``\rho = \bigotimes_j e^{-\beta Z_j}`` at
+    ``\beta = 0.5, N = 240``.)
+
 ## Related operator-space tools
 
 This page covers the generic operator-basis representation (any local dimension `d`, Pauli at
