@@ -1,7 +1,8 @@
 """
-    _protected_basis(protected)
+    _protected_basis(protected, T=eltype(protected))
 
-Return a thin orthonormal basis whose columns span the columns of `protected`.
+Return a thin orthonormal basis whose columns span the columns of `protected`, in element type
+`T`.
 
 # Notes
 - Uses a QR factorization rather than an SVD: only the span matters, the input is
@@ -9,11 +10,15 @@ Return a thin orthonormal basis whose columns span the columns of `protected`.
   cheaper than `svd(...; full=true)` (measured 0.0013 s versus 0.505 s at `chi = 1800`).
 - No rank detection is performed. A rank-deficient `protected` yields a few arbitrary extra
   orthonormal columns, which over-protects rather than under-protects, and is therefore safe.
+- `T` exists because `protected` can be *narrower* than the type the bond step runs in: the left
+  protected block contracts sites `1:bond` and the right one `bond+1:N`, so a complex tensor on
+  one side of the cut leaves the block on the other side real. Passing the step's own `T` widens
+  both blocks to it, which is what keeps the `hcat`s in [`_dmt_bond_solve`](@ref) homogeneous.
 """
-function _protected_basis(protected::AbstractMatrix)
-  size(protected, 2) == 0 && return zeros(ComplexF64, size(protected, 1), 0)
+function _protected_basis(protected::AbstractMatrix, ::Type{T}=eltype(protected)) where {T}
+  size(protected, 2) == 0 && return zeros(T, size(protected, 1), 0)
   ncols = min(size(protected, 1), size(protected, 2))
-  factorization = qr(Matrix{ComplexF64}(protected))
+  factorization = qr(Matrix{T}(protected))
   return Matrix(factorization.Q)[:, 1:ncols]
 end
 
@@ -31,10 +36,11 @@ _bond_adj(bond_matrix::Diagonal, x) = conj(diag(bond_matrix)) .* x
 _bond_adj(bond_matrix::AbstractMatrix, x) = bond_matrix' * x
 
 """
-    _dmt_connector(bond_matrix, q0, r0)
+    _dmt_connector(bond_matrix, q0, r0, T=promote_type(eltype.((bond_matrix, q0, r0))...))
 
 Return `(a, b, has_connector)` describing the rank-one trace connector
-`C = a * transpose(b) = (S r0)(q0' S) / (q0' S r0)` for the bond matrix `S`.
+`C = a * transpose(b) = (S r0)(q0' S) / (q0' S r0)` for the bond matrix `S`, with `a` and `b` in
+element type `T`.
 
 # Notes
 - When the identity overlap `q0' S r0` is negligible relative to the operator scale — a
@@ -42,13 +48,20 @@ Return `(a, b, has_connector)` describing the rank-one trace connector
   is returned as zeros, so the caller still truncates and still enforces `maxdim`.
 - `B = S - C` annihilates the identity directions (`B r0 = 0`, `q0' B = 0`), so the connector
   costs no extra bond dimension: its range already lies inside the protected block.
+- The default `T` promotes over all three arguments and is therefore never a narrowing; the bond
+  step passes its own `T` instead, which can be wider still (the `:svd` bond matrix is real even
+  for a complex state, and a protected block on one side of the cut can be real when the other is
+  not). `a` and `b` set the element type of the `hcat`ed factors, so they must reach `T` here.
 """
-function _dmt_connector(bond_matrix::AbstractMatrix, q0::AbstractVector, r0::AbstractVector)
+function _dmt_connector(bond_matrix::AbstractMatrix, q0::AbstractVector, r0::AbstractVector,
+                        ::Type{T}=promote_type(eltype(bond_matrix), eltype(q0),
+                                               eltype(r0))) where {T}
   scaled_right = _bond_mul(bond_matrix, r0)
   denominator = dot(q0, scaled_right)
   has_connector = abs(denominator) > sqrt(eps(Float64)) * norm(bond_matrix)
-  a = has_connector ? ComplexF64.(scaled_right ./ denominator) : zeros(ComplexF64, length(r0))
-  b = ComplexF64.(conj(_bond_adj(bond_matrix, q0)))    # b = (q0' S)^T = conj(S' q0)
+  a = has_connector ? convert(Vector{T}, scaled_right ./ denominator) : zeros(T, length(r0))
+  # b = (q0' S)^T = conj(S' q0)
+  b = convert(Vector{T}, conj(_bond_adj(bond_matrix, q0)))
   return a, b, has_connector
 end
 
@@ -83,10 +96,15 @@ function _dmt_complement_ops(bond_matrix::AbstractMatrix, a::AbstractVector, b::
 end
 
 """
-    _truncated_svd(mul, adj, chi, rank; mode=:dense, oversample=10, power=2)
+    _truncated_svd(mul, adj, chi, rank, T=ComplexF64; mode=:dense, oversample=10, power=2)
 
 Return the leading `rank` singular triplet `(U, S, V)` of the `chi x chi` operator defined by
-the matrix-free products `mul` and `adj`.
+the matrix-free products `mul` and `adj`, in element type `T`.
+
+# Arguments
+- `T`: Element type of the identity block `:dense` materializes and of the probes `:random`
+  draws. This is the only signature here that genuinely *must* carry a type parameter: `mul` and
+  `adj` are opaque closures, so there is nothing to infer one from.
 
 # Keyword Arguments
 - `mode`: `:dense` materializes the operator and calls LAPACK; `:random` uses a block
@@ -108,19 +126,25 @@ the matrix-free products `mul` and `adj`.
   sketch independently. What that buys, measured: up to 1.8x on the DMT truncation itself, which
   dilutes to 1.05x-1.2x on a whole sweep at moderate budgets (~1.4x at the largest measured
   bond), because the gate application `:random` does not touch is about half of a step.
-  `dev/bench_dmt.jl` tables 2 and 3 have the numbers.
+  `dev/bench_dmt.jl` tables 2 and 3 have the numbers. A `Float64` `T` sharpens the same point:
+  `randn(T, chi, probes)` consumes half as many draws from the global RNG as at `ComplexF64`, so a
+  seeded `:random` run is not reproducible *across* element types either. That is the documented
+  property again rather than a new one, but it is worth knowing before A/B-ing the two types.
 """
-function _truncated_svd(mul, adj, chi::Integer, rank::Integer; mode::Symbol=:dense,
-                        oversample::Integer=10, power::Integer=2)
+function _truncated_svd(mul, adj, chi::Integer, rank::Integer, ::Type{T}=ComplexF64;
+                        mode::Symbol=:dense, oversample::Integer=10,
+                        power::Integer=2) where {T}
   keep = max(min(Int(rank), Int(chi)), 0)
-  keep == 0 && return (zeros(ComplexF64, chi, 0), Float64[], zeros(ComplexF64, chi, 0))
+  # `T` rather than `ComplexF64` even for the empty return: these blocks are `hcat`ed into the
+  # refactorization factors, and an empty `ComplexF64` block re-promotes a real `hcat` silently.
+  keep == 0 && return (zeros(T, chi, 0), Float64[], zeros(T, chi, 0))
   if mode === :dense
-    factorization = svd(mul(Matrix{ComplexF64}(I, chi, chi)))
+    factorization = svd(mul(Matrix{T}(I, chi, chi)))
     return (factorization.U[:, 1:keep], factorization.S[1:keep], factorization.V[:, 1:keep])
   end
   mode === :random || throw(ArgumentError("DMT truncated SVD mode must be :dense or :random"))
   probes = min(Int(chi), keep + Int(oversample))
-  sketch = mul(randn(ComplexF64, Int(chi), probes))
+  sketch = mul(randn(T, Int(chi), probes))
   for _ in 1:Int(power)
     sketch = mul(adj(Matrix(qr(sketch).Q)))
   end
@@ -140,12 +164,16 @@ Return the SVD `(U, S, V)` of the low-rank product `left * right'` without formi
 - Costs `O(chi r^2 + r^3)` for `chi x r` inputs, versus `O(chi^3)` for a dense SVD (measured
   0.60 s versus 14.2 s at `chi = 3600, r = 400`). The DMT bond matrix is always available in
   this factored form, so the dense matrix is never needed.
+- Needs no type parameter: both factors are already assembled, so the promotion over the two of
+  them is the element type to work in. Real inputs stay real, and `dgeqrf`/`dgesdd` then do the
+  work instead of `zgeqrf`/`zgesdd`.
 """
 function _dmt_refactor(left::AbstractMatrix, right::AbstractMatrix, maxdim::Integer, cutoff::Real)
   size(left, 1) == size(right, 1) || throw(ArgumentError("DMT refactorization needs matching row counts"))
   size(left, 2) == size(right, 2) || throw(ArgumentError("DMT refactorization needs matching column counts"))
-  left_qr = qr(Matrix{ComplexF64}(left))
-  right_qr = qr(Matrix{ComplexF64}(right))
+  T = promote_type(eltype(left), eltype(right))
+  left_qr = qr(Matrix{T}(left))
+  right_qr = qr(Matrix{T}(right))
   core = svd(Matrix(left_qr.R) * Matrix(right_qr.R)')
   keep = length(core.S)
   if keep > 0 && cutoff > 0

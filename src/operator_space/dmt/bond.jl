@@ -48,17 +48,21 @@ end
 """
     _unit_direction(x)
 
-Return `x / norm(x)`, or an exact zero vector when `x` vanishes.
+Return `x / norm(x)`, or an exact zero vector when `x` vanishes, in `x`'s own (floating) element
+type.
 
 # Notes
 - The identity/trace direction of a *traceless* operator can be exactly zero. Plain `normalize`
   would return `NaN`s there and poison the whole bond; a zero vector instead makes
   [`_dmt_connector`](@ref) report no connector, which is the intended traceless behaviour.
+- No element type is imposed here. The result only ever feeds [`_dmt_connector`](@ref), which
+  widens to the bond step's own `T`, so coercing twice would be redundant — and the zero branch
+  has to agree with the division branch, which is what `float` is for.
 """
 function _unit_direction(x::AbstractVector)
   scale = norm(x)
-  scale == 0 && return zeros(ComplexF64, length(x))
-  return ComplexF64.(x ./ scale)
+  scale == 0 && return zeros(float(eltype(x)), length(x))
+  return x ./ scale
 end
 
 """
@@ -307,16 +311,16 @@ function _dmt_bond_truncate!(
   @assert size(protected_right, 2) == d^(2 * right_count)
 
   chi = size(bond_matrix, 1)
-  ql = _protected_basis(protected_left)
-  qr_basis = _protected_basis(protected_right)
+  ql = _protected_basis(protected_left, elt)
+  qr_basis = _protected_basis(protected_right, elt)
   # Column 1 of each protected block is the all-identity multi-index, i.e. the trace direction.
   q0 = _unit_direction(protected_left[:, 1])
   r0 = _unit_direction(protected_right[:, 1])
-  a, b, _ = _dmt_connector(bond_matrix, q0, r0)
+  a, b, _ = _dmt_connector(bond_matrix, q0, r0, elt)
   ops = _dmt_complement_ops(bond_matrix, a, b, ql, qr_basis)
 
   budget = max(_dmt_complement_budget(maxdim, d, radius), 1)
-  uc, sc, vc = _truncated_svd(ops.mul, ops.adj, chi, budget; mode=truncation)
+  uc, sc, vc = _truncated_svd(ops.mul, ops.adj, chi, budget, elt; mode=truncation)
 
   # M' = C + QL (QL' B) + BQRc QR' + Uc Sc Vc'  in factored form.
   factor_left = hcat(a, ql, ops.BQRc, uc * Diagonal(sc))
