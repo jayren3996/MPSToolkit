@@ -146,6 +146,37 @@ function _tebd_truncation_kwargs(maxdim::Integer, cutoff::Real)
 end
 
 """
+    _promote_mps_eltype!(psi, T)
+
+Bring every tensor of `psi` to element type `T` in place, leaving the orthogonality limits
+unchanged. A no-op when `psi` is already homogeneous in `T`.
+
+# Notes
+- `T` is only ever called with a promotion over `psi`'s own element types, so `one(T) * psi[n]`
+  widens and can never drop an imaginary part. Multiplying by `one(T)` rather than converting is
+  deliberate: it is exactly what `NDTensors` does internally on a mismatched contraction, so it
+  cannot narrow even if a caller passes a narrower `T` by mistake.
+- `setindex!(::MPS, ...)` invalidates the orthogonality limits, but changing an element type does
+  not move the orthogonality centre, so the limits are saved and restored. Without this a
+  promotion would silently force a full re-gauge on the next `orthogonalize!`.
+"""
+function _promote_mps_eltype!(psi::MPS, ::Type{T}) where {T}
+  left = ITensorMPS.leftlim(psi)
+  right = ITensorMPS.rightlim(psi)
+  touched = false
+  for n in eachindex(psi)
+    eltype(psi[n]) === T && continue
+    psi[n] = one(T) * psi[n]
+    touched = true
+  end
+  if touched
+    ITensorMPS.setleftlim!(psi, left)
+    ITensorMPS.setrightlim!(psi, right)
+  end
+  return psi
+end
+
+"""
     tebd_strang_schedule(nsites)
 
 Return the nearest-neighbor odd-even-odd Strang schedule for a finite OBC chain.
@@ -305,10 +336,19 @@ function tebd_evolve!(psi::MPS, gate::AbstractMatrix, bond; maxdim::Int, cutoff:
   span = _operator_span_at(psi, gate, n)
   n >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
   truncation_kwargs = _tebd_truncation_kwargs(maxdim, cutoff)
+  # Bring state and gate to one element type before contracting them. `NDTensors` handles a
+  # mismatch by materializing a promoted copy of the larger operand, so a real state meeting a
+  # complex gate -- or a complex state meeting a real one -- silently pays for a full copy of the
+  # state tensors at every bond. Promoting is never a narrowing, so this cannot drop an imaginary
+  # part; converting the gate is `O(d^(2 span))` and the state conversion is a no-op in the common
+  # case that it already has this element type.
+  elt = float(promote_type(_mps_eltype(psi), eltype(gate)))
+  gate_data = eltype(gate) === elt ? gate : convert(AbstractMatrix{elt}, gate)
+  _promote_mps_eltype!(psi, elt)
   if span == 1
     n <= length(psi) || throw(ArgumentError("local gate support exceeds chain length"))
     sites = [siteind(psi, n)]
-    gate_tensor = _dense_local_operator(sites, gate)
+    gate_tensor = _dense_local_operator(sites, gate_data)
     updated = product(gate_tensor, psi, [n]; truncation_kwargs...)
     psi[:] = updated
     return psi
@@ -317,7 +357,7 @@ function tebd_evolve!(psi::MPS, gate::AbstractMatrix, bond; maxdim::Int, cutoff:
     span == 2 || throw(ArgumentError("periodic boundary TEBD currently supports only two-site gates"))
     reordered = movesite(psi, 1 => length(psi); orthocenter=length(psi), truncation_kwargs...)
     sites = [siteind(reordered, length(psi) - 1), siteind(reordered, length(psi))]
-    gate_tensor = _dense_local_operator(sites, gate)
+    gate_tensor = _dense_local_operator(sites, gate_data)
     updated = product(gate_tensor, reordered, [length(psi) - 1, length(psi)]; truncation_kwargs...)
     restored = movesite(updated, length(psi) => 1; orthocenter=1, truncation_kwargs...)
     psi[:] = restored
@@ -326,7 +366,7 @@ function tebd_evolve!(psi::MPS, gate::AbstractMatrix, bond; maxdim::Int, cutoff:
   last_site = n + span - 1
   last_site <= length(psi) || throw(ArgumentError("local gate support exceeds chain length"))
   sites = [siteind(psi, j) for j in n:last_site]
-  gate_tensor = _dense_local_operator(sites, gate)
+  gate_tensor = _dense_local_operator(sites, gate_data)
   updated = product(gate_tensor, psi, collect(n:last_site); truncation_kwargs...)
   psi[:] = updated
   return psi

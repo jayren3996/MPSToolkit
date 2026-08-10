@@ -67,6 +67,14 @@ end
 
 Return the coefficient vector of a dense `d x d` operator in the normalized basis, i.e. the
 entries `tr(P_mu' * op)` for `P_mu = operator_basis_matrices(d)[mu]`.
+
+# Notes
+- Real for a Hermitian `op`, because the basis is Hermitian and orthonormal: `tr(P_mu' op)` is
+  then the expansion coefficient of a Hermitian operator on a Hermitian basis element (measured
+  imaginary part exactly `0.0`; a non-Hermitian `op` gives 0.89-0.98 relative and stays complex).
+  This function is the pivot for the element type of every state builder below, so downcasting
+  here is what lets a Hermitian density matrix be represented, evolved and truncated entirely in
+  `Float64`. See [`_real_operator_data`](@ref) for the tolerance and the guarantee.
 """
 function _operator_coefficients(op::AbstractMatrix, d::Integer)
   local_dim = Int(d)
@@ -74,7 +82,7 @@ function _operator_coefficients(op::AbstractMatrix, d::Integer)
     throw(ArgumentError("local operator must be $(local_dim) x $(local_dim), got $(size(op))"))
   basis = operator_basis_matrices(local_dim)
   dense = Matrix{ComplexF64}(op)
-  return ComplexF64[tr(adjoint(matrix) * dense) for matrix in basis]
+  return _real_operator_data(ComplexF64[tr(adjoint(matrix) * dense) for matrix in basis])
 end
 
 """
@@ -95,11 +103,16 @@ Build a product `MPS` in operator space selecting one basis element per site.
 """
 function operator_basis_state(sites, labels::AbstractVector; coefficient::Number=1.0)
   length(sites) == length(labels) || throw(ArgumentError("operator-basis labels must have one entry per site"))
+  # One element type for every tensor. Allocating `ITensor(site)` and letting each assignment pick
+  # its own type made this a mixed-`MPS` producer: with a complex `coefficient` only tensor 1
+  # promoted, leaving `[ComplexF64, Float64, ...]`, which costs a materialized promoted copy at
+  # every contraction that spans the boundary (see `_mps_eltype`).
+  elt = float(typeof(coefficient))
   tensors = ITensor[]
   for (index, (site, label)) in enumerate(zip(sites, labels))
     d = local_dimension(site)
-    tensor = ITensor(site)
-    tensor[site => _operator_basis_label(label, d)] = index == 1 ? coefficient : 1.0
+    tensor = ITensor(elt, site)
+    tensor[site => _operator_basis_label(label, d)] = index == 1 ? coefficient : one(elt)
     push!(tensors, tensor)
   end
   return MPS(tensors)
@@ -128,12 +141,15 @@ Build the operator-space `MPS` for the tensor product `⊗_j O_j` of dense local
 """
 function operator_product_state(sites, ops; coefficient::Number=1.0)
   length(sites) == length(ops) || throw(ArgumentError("operator_product_state needs one local operator per site"))
+  # Expand every site first, then pick one element type for the whole chain. Per-site typing would
+  # make a chain of mostly-Hermitian operators mixed the moment one site is non-Hermitian, and a
+  # mixed `MPS` pays a materialized promoted copy at the boundary (see `_mps_eltype`).
+  expanded = [_operator_coefficients(op, local_dimension(site)) for (site, op) in zip(sites, ops)]
+  elt = float(promote_type(typeof(coefficient), eltype.(expanded)...))
   tensors = ITensor[]
-  for (index, (site, op)) in enumerate(zip(sites, ops))
-    d = local_dimension(site)
-    coefficients = _operator_coefficients(op, d)
-    tensor = ITensor(ComplexF64, site)
-    scale = index == 1 ? ComplexF64(coefficient) : one(ComplexF64)
+  for (index, (site, coefficients)) in enumerate(zip(sites, expanded))
+    tensor = ITensor(elt, site)
+    scale = index == 1 ? convert(elt, coefficient) : one(elt)
     for mu in eachindex(coefficients)
       iszero(coefficients[mu]) && continue
       tensor[site => mu] = scale * coefficients[mu]
@@ -175,32 +191,37 @@ function _local_sum_state(sites, weights::AbstractVector, coeffs::AbstractVector
     return tensor
   end
 
+  # One element type across the chain, promoted over everything that gets stored: a Hermitian
+  # local operator has real `weights` (see `_operator_coefficients`), so a real-coefficient sum
+  # stays entirely in `Float64`.
+  elt = float(promote_type(eltype(weights), eltype(coeffs), typeof(identity_amplitude)))
+
   if nsites == 1
-    tensor = ITensor(ComplexF64, sites[1])
-    placed!(tensor, (), sites[1], ComplexF64(coeffs[1]))
+    tensor = ITensor(elt, sites[1])
+    placed!(tensor, (), sites[1], convert(elt, coeffs[1]))
     return MPS([tensor])
   end
 
-  amplitude = ComplexF64(identity_amplitude)
+  amplitude = convert(elt, identity_amplitude)
   left_link = Index(2, "OperatorStateLink,n=1")
-  first_tensor = ITensor(ComplexF64, sites[1], left_link)
+  first_tensor = ITensor(elt, sites[1], left_link)
   first_tensor[sites[1] => 1, left_link => 1] = amplitude
-  placed!(first_tensor, (left_link => 2,), sites[1], ComplexF64(coeffs[1]))
+  placed!(first_tensor, (left_link => 2,), sites[1], convert(elt, coeffs[1]))
   tensors = ITensor[first_tensor]
 
   for j in 2:(nsites - 1)
     right_link = Index(2, "OperatorStateLink,n=$(j)")
-    tensor = ITensor(ComplexF64, dag(left_link), sites[j], right_link)
+    tensor = ITensor(elt, dag(left_link), sites[j], right_link)
     tensor[dag(left_link) => 1, sites[j] => 1, right_link => 1] = amplitude
     tensor[dag(left_link) => 2, sites[j] => 1, right_link => 2] = amplitude
-    placed!(tensor, (dag(left_link) => 1, right_link => 2), sites[j], ComplexF64(coeffs[j]))
+    placed!(tensor, (dag(left_link) => 1, right_link => 2), sites[j], convert(elt, coeffs[j]))
     push!(tensors, tensor)
     left_link = right_link
   end
 
-  last_tensor = ITensor(ComplexF64, dag(left_link), sites[nsites])
+  last_tensor = ITensor(elt, dag(left_link), sites[nsites])
   last_tensor[dag(left_link) => 2, sites[nsites] => 1] = amplitude
-  placed!(last_tensor, (dag(left_link) => 1,), sites[nsites], ComplexF64(coeffs[nsites]))
+  placed!(last_tensor, (dag(left_link) => 1,), sites[nsites], convert(elt, coeffs[nsites]))
   push!(tensors, last_tensor)
   return MPS(tensors)
 end
