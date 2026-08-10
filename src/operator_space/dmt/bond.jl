@@ -97,7 +97,7 @@ function _mps_eltype(psi::MPS)
 end
 
 """
-    _dmt_bond_factorize(psi, bond, left_inds; factorize=:qr)
+    _dmt_bond_factorize(psi, bond, left_inds, T=ComplexF64; factorize=:qr)
 
 Split the bond tensor `psi[bond]` into an orthonormal left basis, the bond matrix expressed in
 that basis, and the right block, returning
@@ -107,6 +107,8 @@ that basis, and the right block, returning
 - `psi`: Operator-space `MPS`, already gauged so that `psi[bond]` is the orthogonality centre.
 - `bond`: Bond index being truncated.
 - `left_inds`: Indices of `psi[bond]` that belong to the left of the cut.
+- `T`: Element type for the `:qr` bond matrix, normally [`_mps_eltype`](@ref) of the chain.
+  Defaults to `ComplexF64`, the type this kernel used unconditionally.
 
 # Keyword Arguments
 - `factorize`: `:qr` for `psi[bond] = Q R`, `:svd` for `psi[bond] = U S V'`.
@@ -135,18 +137,26 @@ that basis, and the right block, returning
   wrapper *discards* whatever lies below the diagonal. Wrapping is a pure speed optimization —
   the dense matrix takes the same code path in [`_bond_mul`](@ref) — so a future `qr` that
   returned a permuted factor would slow this down rather than corrupt it.
+- The `:svd` bond matrix is a **real** `Diagonal` whatever `T` is, and deliberately does not
+  follow it. Singular values are real, and `_bond_mul(::Diagonal, x)` is elementwise rather than
+  BLAS, so a real `Diagonal` against complex blocks costs nothing. It is also why `T` must be
+  threaded in rather than read back off `bond_matrix`: `eltype` of this factor is `Float64` even
+  for a complex state, and typing the step off it would throw on the first protected block.
 """
-function _dmt_bond_factorize(psi::MPS, bond::Integer, left_inds; factorize::Symbol=:qr)
+function _dmt_bond_factorize(psi::MPS, bond::Integer, left_inds, ::Type{T}=ComplexF64;
+                             factorize::Symbol=:qr) where {T}
   factorize === :qr || factorize === :svd ||
     throw(ArgumentError("DMT factorize must be :qr or :svd, got $(factorize)"))
   if factorize === :qr
     q, r = qr(psi[bond], left_inds)
     left_link = commonind(q, r)
     right_link = commonind(r, psi[bond + 1])
-    # `ComplexF64` even for a real-coefficient operator: everything the bond matrix multiplies
-    # (`_protected_basis`, the connector, the randomized probes) is complex by construction, and
-    # a real triangular factor against complex blocks falls off BLAS onto generic matmul.
-    bond_matrix = convert(Matrix{ComplexF64}, matrix(r, left_link, right_link))
+    # One element type for everything the bond matrix meets. The conversion has to be
+    # all-or-nothing -- `T` is a single promotion over the whole chain, so it widens here and
+    # nowhere narrows -- because `NDTensors` answers a mismatched element type by materializing a
+    # promoted copy of the larger operand (184 MB per bond at chi = 800), and a mixed contraction
+    # falls off BLAS onto generic matmul. Both costs are paid silently.
+    bond_matrix = convert(Matrix{T}, matrix(r, left_link, right_link))
     if size(bond_matrix, 1) == size(bond_matrix, 2)
       istriu(bond_matrix) && (bond_matrix = UpperTriangular(bond_matrix))
       return (q, bond_matrix, psi[bond + 1], left_link, right_link)
@@ -192,6 +202,12 @@ protected block always fits inside `maxdim` and never has to be clipped.
 - The mutated `psi`.
 
 # Notes
+- The step runs in the element type of the state, [`_mps_eltype`](@ref) of the whole chain, not
+  in an unconditional `ComplexF64`. Every operator-space basis element is Hermitian, so a
+  Hermitian operator — any density matrix — has real coefficients and a real chain stays real all
+  the way through, at roughly half the memory. The conversion is all-or-nothing on purpose: a
+  mixed chain makes `NDTensors` materialize a promoted copy of the larger operand at every
+  contraction across the seam, and `orthogonalize!` then spreads the mixedness.
 - The left protected block is conjugated: the paper's pairing is `M = Q_L^T s Q_R`, a transpose
   rather than an adjoint. Omitting the conjugation is silently correct for a Hermitian operator
   and badly wrong otherwise.
@@ -225,6 +241,10 @@ function _dmt_bond_truncate!(
   isnothing(link) && return psi
   dim(link) <= maxdim && return psi
 
+  # One element type for the whole step, taken from the state rather than forced to `ComplexF64`
+  # (see `_mps_eltype`). Scanned here, before the re-gauge below, because gauging preserves
+  # element types and the promotion over the chain is therefore the same either side of it.
+  elt = _mps_eltype(psi)
   radius = (Int(preserve_diameter) - 1) ÷ 2
   nsites = length(psi)
   left_count, right_count = _dmt_protected_sites(bond, nsites, radius)
@@ -256,7 +276,7 @@ function _dmt_bond_truncate!(
   previous_link = linkind(psi, bond - 1)
   left_inds = isnothing(previous_link) ? (left_site,) : (previous_link, left_site)
   left_isometry, bond_matrix, right_block, left_link, right_link =
-    _dmt_bond_factorize(psi, bond, left_inds; factorize=factorize)
+    _dmt_bond_factorize(psi, bond, left_inds, elt; factorize=factorize)
 
   # Protected blocks: identity on every site except the `radius` sites adjacent to the cut.
   left_protected = left_env
