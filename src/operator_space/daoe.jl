@@ -1,24 +1,4 @@
 """
-    pauli_siteinds(nsites; tagprefix="PauliSpace")
-
-Construct a vector of dimension-4 site indices suitable for vectorized local Pauli bases.
-The basis ordering is `(I, X, Y, Z)`.
-
-# Arguments
-- `nsites`: Number of operator-space sites.
-
-# Keyword Arguments
-- `tagprefix`: Prefix used when naming the generated `Index` tags.
-
-# Returns
-- A vector of length `nsites` containing dimension-4 `Index` objects.
-"""
-function pauli_siteinds(nsites::Integer; tagprefix::AbstractString="PauliSpace")
-  nsites < 1 && throw(ArgumentError("number of Pauli-basis sites must be positive"))
-  return [Index(4, "$(tagprefix),n=$(n)") for n in 1:Int(nsites)]
-end
-
-"""
     _daoe_nontrivial(local_state)
 
 Return `true` if the local Pauli-basis label contributes to the DAOE Pauli weight.
@@ -201,10 +181,17 @@ The local operator basis is assumed to be ordered as `(I, X, Y, Z)`.
 
 # Returns
 - A diagonal `MPO` implementing the DAOE projector.
+
+# Notes
+- Defined for spin-1/2 (local dimension 2) operator space only; throws `ArgumentError` for
+  any other local dimension, since the Pauli-weight construction has no generalization to
+  higher-dimensional local bases defined here.
 """
 function pauli_daoe_projector(sites; lstar::Integer, gamma::Real)
   lstar < 0 && throw(ArgumentError("lstar must be nonnegative"))
   gamma < 0 && throw(ArgumentError("gamma must be nonnegative"))
+  all(local_dimension(site) == 2 for site in sites) ||
+    throw(ArgumentError("this helper is defined for spin-1/2 (local dimension 2) operator space only"))
   bond_dim = Int(lstar) + 1
   transition_rule = (state, local_state) -> begin
     next_weight, coeff = _daoe_transition(state - 1, local_state, Int(lstar), gamma)
@@ -228,10 +215,17 @@ The local operator basis is assumed to be ordered as `(I, X, Y, Z)`.
 
 # Returns
 - A diagonal `MPO` implementing the fermionic DAOE projector.
+
+# Notes
+- Defined for spin-1/2 (local dimension 2) operator space only; throws `ArgumentError` for
+  any other local dimension, since the Jordan-Wigner parity tracking keys off the `(I, X, Y,
+  Z)` label ordering.
 """
 function pauli_fdaoe_projector(sites; wstar::Integer, gamma::Real)
   wstar < 0 && throw(ArgumentError("wstar must be nonnegative"))
   gamma < 0 && throw(ArgumentError("gamma must be nonnegative"))
+  all(local_dimension(site) == 2 for site in sites) ||
+    throw(ArgumentError("this helper is defined for spin-1/2 (local dimension 2) operator space only"))
   bond_dim = Int(wstar) + 2
   transition_rule = (state, local_state) -> _fdaoe_transition(state, local_state, Int(wstar), gamma)
   return _diagonal_projector_mpo(sites, bond_dim, transition_rule)

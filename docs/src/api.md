@@ -62,30 +62,37 @@ fidelity_distance
 - `pauli_matrices`
 - `pauli_basis`
 - `pauli_components`
+- `operator_basis_matrices` — generic-`d` generalized Gell-Mann basis; `pauli_matrices`/`pauli_basis` are the `d = 2` case (see [Operator Space](manual/operator-space.md)).
+- `local_dimension` — recovers `d` from an operator-space site or its dimension `d^2`.
 
 ## Operator Space
 
-- `pauli_siteinds`
-- `pauli_basis_state`
-- `pauli_total_sz_state`
-- `pauli_domain_wall_state`
-- `pauli_gate`
-- `pauli_gate_from_hamiltonian`
-- `pauli_lindblad_generator`
-- `pauli_gate_from_lindbladian`
-- `pauli_state_from_mpo`
-- `pauli_superoperator_mpo`
-- `pauli_gate_from_imaginary_time`
-- `pauli_gibbs_state`
-- `pauli_trace`
-- `pauli_expectation`
-- `pauli_expectation_profile`
-- `pauli_pxp_constraint_state`
-- `pauli_pxp_constraint_projector`
+Generic in the local Hilbert space dimension `d` (`operator_*`), with every `pauli_*` name as
+the `d = 2` case (see [Operator Space](manual/operator-space.md) for the basis and conventions,
+and [DMT](manual/dmt.md) for a `d = 3` worked example):
+
+- `operator_siteinds` / `pauli_siteinds`
+- `operator_basis_state` / `pauli_basis_state`
+- `operator_product_state` — literal tensor-product state builder; no `pauli_*` wrapper needed (not `d`-specific in convention).
+- `operator_local_sum_state` — literal local-density sum; no `pauli_*` wrapper needed.
+- `pauli_total_sz_state`, `pauli_domain_wall_state` — `d = 2`-only conveniences with their own bond-dimension-2 normalization; use `operator_local_sum_state` directly at other `d`.
+- `operator_gate` / `pauli_gate`
+- `operator_gate_from_hamiltonian` / `pauli_gate_from_hamiltonian`
+- `operator_lindblad_generator` / `pauli_lindblad_generator`
+- `operator_gate_from_lindbladian` / `pauli_gate_from_lindbladian`
+- `operator_gate_from_imaginary_time` / `pauli_gate_from_imaginary_time`
+- `operator_state_from_mpo` / `pauli_state_from_mpo`
+- `operator_superoperator_mpo` / `pauli_superoperator_mpo`
+- `operator_gibbs_state` / `pauli_gibbs_state`
+- `operator_trace` / `pauli_trace`
+- `operator_expectation` / `pauli_expectation`
+- `operator_expectation_profile` / `pauli_expectation_profile`
+- `pauli_pxp_constraint_state` — **spin-1/2 only**, raises `ArgumentError` at other `d`.
+- `pauli_pxp_constraint_projector` — **spin-1/2 only**, raises `ArgumentError` at other `d`.
 - `constrained_dmt_evolve!`
-- `DMTOptions`
-- `pauli_daoe_projector`
-- `pauli_fdaoe_projector` (alias: `fdaoe_projector`)
+- `DMTOptions` — generic in `d`; see [DMT](manual/dmt.md) for `preserve_diameter` and the budget semantics (`connector_buffer` was removed).
+- `pauli_daoe_projector` — **spin-1/2 only**, raises `ArgumentError` at other `d`.
+- `pauli_fdaoe_projector` (alias: `fdaoe_projector`) — **spin-1/2 only**, raises `ArgumentError` at other `d`.
 
 ## Model Helpers
 

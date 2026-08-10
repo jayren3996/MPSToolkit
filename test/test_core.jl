@@ -3,7 +3,7 @@ using ITensorMPS
 
 @testset "configuration types" begin
   evo = LocalGateEvolution(rand(ComplexF64, 4, 4), 0.01; nstep=10)
-  dmt_evo = DMTGateEvolution(rand(ComplexF64, 4, 4), 0.01; schedule=[1], maxdim=6, connector_buffer=6)
+  dmt_evo = DMTGateEvolution(rand(ComplexF64, 4, 4), 0.01; schedule=[1], maxdim=6)
   tdvp = TDVPEvolution(rand(2, 2), -0.1im; time_step=-0.05im, nsteps=2, nsweeps=2, reverse_step=false, updater_backend="exponentiate", normalize=false, solver_kwargs=(cutoff=1e-9,))
   trunc = BondDimTruncation(8; cutoff=1e-10)
   target = EnergyTarget(0.0; operator=rand(4, 4), tol=1e-6, alpha=0.1, maxstep=50)
@@ -40,7 +40,11 @@ end
   @test_throws ArgumentError LocalGateEvolution(gate, 0.1; schedule=[1], nstep=-1)
   @test_throws ArgumentError LocalGateEvolution(gate, 0.1; schedule=[1], maxdim=-1)
   @test_throws ArgumentError DMTGateEvolution(gate, 0.1; schedule=[1], maxdim=0)
-  @test_throws ArgumentError DMTGateEvolution(gate, 0.1; schedule=[1], connector_buffer=-1)
+  @test_throws ArgumentError DMTGateEvolution(gate, 0.1; schedule=[1], preserve_diameter=2)
+  @test_throws ArgumentError DMTGateEvolution(gate, 0.1; schedule=[1], truncation=:bogus)
+  # connector_buffer was removed with the total-budget maxdim change; a bare MethodError would
+  # not tell the caller that maxdim also changed meaning.
+  @test_throws ArgumentError DMTGateEvolution(gate, 0.1; schedule=[1], connector_buffer=6)
   @test_throws ArgumentError TDVPEvolution(gate, 0.1; nsteps=0)
   @test_throws ArgumentError TDVPEvolution(gate, 0.1; nsteps=1, solver_kwargs=(reverse_step=false,))
   @test_throws ArgumentError BondDimTruncation(0)
@@ -219,7 +223,7 @@ end
   # the normalize field across; otherwise the upgraded evolution silently re-normalizes the
   # trajectory and destroys the unnormalized-trace diagnostic the field exists to preserve.
   dmt_evo = DMTGateEvolution(rand(ComplexF64, 4, 4), 0.01; schedule=[1], maxdim=6,
-                             connector_buffer=6, normalize=false)
+                             normalize=false)
   dmt_upgraded = MPSToolkit._scarfinder_evolution(dmt_evo; warn=false)
   @test dmt_upgraded.nstep == 10
   @test dmt_upgraded.normalize == false

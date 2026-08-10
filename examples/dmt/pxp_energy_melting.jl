@@ -57,7 +57,6 @@ const T_MAX            = 16.0
 const NCALL            = round(Int, T_MAX / (2 * DT))   # constrained forward+reverse sweeps
 const MAXDIM           = 48
 const GATE_MAXDIM      = 4 * MAXDIM
-const CONNECTOR_BUFFER = 8
 const CUTOFF           = 1e-12
 const PROJECT_EVERY    = 1                     # constraint checkpoint after every sweep
 const GIBBS_NSTEPS     = 6                     # imaginary-time Trotter steps for rho(0)
@@ -135,7 +134,7 @@ function _build_state_and_evolution()
     gates = [pauli_gate_from_hamiltonian(h, DT) for (_, h) in terms]
     schedule = [start for (start, _) in terms]
     evo = DMTGateEvolution(gates, DT; schedule=schedule, reverse_schedule=reverse(schedule),
-        maxdim=MAXDIM, cutoff=CUTOFF, gate_maxdim=GATE_MAXDIM, connector_buffer=CONNECTOR_BUFFER)
+        maxdim=MAXDIM, cutoff=CUTOFF, gate_maxdim=GATE_MAXDIM)
     return rho, evo, projector, terms
 end
 
@@ -191,7 +190,7 @@ function main(; probe=true)
     end
 
     println("\nPXP energy-domain-wall melting via constrained operator-space DMT")
-    println("  nsites=$NSITES  maxdim=$MAXDIM  connector_buffer=$CONNECTOR_BUFFER  beta=$BETA  dt=$DT  t_max=$T_MAX  wall=$WALL")
+    println("  nsites=$NSITES  maxdim=$MAXDIM  preserve_diameter=3 (default)  beta=$BETA  dt=$DT  t_max=$T_MAX  wall=$WALL")
     t, dE, drift, leak, edge = melt()
     z = 1.0 ./ running_loglog_slope(t, abs.(dE))
 

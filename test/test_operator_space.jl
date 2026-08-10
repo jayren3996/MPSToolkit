@@ -2,6 +2,7 @@ using ITensors
 using ITensorMPS
 using LinearAlgebra
 using MPSToolkit
+using SparseArrays
 using Test
 
 function _basis_product_mps(sites, labels::Vector{Int})
@@ -26,6 +27,48 @@ function _dense_operator_from_basis(labels::Vector{Int})
     dense = kron(dense, local_ops[label])
   end
   return dense
+end
+
+# Contract an MPO into a dense matrix in the big-endian (site-1-slowest) ordering `kron` uses,
+# which is the ordering `operator_product_state` and `operator_expectation` assume.
+function _dense_matrix_from_mpo(op::MPO, phys)
+  contracted = op[1]
+  for n in 2:length(op)
+    contracted *= op[n]
+  end
+  arr = Array(contracted, prime.(phys)..., phys...)
+  nsites = length(phys)
+  perm = vcat(reverse(1:nsites), reverse((nsites + 1):(2nsites)))
+  total = prod(dim.(phys))
+  return reshape(permutedims(arr, perm), total, total)
+end
+
+# Pad a dense operator on `span` consecutive sites starting at `start` with identities, so it can
+# be traced against a dense whole-chain operator.
+function _embed_dense(op::AbstractMatrix, start::Int, nsites::Int, d::Int)
+  span = round(Int, log(size(op, 1)) / log(d))
+  identity_matrix = Matrix{ComplexF64}(I, d, d)
+  blocks = Matrix{ComplexF64}[identity_matrix for _ in 1:(start - 1)]
+  push!(blocks, ComplexF64.(op))
+  append!(blocks, [identity_matrix for _ in (start + span):nsites])
+  return foldl(kron, blocks)
+end
+
+# Spin-1 matrices in the (m = +1, 0, -1) basis, shared by the d = 3 tests below.
+const _S1_Z = ComplexF64[1 0 0; 0 0 0; 0 0 -1]
+const _S1_X = ComplexF64[0 1 0; 1 0 1; 0 1 0] / sqrt(2)
+const _S1_PLUS = sqrt(2) * ComplexF64[0 1 0; 0 0 1; 0 0 0]
+
+# A deliberately non-Hermitian, bond-dimension > 1 spin-1 MPO for the vectorization tests.
+function _spin1_test_mpo(phys)
+  os = OpSum()
+  os += 0.7, "Id", 1
+  os += 1.0, "Sz", 1
+  os += 0.5, "Sx", 2
+  os += 0.4im, "Sz", 3
+  os += 0.6, "Sz", 1, "Sx", 2
+  os += 0.3, "Sz", 1, "Sz", 3
+  return MPO(os, phys)
 end
 
 @testset "operator-space projector MPOs" begin
@@ -307,4 +350,480 @@ end
     @test_throws ArgumentError fdaoe_projector(sites; wstar=-1, gamma=0.1)
     @test pauli_fdaoe_projector(sites; wstar=2, gamma=0.4) isa MPO
   end
+end
+
+@testset "generic operator-space state builders" begin
+  @testset "pauli_* wrappers are exactly the d = 2 case" begin
+    @test dim(first(operator_siteinds(3; d = 2))) == 4
+    @test dim(first(operator_siteinds(3; d = 3))) == 9
+
+    sites = pauli_siteinds(4)
+    a = pauli_basis_state(sites, ["I", "Z", "X", "I"])
+    b = operator_basis_state(sites, [1, 4, 2, 1])
+    @test inner(a, b) ≈ 1.0 atol = 1e-14
+
+    # pauli_total_sz_state/pauli_domain_wall_state keep their pre-existing bond-dimension-2
+    # amplitudes (identity_amplitude = 1), while operator_local_sum_state now builds the
+    # *literal* operator sum (identity_amplitude = sqrt(d)) -- see the dedicated pin testset
+    # below. Built from the same weights/coeffs, the two therefore differ by exactly
+    # sqrt(d)^(nsites - 1), not by a factor of 1.
+    scale = sqrt(2.0)^(4 - 1)
+    total_via_wrapper = pauli_total_sz_state(sites)
+    total_via_generic = operator_local_sum_state(
+      sites, pauli_matrices().Z / sqrt(2), fill(2.0^(4 / 2 - 1), 4))
+    @test inner(total_via_wrapper, total_via_generic) ≈ scale * inner(total_via_wrapper, total_via_wrapper) atol = 1e-12
+
+    dw_wrapper = pauli_domain_wall_state(sites; kink = 2)
+    dw_generic = operator_local_sum_state(
+      sites, pauli_matrices().Z / sqrt(2), [j <= 2 ? -1.0 : 1.0 for j in 1:4])
+    @test inner(dw_wrapper, dw_generic) ≈ scale * inner(dw_wrapper, dw_wrapper) atol = 1e-12
+  end
+
+  @testset "operator_product_state decomposes dense local matrices" begin
+    # A spin-1 S^z on site 2 of a 3-site chain, identity elsewhere.
+    d = 3
+    sites = operator_siteinds(3; d = d)
+    sz = ComplexF64[1 0 0; 0 0 0; 0 0 -1]
+    identity_matrix = Matrix{ComplexF64}(I, d, d)
+    state = operator_product_state(sites, [identity_matrix, sz, identity_matrix])
+    # Amplitude on basis label mu of site 2, with label 1 (the normalized identity) on the
+    # others: tr(P_mu' * S^z) times tr(P_1' * I) = sqrt(d) on each of the two spectator sites.
+    basis = operator_basis_matrices(d)
+    for mu in 1:d^2
+      probe = operator_basis_state(sites, [1, mu, 1])
+      @test inner(probe, state) ≈ tr(basis[mu]' * sz) * d atol = 1e-12
+    end
+  end
+
+  @testset "operator_local_sum_state builds a bond-dimension-2 sum" begin
+    d = 3
+    sites = operator_siteinds(4; d = d)
+    sz = ComplexF64[1 0 0; 0 0 0; 0 0 -1]
+    coeffs = [1.0, -2.0, 3.0, -4.0]
+    state = operator_local_sum_state(sites, sz, coeffs)
+    @test all(dim(linkind(state, b)) <= 2 for b in 1:3)
+    basis = operator_basis_matrices(d)
+    # Coefficient of "S^z on site j, identity elsewhere" is coeffs[j] * tr(P_mu' * S^z) times
+    # sqrt(d)^(nsites - 1): operator_local_sum_state now inserts a literal identity (amplitude
+    # sqrt(d) on basis element 1, not 1) on every other site, so the literal operator it
+    # represents is exactly sum_j coeffs[j] * S^z_j -- see the dedicated literal-sum testset
+    # below for the direct check against operator_product_state.
+    literal_scale = sqrt(d)^(length(sites) - 1)
+    for j in 1:4, mu in 2:d^2
+      labels = [k == j ? mu : 1 for k in 1:4]
+      probe = operator_basis_state(sites, labels)
+      @test inner(probe, state) ≈ literal_scale * coeffs[j] * tr(basis[mu]' * sz) atol = 1e-12
+    end
+  end
+
+  @testset "operator_local_sum_state equals the literal operator sum" begin
+    # Pin operator_local_sum_state against literal per-term product states built with
+    # operator_product_state, for both a traceless and a non-traceless local operator, at two
+    # different local dimensions. This is the exact composition later transport tasks rely on
+    # (e.g. rho = I + sum_j c_j S^z_j), so the two builders must agree on what "identity
+    # elsewhere" means.
+    cases = (
+      (d = 2, op = ComplexF64[2 0; 0 1], nsites = 4),      # non-traceless, d = 2
+      (d = 2, op = ComplexF64[1 0; 0 -1], nsites = 4),     # traceless (sigma^z), d = 2
+      (d = 3, op = ComplexF64.(diagm([2, 1, 0])), nsites = 3),   # non-traceless, d = 3
+      (d = 3, op = ComplexF64.(diagm([1, 0, -1])), nsites = 3),  # traceless (spin-1 S^z), d = 3
+    )
+    for case in cases
+      d, op, nsites = case.d, case.op, case.nsites
+      sites = operator_siteinds(nsites; d = d)
+      identity_matrix = Matrix{ComplexF64}(I, d, d)
+      coeffs = [1.0, -2.0, 3.0, -4.0][1:nsites]
+
+      single(j) = operator_product_state(sites, [k == j ? op : identity_matrix for k in 1:nsites];
+                                          coefficient = coeffs[j])
+      reference = single(1)
+      for j in 2:nsites
+        reference = add(reference, single(j); maxdim = 16, cutoff = 0.0)
+      end
+      built = operator_local_sum_state(sites, op, coeffs)
+      @test inner(reference, built) ≈ inner(reference, reference) atol = 1e-10
+      @test norm(built) ≈ norm(reference) atol = 1e-10
+    end
+  end
+
+  @testset "pauli_total_sz_state/pauli_domain_wall_state pin identity_amplitude = 1" begin
+    # These wrappers deliberately keep their pre-refactor bond-dimension-2 numerics (unlike
+    # operator_local_sum_state, which now builds the literal operator sum). Pin that convention
+    # directly: built from the *same* normalized op (pauli_matrices().Z / sqrt(2)), the wrapper
+    # and operator_local_sum_state must differ by exactly identity_amplitude^(nsites - 1), i.e.
+    # 1^(nsites-1) vs sqrt(2)^(nsites-1) -- nothing else.
+    for nsites in (1, 4)
+      sites = pauli_siteinds(nsites)
+      kink = min(2, nsites)
+      coefficient = 0.75
+      scale = 2.0^((nsites - 1) / 2)
+
+      dw = pauli_domain_wall_state(sites; kink = kink, coefficient = coefficient)
+      dw_weights = [j <= kink ? -coefficient : coefficient for j in 1:nsites]
+      dw_reference = operator_local_sum_state(sites, pauli_matrices().Z / sqrt(2), dw_weights)
+      @test inner(dw, dw_reference) ≈ scale * inner(dw, dw) atol = 1e-12
+      @test norm(dw_reference) ≈ scale * norm(dw) atol = 1e-12
+
+      total = pauli_total_sz_state(sites)
+      total_weights = fill(2.0^(nsites / 2 - 1), nsites)
+      total_reference = operator_local_sum_state(sites, pauli_matrices().Z / sqrt(2), total_weights)
+      @test inner(total, total_reference) ≈ scale * inner(total, total) atol = 1e-12
+      @test norm(total_reference) ≈ scale * norm(total) atol = 1e-12
+
+      # nsites == 1 has no "unoccupied" site, so identity_amplitude never enters: scale == 1
+      # and the wrapper and operator_local_sum_state must coincide exactly.
+      if nsites == 1
+        @test scale ≈ 1.0 atol = 1e-14
+      end
+    end
+  end
+
+  @testset "pauli_total_sz_state/pauli_domain_wall_state reject non-spin-1/2 sites" begin
+    # Regression: these wrappers used to route through operator_local_sum_state, which derives
+    # d from `sites` and rejects a size mismatch against the fixed 2x2 Z/sqrt(2) operator. After
+    # the identity_amplitude fix they call _local_sum_state directly and must therefore validate
+    # d == 2 themselves -- otherwise a d = 3 site silently builds a bogus bond-dimension-2 MPS
+    # (every valid site dimension d^2 >= 4 keeps the tensor[site => mu] writes for mu in 1:4 in
+    # bounds, so no natural BoundsError would catch this).
+    @test_throws ArgumentError pauli_total_sz_state(operator_siteinds(4; d = 3))
+    @test_throws ArgumentError pauli_domain_wall_state(operator_siteinds(4; d = 3))
+  end
+
+  @testset "label validation is dimension aware" begin
+    @test_throws ArgumentError operator_basis_state(operator_siteinds(2; d = 3), [10, 1])
+    # Pauli letter labels are only meaningful at d = 2.
+    @test_throws ArgumentError operator_basis_state(operator_siteinds(2; d = 3), ["X", "I"])
+  end
+end
+
+@testset "generic operator-space gates" begin
+  @testset "pauli_gate matches the explicit d = 2 definition" begin
+    # Ground truth independent of operator_gate's own implementation: recompute
+    # G[a, b] = tr(P_a' * u * P_b * u') directly from operator_basis_matrices(2), the same
+    # definition operator_gate's docstring states. pauli_gate(u) is literally
+    # operator_gate(u; d=2) (see gates.jl), so comparing pauli_gate against operator_gate
+    # would be tautological -- this checks the convention itself, independently.
+    x = ComplexF64[0 1; 1 0]
+    z = ComplexF64[1 0; 0 -1]
+    dt = 0.3
+    u = exp(-dt * im * kron(x, z))
+    # Genuinely non-Hermitian: a real-time evolution gate is unitary, not Hermitian in
+    # general. A Hermitian u would not distinguish the correct A*P*A' from a wrong
+    # conjugation such as A*P*A, so pin this so a future edit can't silently make u Hermitian.
+    @test norm(u - u') > 0
+    basis = operator_basis_matrices(2)
+    two_site = [kron(a, b) for a in basis for b in basis]
+    expected = ComplexF64[
+      tr(two_site[row]' * u * two_site[col] * u') for row in eachindex(two_site), col in eachindex(two_site)
+    ]
+    @test pauli_gate(u) ≈ expected atol = 1e-12
+  end
+
+  @testset "pauli_gate_from_hamiltonian delegates to operator_gate_from_hamiltonian" begin
+    h = spinhalf_xyz_bond_hamiltonian(; Jx = 1.0, Jy = 0.7, Jz = 0.3)
+    @test pauli_gate_from_hamiltonian(h, 0.1) ≈ operator_gate_from_hamiltonian(h, 0.1; d = 2) atol = 1e-14
+  end
+
+  @testset "d = 3 gate conjugates correctly" begin
+    d = 3
+    basis = operator_basis_matrices(d)
+    sz = ComplexF64[1 0 0; 0 0 0; 0 0 -1]
+    sx = ComplexF64[0 1 0; 1 0 1; 0 1 0] / sqrt(2)
+    h = kron(sx, sx) + kron(sz, sz)
+    dt = 0.13
+    gate = operator_gate_from_hamiltonian(h, dt; d = d)
+    @test size(gate) == (d^4, d^4)
+    # Compare against the definition on a few random two-site operators.
+    u = exp(-im * dt * Matrix{ComplexF64}(h))
+    two_site = [kron(a, b) for a in basis for b in basis]
+    for column in (1, 7, 40, d^4)
+      evolved = u * two_site[column] * u'
+      expected = ComplexF64[tr(two_site[row]' * evolved) for row in eachindex(two_site)]
+      @test gate[:, column] ≈ expected atol = 1e-10
+    end
+  end
+
+  @testset "operator_gate_from_imaginary_time matches the dense sandwich at d = 3" begin
+    # The generic entry point is only reached through `pauli_gate_from_imaginary_time` elsewhere
+    # in the suite, i.e. never at d != 2. Ground truth is the docstring's definition
+    # G[a, b] = tr(P_a' A P_b A') with A = e^{-(dbeta/2) h}, recomputed here from
+    # operator_basis_matrices(3) rather than from the implementation's own basis helper.
+    d = 3
+    h = kron(_S1_Z, _S1_Z) + 0.3 * kron(_S1_X, _S1_X)
+    dbeta = 0.35
+    a_matrix = exp(-(dbeta / 2) * h)
+    basis = operator_basis_matrices(d)
+    two_site = [kron(a, b) for a in basis for b in basis]
+    expected = ComplexF64[
+      tr(two_site[row]' * a_matrix * two_site[col] * a_matrix')
+      for row in eachindex(two_site), col in eachindex(two_site)
+    ]
+    gate = operator_gate_from_imaginary_time(h, dbeta; d = d)
+    @test size(gate) == (d^4, d^4)
+    @test gate ≈ expected atol = 1e-10
+    # `A` is Hermitian positive here, so this case cannot distinguish `A P A'` from `A P A`; the
+    # conjugation convention is pinned by the unitary "d = 3 gate conjugates correctly" above.
+    # What this case does own is the Hermiticity guard, checked at d = 3 rather than only at 2.
+    @test_throws ArgumentError operator_gate_from_imaginary_time(_S1_PLUS, dbeta; d = d)
+  end
+
+  @testset "operator_lindblad_generator matches the dense Lindbladian at d = 3" begin
+    # Ground truth from the documented action L(X) = -i[h, X] + sum_j (L_j X L_j' -
+    # {L_j'L_j, X}/2), read off as G[r, c] = tr(P_r' L(P_c)) with basis products built here.
+    d = 3
+    identity_matrix = Matrix{ComplexF64}(I, d, d)
+    h = kron(_S1_X, _S1_X) + 0.5 * kron(_S1_Z, _S1_Z) + 0.25 * kron(_S1_Z, identity_matrix)
+    jumps = [0.7 * kron(_S1_PLUS, identity_matrix), 0.4 * kron(identity_matrix, _S1_Z)]
+    dt = 0.2
+
+    basis = operator_basis_matrices(d)
+    two_site = [kron(a, b) for a in basis for b in basis]
+    function dense_generator(jump_list)
+      lindblad(x) = -im * (h * x - x * h) +
+                    sum(jump * x * jump' - 0.5 * (jump' * jump * x + x * jump' * jump)
+                        for jump in jump_list)
+      return ComplexF64[
+        tr(two_site[row]' * lindblad(two_site[col]))
+        for row in eachindex(two_site), col in eachindex(two_site)
+      ]
+    end
+    expected = dense_generator(jumps)
+
+    generator = operator_lindblad_generator(h, jumps; d = d)
+    @test size(generator) == (d^4, d^4)
+    @test generator ≈ expected atol = 1e-10
+    # The gate is the matrix exponential of that generator, checked against the dense generator
+    # rather than against `operator_lindblad_generator`'s own output.
+    @test operator_gate_from_lindbladian(h, jumps, dt; d = d) ≈ exp(dt * expected) atol = 1e-10
+    # Dissipation is load-bearing: without jumps the generator would be anti-Hermitian and a
+    # sign error in the dissipator could hide.
+    @test norm(generator + generator') > 0.1
+
+    # Sparse jump operators (as produced by EDKit-style builders) go through both the bare-matrix
+    # and the vector overload of `_lindblad_jump_list`, and are densified internally.
+    sparse_jump = sparse(0.7 * kron(_S1_PLUS, identity_matrix))
+    @test sparse_jump isa AbstractSparseMatrix
+    single_expected = dense_generator([Matrix{ComplexF64}(sparse_jump)])
+    @test operator_lindblad_generator(h, sparse_jump; d = d) ≈ single_expected atol = 1e-10
+    @test operator_lindblad_generator(h, [sparse_jump]; d = d) ≈ single_expected atol = 1e-10
+    @test operator_gate_from_lindbladian(h, sparse_jump, dt; d = d) ≈
+          exp(dt * single_expected) atol = 1e-10
+  end
+
+  @testset "identity Hamiltonian gives the identity superoperator" begin
+    for d in (2, 3, 4)
+      gate = operator_gate(Matrix{ComplexF64}(I, d, d); d = d)
+      @test gate ≈ Matrix{ComplexF64}(I, d^2, d^2) atol = 1e-12
+    end
+  end
+
+  @testset "sparse Hamiltonians from EDKit-style builders are accepted" begin
+    d = 3
+    sz = sparse(ComplexF64[1 0 0; 0 0 0; 0 0 -1])
+    h = kron(sz, sz)
+    @test h isa AbstractSparseMatrix
+    dense_gate = operator_gate_from_hamiltonian(Matrix(h), 0.1; d = d)
+    @test operator_gate_from_hamiltonian(h, 0.1; d = d) ≈ dense_gate atol = 1e-12
+  end
+
+  @testset "operator_gate densifies sparse input directly" begin
+    # The test above only exercises sparse input through operator_gate_from_hamiltonian,
+    # whose exp(...) densifies before operator_gate ever sees it. Call operator_gate itself
+    # on a sparse matrix to exercise its own Matrix{ComplexF64}(op) densification.
+    d = 3
+    sz = sparse(ComplexF64[1 0 0; 0 0 0; 0 0 -1])
+    @test sz isa AbstractSparseMatrix
+    @test operator_gate(sz; d = d) ≈ operator_gate(Matrix(sz); d = d) atol = 1e-12
+  end
+
+  @testset "span inference rejects incompatible sizes" begin
+    # A dense physical matrix of size d^span x d^span acts on `span` sites of local dimension
+    # d: 3^2 = 9 is two sites, 3^4 = 81 is four sites (matches the "d = 3 gate conjugates
+    # correctly" testset above, which independently pins a 9x9 two-site Hamiltonian to a
+    # d^4 x d^4 gate).
+    @test MPSToolkit._operator_span(9, 3) == 2
+    @test MPSToolkit._operator_span(81, 3) == 4
+    @test_throws ArgumentError MPSToolkit._operator_span(8, 3)
+  end
+end
+
+@testset "generic operator-space measurement" begin
+  @testset "trace and expectations at d = 3 match dense linear algebra" begin
+    d = 3
+    nsites = 3
+    sites = operator_siteinds(nsites; d = d)
+    sz = ComplexF64[1 0 0; 0 0 0; 0 0 -1]
+    identity_matrix = Matrix{ComplexF64}(I, d, d)
+    # rho = I x I x I  +  0.4 * (I x S^z x I) : a genuine near-infinite-temperature operator
+    rho = add(
+      operator_product_state(sites, [identity_matrix, identity_matrix, identity_matrix]),
+      operator_product_state(sites, [identity_matrix, sz, identity_matrix]; coefficient = 0.4);
+      maxdim = 4, cutoff = 0.0)
+
+    dense = kron(kron(identity_matrix, identity_matrix), identity_matrix) +
+            0.4 * kron(kron(identity_matrix, sz), identity_matrix)
+    @test operator_trace(rho) ≈ tr(dense) atol = 1e-10
+
+    for (start, op) in ((2, sz), (1, kron(sz, sz)))
+      span = start == 1 ? 2 : 1
+      padded = start == 1 ? kron(op, identity_matrix) : kron(kron(identity_matrix, op), identity_matrix)
+      @test operator_expectation(rho, op, start; normalize = false) ≈ tr(dense * padded) atol = 1e-10
+      @test operator_expectation(rho, op, start) ≈ tr(dense * padded) / tr(dense) atol = 1e-10
+    end
+  end
+
+  @testset "pauli_* measurement wrappers are unchanged" begin
+    sites = pauli_siteinds(4)
+    rho = add(pauli_basis_state(sites, fill(1, 4)),
+              pauli_domain_wall_state(sites; kink = 2); maxdim = 4, cutoff = 0.0)
+    z = pauli_matrices().Z
+    terms = [(x, ComplexF64.(z)) for x in 1:4]
+
+    # Independent ground truth via dense linear algebra, using the same _dense_operator_from_basis
+    # helper the label-based tests at the top of this file use (not pauli_trace/operator_trace
+    # themselves -- comparing those against each other is tautological, since pauli_trace(rho) IS
+    # literally operator_trace(rho), a one-line delegation that cannot fail regardless of whether
+    # the underlying math is right; this is the same defect class fixed in Task 3's F2 finding).
+    # rho = pauli_basis_state(sites, fill(1, 4)) + pauli_domain_wall_state(sites; kink = 2) is,
+    # in the normalized-Pauli convention, literal_scale * I_16 + literal_scale * sum_j coeffs[j] *
+    # Z_j (embedded, identity elsewhere), with literal_scale = (1/sqrt(2))^4 from the four
+    # P_1 = I/sqrt(2) (resp. P_4 = Z/sqrt(2)) factors, and coeffs = [-1, -1, 1, 1] for kink = 2,
+    # coefficient = 1.0 (default): sites 1:kink get -1, the rest get +1.
+    literal_scale = (1 / sqrt(2))^4
+    coeffs = [-1.0, -1.0, 1.0, 1.0]
+    dense_rho = literal_scale * _dense_operator_from_basis(fill(1, 4))
+    for (j, c) in enumerate(coeffs)
+      labels = fill(1, 4)
+      labels[j] = 4
+      dense_rho += literal_scale * c * _dense_operator_from_basis(labels)
+    end
+    expected_trace = tr(dense_rho)
+    expected_profile = ComplexF64[
+      tr(dense_rho * _dense_operator_from_basis([j == x ? 4 : 1 for j in 1:4])) for x in 1:4
+    ]
+
+    @test operator_trace(rho) ≈ expected_trace atol = 1e-10
+    @test operator_expectation_profile(rho, terms; normalize = false) ≈ expected_profile atol = 1e-10
+
+    # Honest delegation checks: pauli_trace/pauli_expectation_profile ARE operator_trace/
+    # operator_expectation_profile here, so these only confirm the wrapper forwards its
+    # arguments unchanged, not that the underlying math is right -- that is the pinned
+    # comparison above. Exact equality, not approximate: it is the same call.
+    @test pauli_trace(rho) == operator_trace(rho)
+    @test pauli_expectation_profile(rho, terms; normalize = false) ==
+          operator_expectation_profile(rho, terms; normalize = false)
+  end
+
+  @testset "operator_state_from_mpo round-trips at d = 3" begin
+    d = 3
+    nsites = 3
+    phys = siteinds("S=1", nsites)
+    sites = operator_siteinds(nsites; d = d)
+    mpo = MPO(phys, "Id")
+    vectorized = operator_state_from_mpo(mpo, sites)
+    @test operator_trace(vectorized) ≈ ComplexF64(d^nsites) atol = 1e-10
+
+    # The identity alone leaves the whole vectorization on basis label 1 of every site, so it
+    # cannot see a wrong basis element, a wrong site ordering, or a missing conjugation. Vectorize
+    # a bond-dimension > 1, non-Hermitian MPO and read every observable back out against the
+    # dense matrix contracted from the same MPO.
+    op = _spin1_test_mpo(phys)
+    dense = _dense_matrix_from_mpo(op, phys)
+    @test maxlinkdim(op) > 1
+    @test norm(dense - dense') > 0.1
+    round_tripped = operator_state_from_mpo(op, sites)
+    # The converter reuses the MPO link indices, so the bond dimension is carried over unchanged.
+    @test maxlinkdim(round_tripped) == maxlinkdim(op)
+    @test operator_trace(round_tripped) ≈ tr(dense) atol = 1e-10
+    for (start, probe) in ((1, _S1_Z), (2, _S1_X), (3, _S1_Z), (1, kron(_S1_Z, _S1_X)))
+      want = tr(dense * _embed_dense(probe, start, nsites, d))
+      @test abs(want) > 1e-3          # not a zero-against-zero comparison
+      @test operator_expectation(round_tripped, probe, start; normalize = false) ≈ want atol = 1e-10
+    end
+  end
+end
+
+@testset "generic operator-space vectorization" begin
+  @testset "operator_superoperator_mpo sandwiches M rho M' at d = 3" begin
+    # `operator_superoperator_mpo` is reached only through `pauli_superoperator_mpo` elsewhere in
+    # the suite, so its generic conversion tensors and its (ket, bra) link fusion have never run
+    # at d != 2. Check the lifted map against dense linear algebra: a non-Hermitian M so the
+    # bra-side conjugation matters, and a traceful rho so the probes below are not all zero.
+    d, nsites = 3, 3
+    phys = siteinds("S=1", nsites)
+    sites = operator_siteinds(nsites; d = d)
+    m_mpo = _spin1_test_mpo(phys)
+    dense_m = _dense_matrix_from_mpo(m_mpo, phys)
+    @test maxlinkdim(m_mpo) > 1
+    @test norm(dense_m - dense_m') > 0.1
+
+    identity_matrix = Matrix{ComplexF64}(I, d, d)
+    rho = add(operator_product_state(sites, fill(identity_matrix, nsites)),
+              operator_product_state(sites, [_S1_Z, identity_matrix, identity_matrix];
+                                     coefficient = 0.4); maxdim = 16, cutoff = 0.0)
+    rho = add(rho, operator_product_state(sites, [identity_matrix, _S1_X, _S1_Z];
+                                          coefficient = 0.3); maxdim = 16, cutoff = 0.0)
+    dense_rho = foldl(kron, (identity_matrix, identity_matrix, identity_matrix)) +
+                0.4 * foldl(kron, (_S1_Z, identity_matrix, identity_matrix)) +
+                0.3 * foldl(kron, (identity_matrix, _S1_X, _S1_Z))
+
+    super = operator_superoperator_mpo(m_mpo, sites)
+    # A bond-dimension-k physical MPO lifts to bond dimension k^2 (the fused ket/bra links).
+    @test maxlinkdim(super) == maxlinkdim(m_mpo)^2
+    sandwiched = apply(super, rho; maxdim = 200, cutoff = 0.0)
+    expected = dense_m * dense_rho * dense_m'
+
+    @test operator_trace(sandwiched) ≈ tr(expected) atol = 1e-10
+    for (start, probe) in ((1, _S1_Z), (2, _S1_X), (3, _S1_Z),
+                           (1, kron(_S1_Z, _S1_X)), (2, kron(_S1_X, _S1_Z)))
+      want = tr(expected * _embed_dense(probe, start, nsites, d))
+      @test abs(want) > 1e-3          # not a zero-against-zero comparison
+      @test operator_expectation(sandwiched, probe, start; normalize = false) ≈ want atol = 1e-10
+    end
+  end
+end
+
+@testset "generic operator-space thermal preparation" begin
+  @testset "operator_gibbs_state matches the dense Gibbs state at d = 3" begin
+    # `operator_gibbs_state` is exercised only at d = 2 (through `pauli_gibbs_state` in the PXP
+    # tests). At 4 spin-1 sites the largest bond is 9^2 = 81, so `maxdim = 200` with
+    # `cutoff = 0.0` truncates nothing: the ONLY error left is the Trotter splitting, and the
+    # comparison against the dense e^{-K} is exact up to it.
+    d, nsites = 3, 4
+    sites = operator_siteinds(nsites; d = d)
+    h_bond = kron(_S1_Z, _S1_Z) + 0.5 * kron(_S1_X, _S1_X)
+    terms = [(j, h_bond) for j in 1:(nsites - 1)]
+    beta = 0.4
+    weights = fill(beta, length(terms))
+    kdense = sum(w * _embed_dense(h, start, nsites, d) for ((start, h), w) in zip(terms, weights))
+    gibbs = exp(-Matrix(kdense))
+    wanted = [tr(gibbs * _embed_dense(h_bond, start, nsites, d)) / tr(gibbs) for (start, _) in terms]
+
+    function bond_energy_error(nsteps)
+      rho = operator_gibbs_state(sites, terms, weights; nsteps = nsteps, maxdim = 200, cutoff = 0.0)
+      return maximum(abs(operator_expectation(rho, h_bond, start) - want)
+                     for ((start, _), want) in zip(terms, wanted))
+    end
+    coarse = bond_energy_error(8)
+    fine = bond_energy_error(16)
+    @info "operator_gibbs_state at d = 3: worst <h_j> error $(fine) at nsteps = 16, " *
+          "$(coarse) at nsteps = 8 (ratio $(coarse / fine))"
+    @test fine < 3e-6
+    # ... and the residue is the second-order Trotter error of the symmetrized sweep, not a wrong
+    # state: halving the slice quarters it. Without this, "3e-6" would only say "small".
+    @test coarse / fine > 3
+    # The bond energies themselves are far from zero, so the agreement above has content.
+    @test minimum(abs, wanted) > 0.1
+  end
+end
+
+@testset "spin-1/2-only helpers reject higher local dimension" begin
+  # DAOE and the PXP constraint helpers key off the Pauli (I, X, Y, Z) label ordering and the
+  # two-level PXP blockade construction; they are out of scope for the higher-spin
+  # generalization and must say so rather than silently producing nonsense at d = 3.
+  sites = operator_siteinds(4; d = 3)
+  @test_throws ArgumentError pauli_daoe_projector(sites; lstar = 2, gamma = 0.5)
+  @test_throws ArgumentError pauli_fdaoe_projector(sites; wstar = 2, gamma = 0.5)
+  @test_throws ArgumentError pauli_pxp_constraint_state(sites)
+  @test_throws ArgumentError pauli_pxp_constraint_projector(sites)
 end

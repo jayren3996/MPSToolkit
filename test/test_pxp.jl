@@ -309,6 +309,9 @@ end
   @testset "error and edge paths" begin
     @test isempty(pauli_expectation_profile(rho, Tuple{Int,Matrix{ComplexF64}}[]))
     @test_throws ArgumentError pauli_expectation_profile(rho, [(0, _random_hermitian(1, 1))])
+    # Regression: start beyond the chain length used to reach siteind(rho, start) while
+    # computing span, raising a raw BoundsError instead of this ArgumentError.
+    @test_throws ArgumentError pauli_expectation_profile(rho, [(length(rho) + 1, _random_hermitian(1, 1))])
     @test_throws ArgumentError pauli_expectation_profile(rho, [(nsites, _random_hermitian(2, 1))])
     @test_throws ArgumentError pauli_expectation_profile(rho, [(1, ones(ComplexF64, 2, 3))])
     # numerics-1: a numerically-negligible (not exactly zero) trace is rejected under
@@ -474,7 +477,6 @@ end
     maxdim=64,
     cutoff=1e-12,
     gate_maxdim=256,
-    connector_buffer=4,
   )
   projector = pauli_pxp_constraint_projector(psites)
 
@@ -556,7 +558,6 @@ end
     maxdim=64,
     cutoff=0.0,
     gate_maxdim=256,
-    connector_buffer=8,
   )
   constrained_dmt_evolve!(O, evo, projector; project_every=1, normalize=false)
   profile_t = real.(pauli_expectation_profile(O, terms; normalize=false))
@@ -596,7 +597,6 @@ end
     maxdim=64,
     cutoff=1e-12,
     gate_maxdim=256,
-    connector_buffer=4,
   )
   projector = pauli_pxp_constraint_projector(psites)
 
@@ -648,7 +648,7 @@ end
   evo = DMTGateEvolution(
     gates, 0.05;
     schedule=schedule, reverse_schedule=reverse(schedule),
-    nstep=4, maxdim=64, cutoff=1e-12, gate_maxdim=256, connector_buffer=4, normalize=false,
+    nstep=4, maxdim=64, cutoff=1e-12, gate_maxdim=256, normalize=false,
   )
 
   honored = copy(rho)

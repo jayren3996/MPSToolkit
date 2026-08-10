@@ -28,7 +28,7 @@ operator-space tools, and spectral routines all stay directly callable and recom
 | ⏱ **Dense-gate TEBD** | Explicit odd–even–odd Strang schedules from local Hamiltonians via `tebd_strang_evolution` / `tebd_strang_schedule`. |
 | 🌀 **MPO-based TDVP** | Finite open-boundary `MPS` evolution through `TDVPEvolution`. |
 | 🎯 **ScarFinder workflows** | Explicit projection (`project!`), energy targeting (`match_energy!`), and selector-driven refinement (`scarfinder!`, `trajectory_refine!`). |
-| ⚛️ **Pauli operator space** | States and gates (`pauli_siteinds`, `pauli_basis_state`, `pauli_gate_from_hamiltonian`) for coherent and open-system evolution. |
+| ⚛️ **Operator space, any local dimension** | States and gates (`operator_siteinds`, `operator_basis_state`, `operator_gate_from_hamiltonian`) for coherent and open-system evolution; `pauli_*` names are the spin-1/2 case. |
 | 🧪 **Operator-space truncation** | Density-matrix truncation (DMT) and DAOE / FDAOE dissipative projectors. |
 | 📈 **Chebyshev spectra** | Moments, energy-window cutoff, Jackson damping, and spectral-function reconstruction. |
 | 📐 **Diagnostics** | `energy_density`, `bond_entropy`, `entanglement_spectrum`, and `fidelity_distance`. |
@@ -181,7 +181,7 @@ exported from the root module.
 
 - `evolve!`, `project!`, and `energy_density` are **dispatch points** — check the concrete methods before changing behavior.
 - Dense local operators are interpreted through the **local site dimension** of the input `MPS`.
-- Operator-space code assumes the local Pauli ordering **`(I, X, Y, Z)`** unless a docstring says otherwise.
+- Operator-space code vectorizes onto a generalized Gell-Mann basis, identity first, generic in the local Hilbert space dimension `d` (`operator_*`); at `d = 2` this is exactly the Pauli ordering **`(I, X, Y, Z)`** that every `pauli_*` name uses, unless a docstring says otherwise.
 - **Finite OBC `MPS`** is the main supported state class; periodic behavior is limited to a few helper cases.
 - **ScarFinder step-count guard.** `scarfinder!`, `scarfinder_step!`, and `trajectory_refine!` treat an effective evolution step count of `1` as a misconfiguration: they emit a warning and internally use `10` for that call. This rule is local to ScarFinder — global TEBD, DMT, and TDVP constructors keep their own defaults, and the energy-correction substeps inside `match_energy!` intentionally remain single-step.
 

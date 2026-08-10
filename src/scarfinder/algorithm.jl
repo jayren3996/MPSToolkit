@@ -99,7 +99,8 @@ function _scarfinder_rebuild_evolution(evolution::DMTGateEvolution, steps)
     maxdim=evolution.maxdim,
     cutoff=evolution.cutoff,
     gate_maxdim=evolution.gate_maxdim,
-    connector_buffer=evolution.connector_buffer,
+    preserve_diameter=evolution.preserve_diameter,
+    truncation=evolution.truncation,
     normalize=evolution.normalize,
   )
 end
