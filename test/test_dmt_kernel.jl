@@ -442,6 +442,33 @@ end
   @test deficit > 1e-3
 end
 
+@testset "_mps_eltype promotes over the whole chain" begin
+  # The type the bond step runs in is inferred from every tensor in the chain, not from
+  # `psi[bond]`: the step also consumes `psi[bond + 1]`, the interior protected sites, and both
+  # identity/trace environments, which contract over every tensor there is.
+  sites = operator_siteinds(4; d = 2)
+  @test MPSToolkit._mps_eltype(random_mps(sites; linkdims = 4)) === Float64
+  @test MPSToolkit._mps_eltype(random_mps(ComplexF64, sites; linkdims = 4)) === ComplexF64
+  # A MIXED chain -- exactly what the kernel used to return -- is the case the scan exists for.
+  mixed = random_mps(sites; linkdims = 4)
+  mixed[3] = ComplexF64(1) * mixed[3]
+  @test eltype(mixed[1]) === Float64                  # ... genuinely mixed, not wholly promoted
+  @test MPSToolkit._mps_eltype(mixed) === ComplexF64
+  # `float`: an integer-valued tensor is legal in ITensors, and the DMT algebra divides.
+  integral = ITensor(sites[1])
+  integral[sites[1] => 1] = 1
+  @test eltype(integral) === Int
+  @test MPSToolkit._mps_eltype(MPS([integral])) === Float64
+  # An unset tensor is `NDTensors.EmptyNumber`, which carries no information but subtypes `Real`,
+  # so NO subtype test against `Number`/`Real`/`Complex` screens it out and `float` of it is
+  # `Float64`. It has to be recognized by name; these assertions are why.
+  unset = MPS([ITensor(site) for site in sites])
+  @test eltype(unset[1]) === ITensors.NDTensors.EmptyNumber
+  @test eltype(unset[1]) <: Real
+  @test float(eltype(unset[1])) === Float64
+  @test MPSToolkit._mps_eltype(unset) === ComplexF64
+end
+
 @testset "a real-coefficient state stays real through a bond step" begin
   # Every onsite operator basis element is Hermitian, so a Hermitian operator -- any density
   # matrix -- has REAL coefficients in this basis, and the whole bond step can run in `Float64`.

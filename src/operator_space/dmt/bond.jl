@@ -62,6 +62,41 @@ function _unit_direction(x::AbstractVector)
 end
 
 """
+    _mps_eltype(psi)
+
+Return the single element type one DMT bond step should run in: the promotion over the element
+types of **every** tensor in `psi`.
+
+# Notes
+- The scan covers the whole chain rather than just `psi[bond]` because a bond step consumes
+  rather more than the bond tensor: `psi[bond + 1]`, the interior protected sites, and both
+  identity/trace environments, which contract over every tensor in the chain. A single complex
+  tensor anywhere therefore makes `protected_left`/`protected_right` complex, and the `hcat`s
+  that assemble the refactorization would re-promote a partially converted factor with no error
+  (`hcat(::Matrix{Float64}, ::Matrix{ComplexF64})` is `Matrix{ComplexF64}`). The scan costs
+  ~100 ns against the `O(chi^3)` work of the step it types.
+- The result is a *promotion*, so every conversion inside the kernel widens and an imaginary
+  component can never be dropped. It is also gauge invariant: `orthogonalize!`, `qr` and `svd`
+  preserve element types, so scanning before the re-gauge below gives the same answer as after.
+- `float` maps an `Int`-valued tensor (legal in ITensors) onto `Float64`; the DMT algebra divides.
+- `NDTensors.EmptyNumber`, the element type of a tensor that has never been assigned, has to be
+  screened out **by name**: it subtypes `Real` (verified on ITensors 0.9.30 --
+  `supertype(EmptyNumber) === Real`), so no subtype test against `Number`, `Real` or `Complex`
+  excludes it, and `float(EmptyNumber)` is `Float64` -- which would type the whole step off a
+  chain carrying no data at all. Nothing can be inferred there, so it falls back to the
+  `ComplexF64` this kernel used unconditionally before the type was threaded.
+"""
+function _mps_eltype(psi::MPS)
+  T = eltype(psi[1])
+  for n in 2:length(psi)
+    T = promote_type(T, eltype(psi[n]))
+  end
+  T === ITensors.NDTensors.EmptyNumber && return ComplexF64
+  T <: Union{Real,Complex} || return ComplexF64
+  return float(T)
+end
+
+"""
     _dmt_bond_factorize(psi, bond, left_inds; factorize=:qr)
 
 Split the bond tensor `psi[bond]` into an orthonormal left basis, the bond matrix expressed in
