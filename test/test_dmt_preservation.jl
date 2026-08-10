@@ -14,13 +14,21 @@ include("dmt_test_helpers.jl")
     nsites, chi, maxdim = 7, 40, 24
     sites = operator_siteinds(nsites; d=2)
     probes = diameter_probes(nsites, 2, 3)
-    for (label, noise) in (("Hermitian (real coefficients)", random_mps(sites; linkdims=chi)),
-      ("non-Hermitian (complex)", random_mps(ComplexF64, sites; linkdims=chi)))
+    # `elt` is the element type each arm is supposed to run in, asserted BEFORE and AFTER the
+    # truncation. The "after" assertion is the load-bearing one: `random_mps(sites; ...)` (no
+    # element type argument) is `Float64`, but a kernel that coerced its own intermediates to
+    # `ComplexF64` returned a MIXED `[Float64, ComplexF64]` chain -- so this arm silently
+    # exercised the complex path and the A/B against the complex arm below tested nothing.
+    for (label, noise, elt) in (
+      ("Hermitian (real coefficients)", random_mps(sites; linkdims=chi), Float64),
+      ("non-Hermitian (complex)", random_mps(ComplexF64, sites; linkdims=chi), ComplexF64))
       rho = add(operator_basis_state(sites, fill(1, nsites)), 0.3 * noise;
         maxdim=chi + 1, cutoff=0.0)
+      @test mps_eltype(rho) === elt
       before = operator_expectation_profile(rho, probes; normalize=false)
       trace_before = operator_trace(rho)
       MPSToolkit._dmt_bond_truncate!(rho, 4; maxdim=maxdim, cutoff=0.0)
+      @test mps_eltype(rho) === elt
       after = operator_expectation_profile(rho, probes; normalize=false)
       @test dim(linkind(rho, 4)) <= maxdim
       @test preservation_error(before, after) < 1e-11

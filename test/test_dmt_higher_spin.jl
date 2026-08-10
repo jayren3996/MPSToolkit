@@ -66,14 +66,21 @@ include("dmt_test_helpers.jl")
       # pass a 4-element capped sweep at d > 2 and fail this one.
       structured = diameter_probes(nsites, d, 3; nrandom=0)
       probes = vcat(structured, random_window_probes(nsites, d, 1:3))
-      for (label, noise) in (("Hermitian (real coefficients)", random_mps(sites; linkdims=chi)),
-        ("non-Hermitian (complex)", random_mps(ComplexF64, sites; linkdims=chi)))
+      # `elt` is the element type each arm is supposed to run in, asserted BEFORE and AFTER the
+      # truncation; see the same loop in `test_dmt_preservation.jl` for why the "after" assertion
+      # is the load-bearing one. `d > 2` is where it matters most: the promoted copy `NDTensors`
+      # materializes across a mixed seam scales with the bond, and the bond scales as `d^2`.
+      for (label, noise, elt) in (
+        ("Hermitian (real coefficients)", random_mps(sites; linkdims=chi), Float64),
+        ("non-Hermitian (complex)", random_mps(ComplexF64, sites; linkdims=chi), ComplexF64))
         rho = add(operator_basis_state(sites, fill(1, nsites)), 0.3 * noise;
           maxdim=chi + 1, cutoff=0.0)
+        @test mps_eltype(rho) === elt
         @test dim(linkind(rho, 3)) > maxdim          # the truncation really fires
         before = operator_expectation_profile(rho, probes; normalize=false)
         trace_before = operator_trace(rho)
         MPSToolkit._dmt_bond_truncate!(rho, 3; maxdim=maxdim, cutoff=0.0)
+        @test mps_eltype(rho) === elt
         after = operator_expectation_profile(rho, probes; normalize=false)
         assert_preserved("d = $(d), $(label)", probes, length(structured), before, after, d, 3)
         @test dim(linkind(rho, 3)) <= maxdim

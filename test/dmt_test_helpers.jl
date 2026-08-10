@@ -93,6 +93,18 @@ Support width in sites of a probe matrix at local dimension `d`.
 probe_span(op::AbstractMatrix, d::Int) = round(Int, log(size(op, 1)) / log(d))
 
 """
+The single element type an `MPS` is really in: the promotion over every tensor in the chain.
+
+# Notes
+- `eltype(psi)` is `ITensor`, and `eltype(psi[n])` is per-tensor, so neither detects the failure
+  mode this exists for: a **mixed** chain. ITensors is happy to hold `[Float64, ComplexF64]`, and
+  `NDTensors` then materializes a promoted copy of the larger operand on every contraction across
+  the seam -- so a real state can silently pay the complex price while every tensor-local check
+  says it is real. Only the whole-chain promotion sees that.
+"""
+mps_eltype(psi) = mapreduce(eltype, promote_type, ITensorMPS.data(psi))
+
+"""
 Relative sup-norm change of a profile of expectation values under truncation.
 """
 function preservation_error(before, after)
