@@ -976,6 +976,36 @@ end
     # The bond energies themselves are far from zero, so the agreement above has content.
     @test minimum(abs, wanted) > 0.1
   end
+
+  @testset "a long cold chain does not overflow during preparation" begin
+    # An imaginary-time gate is not norm preserving, and `operator_gibbs_state` used to rescale
+    # only once, after the last one. The un-normalized `norm(rho) = (sum_m e^{-2 beta m})^{L/2}`
+    # then overflows `Float64` and LAPACK throws `matrix contains Infs or NaNs` from inside the
+    # NEXT gate's SVD -- about twenty frames below any MPSToolkit code, and on a state whose bond
+    # dimension may be 1, so nothing is ill-conditioned and the message points nowhere useful.
+    # Measured to fail at (d, L, beta) = (3, 256, 6) and (3, 512, 2).
+    d, nsites, beta = 3, 200, 6.0
+    sites = operator_siteinds(nsites; d = d)
+    identity3 = Matrix{ComplexF64}(I, d, d)
+    # A two-site gate acting on its LEFT site only. That keeps the state an exact product -- so a
+    # 200-site cold chain is cheap and the answer is the closed-form single-site Gibbs value --
+    # while still routing every application through the two-site SVD where the overflow surfaced.
+    # `sum_j beta = 1194` in log-norm, comfortably past `log(floatmax) = 709`.
+    terms = [(j, kron(_S1_Z, identity3)) for j in 1:(nsites - 1)]
+    rho = operator_gibbs_state(sites, terms, fill(beta, length(terms));
+                               nsteps = 1, maxdim = 8, cutoff = 0.0)
+    @test all(all(isfinite, Array(t, inds(t)...)) for t in ITensorMPS.data(rho))
+
+    # Correct in value, not merely non-throwing: sites 1..L-1 each carry exactly one term.
+    wanted = -2 * sinh(beta) / (1 + 2 * cosh(beta))
+    @test abs(wanted) > 0.9                       # not a zero-against-zero comparison
+    for site in (1, 2, 100, nsites - 1)
+      @test operator_expectation(rho, _S1_Z, site) ≈ ComplexF64(wanted) atol = 1e-12
+    end
+    # The last site is outside every term's support and must stay infinite-temperature. Without
+    # this, a state that had collapsed to a uniform product would still pass the checks above.
+    @test abs(operator_expectation(rho, _S1_Z, nsites)) < 1e-12
+  end
 end
 
 @testset "spin-1/2-only helpers reject higher local dimension" begin
@@ -987,4 +1017,90 @@ end
   @test_throws ArgumentError pauli_fdaoe_projector(sites; wstar = 2, gamma = 0.5)
   @test_throws ArgumentError pauli_pxp_constraint_state(sites)
   @test_throws ArgumentError pauli_pxp_constraint_projector(sites)
+end
+
+@testset "Hermitian operator space runs in real arithmetic" begin
+  # In a basis of Hermitian operators every Hermiticity-preserving superoperator has a real
+  # matrix, so a Hermitian density matrix can be built, evolved and truncated entirely in
+  # Float64 -- worth ~2x in time and exactly 2x in memory. These pin that the fast path is
+  # actually engaged, which no numerical assertion can see: a silently complex run gives the
+  # same answers, just slower.
+  mps_elt(psi) = mapreduce(eltype, promote_type, ITensorMPS.data(psi))
+  sz3 = Matrix{ComplexF64}(Diagonal([1.0, 0.0, -1.0]))
+  sx3 = Matrix{ComplexF64}([0 1 0; 1 0 1; 0 1 0] / sqrt(2))
+
+  @testset "gate builders return real matrices" begin
+    for (d, h) in ((2, kron(ComplexF64[0 1; 1 0], ComplexF64[0 1; 1 0])),
+                   (3, kron(sz3, sz3) + kron(sx3, sx3)))
+      @test eltype(operator_gate_from_hamiltonian(h, 0.1; d = d)) === Float64
+      @test eltype(operator_gate_from_imaginary_time(h, 0.1; d = d)) === Float64
+    end
+    # The derivation needs neither unitarity nor Hermiticity of A, so even a random complex
+    # map has a real superoperator. This is the claim that makes the downcast unconditional.
+    @test eltype(operator_gate(randn(ComplexF64, 3, 3); d = 3)) === Float64
+  end
+
+  @testset "state builders are uniform and real" begin
+    d = 3
+    sites = operator_siteinds(6; d = d)
+    idm = Matrix{ComplexF64}(I, d, d)
+    @test mps_elt(operator_product_state(sites, fill(idm, 6))) === Float64
+    @test mps_elt(operator_local_sum_state(sites, sz3, fill(0.25, 6))) === Float64
+    @test mps_elt(operator_basis_state(sites, fill(1, 6))) === Float64
+    # A complex coefficient must promote the WHOLE chain. This used to promote only tensor 1,
+    # leaving [ComplexF64, Float64, ...] -- a mixed MPS costs a materialized promoted copy at
+    # every contraction spanning the boundary, and no per-tensor check reads as wrong.
+    complex_state = operator_basis_state(sites, fill(1, 6); coefficient = 1.0 + 0.0im)
+    @test mps_elt(complex_state) === ComplexF64
+    @test all(eltype(complex_state[n]) === ComplexF64 for n in 1:length(complex_state))
+  end
+
+  @testset "the real element type survives gate application" begin
+    d = 3
+    sites = operator_siteinds(8; d = d)
+    idm = Matrix{ComplexF64}(I, d, d)
+    rho = add(operator_product_state(sites, fill(idm, 8)),
+              operator_local_sum_state(sites, sz3, [j <= 4 ? -0.25 : 0.25 for j in 1:8]);
+              maxdim = 8, cutoff = 0.0)
+    @test mps_elt(rho) === Float64
+    gate = operator_gate_from_hamiltonian(kron(sz3, sz3) + kron(sx3, sx3), 0.05; d = d)
+    MPSToolkit.tebd_evolve!(rho, gate, 4; maxdim = 0, cutoff = 1e-12)
+    @test mps_elt(rho) === Float64
+    # A genuinely complex gate must promote the state rather than leave it mixed.
+    complex_gate = ComplexF64.(gate) .+ 1e-3im
+    MPSToolkit.tebd_evolve!(rho, complex_gate, 4; maxdim = 0, cutoff = 1e-12)
+    @test mps_elt(rho) === ComplexF64
+    @test all(eltype(rho[n]) === ComplexF64 for n in 1:length(rho))
+  end
+
+  @testset "_OPERATOR_GATE_FORCE_COMPLEX restores the complex path" begin
+    # The escape hatch exists so that "the complex path is unchanged" is checkable
+    # mechanically. If it stops working, that proof stops being available.
+    h = kron(sz3, sz3)
+    MPSToolkit._OPERATOR_GATE_FORCE_COMPLEX[] = true
+    try
+      @test eltype(operator_gate_from_hamiltonian(h, 0.1; d = 3)) === ComplexF64
+      @test eltype(MPSToolkit._operator_coefficients(sz3, 3)) === ComplexF64
+    finally
+      MPSToolkit._OPERATOR_GATE_FORCE_COMPLEX[] = false
+    end
+    @test eltype(operator_gate_from_hamiltonian(h, 0.1; d = 3)) === Float64
+  end
+
+  @testset "_promote_mps_eltype! preserves the orthogonality limits" begin
+    sites = operator_siteinds(6; d = 2)
+    psi = random_mps(sites; linkdims = 4)
+    orthogonalize!(psi, 3)
+    left, right = ITensorMPS.leftlim(psi), ITensorMPS.rightlim(psi)
+    MPSToolkit._promote_mps_eltype!(psi, ComplexF64)
+    @test mps_elt(psi) === ComplexF64
+    # An element-type change does not move the orthogonality centre; without saving and
+    # restoring these, setindex! would invalidate them and force a full re-gauge.
+    @test ITensorMPS.leftlim(psi) == left
+    @test ITensorMPS.rightlim(psi) == right
+    # Never a narrowing: asking for a narrower type leaves the data complex rather than
+    # silently dropping an imaginary part.
+    MPSToolkit._promote_mps_eltype!(psi, Float64)
+    @test mps_elt(psi) === ComplexF64
+  end
 end

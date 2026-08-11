@@ -72,7 +72,42 @@ function operator_gate(op::AbstractMatrix; d::Integer=2)
   for b in 1:nbasis
     w[:, b] = vec(basis[b])
   end
-  return adjoint(w) * (kron(conj(dense), dense) * w)
+  return _real_operator_data(adjoint(w) * (kron(conj(dense), dense) * w))
+end
+
+# Set to `true` to suppress the real downcast in `_real_operator_data`, forcing every gate and
+# coefficient vector to stay `ComplexF64`. This exists so that "the complex path is unchanged" can be established
+# mechanically -- flip it on and the whole suite must reproduce the numbers it produced before the
+# element type was threaded -- rather than by reading diffs.
+const _OPERATOR_GATE_FORCE_COMPLEX = Ref(false)
+
+"""
+    _real_operator_data(x)
+
+Return `real(x)` when the imaginary part of `x` is numerical noise, and `x` unchanged otherwise.
+Used for both operator-space gate matrices and operator-space coefficient vectors.
+
+# Notes
+- This recovers an exact property rather than approximating one. In a basis of *Hermitian*
+  operators every Hermiticity-preserving superoperator has a real matrix:
+  `conj(G[a, b]) = conj(tr(P_a' A P_b A')) = tr((P_a A P_b A')') = tr(A P_b A' P_a) = G[a, b]`,
+  using `P' = P` and the cyclicity of the trace. Note what the derivation does *not* need: `A`
+  need be neither unitary nor Hermitian, so the downcast is unconditional rather than a
+  Hermiticity heuristic. Measured residues across every builder here are 1e-18 to 1.2e-16
+  relative, at `d = 2, 3, 4`.
+- The tolerance is `sqrt(eps(Float64))` *relative*, this repo's existing threshold for exactly
+  this class of question (see `operator_gate_from_imaginary_time`'s Hermiticity check,
+  `_dmt_connector`'s connector-negligibility test, and `_reject_unresolvable_trace`). It sits
+  eight decades above the observed residue and far below any physical imaginary part. An absolute
+  threshold would misfire on a large-norm generator.
+- Falls back to the complex matrix instead of throwing, because
+  [`operator_basis_matrices`](@ref) explicitly sanctions substituting a non-Hermitian basis, and
+  for one of those a genuinely complex gate is the correct answer.
+"""
+function _real_operator_data(x::AbstractArray)
+  _OPERATOR_GATE_FORCE_COMPLEX[] && return x
+  norm(imag(x)) <= sqrt(eps(Float64)) * max(norm(x), one(Float64)) || return x
+  return real(x)
 end
 
 """
@@ -162,7 +197,10 @@ function operator_lindblad_generator(h::AbstractMatrix, jumps; d::Integer=2)
       generator[row, column] = tr(basis[row]' * evolved)
     end
   end
-  return generator
+  # Real by the same argument as in `_real_operator_data`: the Lindbladian preserves
+  # Hermiticity, so its matrix in a Hermitian basis is real. `operator_gate_from_lindbladian`
+  # inherits this for free, since `exp(::Matrix{Float64})` is a `Matrix{Float64}`.
+  return _real_operator_data(generator)
 end
 
 """

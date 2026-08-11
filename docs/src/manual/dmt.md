@@ -140,8 +140,15 @@ The truncation budget has a few knobs worth understanding:
 - `maxdim`: the **total** post-truncation bond dimension, *inclusive* of the protected block
   (see **Budget semantics** below) — not the complement alone, and not an addition on top of a
   separately-sized buffer.
-- `cutoff`: cutoff used only in the final "repair" SVD that re-factorizes the truncated bond
-  back into MPS form.
+- `cutoff`: relative cutoff on the **discarded complement**, measured against the leading
+  complement singular value. It cannot reach the protected block or the trace connector, so the
+  preservation guarantee holds at every `cutoff`, and the final repair SVD runs at a
+  numerical-rank tolerance rather than at this value. (Before this was structural, `cutoff` was
+  applied to the *reassembled* bond matrix, whose leading singular directions need not span the
+  protected row and column spaces. In operator space the identity dominates `σ₁`, so on a signal
+  `ε` above an infinite-temperature background every `cutoff > ε` collapsed the bond to the pure
+  identity: measured at `d = 2, ε = 1e-6, maxdim = 14`, `cutoff = 1e-6` gave `χ_out = 1` and a
+  preservation error of 0.98 against 1.5e-7 at `cutoff = 0`.)
 - `gate_maxdim`: temporary bond-dimension ceiling allowed while the raw gate is applied, before
   DMT compresses the bond back to `maxdim`. Defaults to `0`, meaning no cap: the gate is applied
   exactly.
@@ -598,7 +605,11 @@ exponents — see
     matched `d = 2` rungs. Not universal, though — ULS at `chi' = 46` is a resolved win of ≥ 3.5x
     at `t = 1.0` and a resolved *loss* of ≥ 1.5x at `t = 1.2` in that same cell. DMT is separately
     invariant to the cutoff itself (error moves ≤ 0.02% at `chi' >= 10`, against 34–268% for plain
-    SVD) and holds `tr(rho)` to `~1e-13` where plain SVD drifts to `1e-4`. Its *wall-amplitude*
+    SVD) and holds `tr(rho)` to `~1e-13` where plain SVD drifts to `1e-4`. That cutoff invariance
+    is now structural rather than empirical — `cutoff` binds on the complement alone — and it was
+    *not* structural when these numbers were taken: they were measured with the signal a few
+    percent of the norm, the one regime where the old placement happened to be harmless. See the
+    `cutoff` bullet under **Budget semantics**. Its *wall-amplitude*
     invariance is **not** unconditional: 272% spread across `eps` at `chi' = 2`.
 
 !!! warning "`S^z` is not a single basis element at `d >= 3`"
@@ -667,9 +678,13 @@ For *when* to prefer DMT, DAOE, or plain TEBD — and in particular why a dynami
   So treat the equal-`maxdim` DMT-vs-SVD comparison as a convergence check to run for your own
   model, budget `chi'` well into the tens, and do not read a crossover constant off any single
   model — it moved by at least 2.2x in `chi'` between two models here.
-- **`cutoff` is a repair-SVD setting, not the primary control.** It governs only the final
-  re-factorization of the already-truncated bond. The transport-relevant decision is made by
-  the DMT rule itself, so `maxdim` and `preserve_diameter` are the dials that matter.
+- **`cutoff` is a complement setting, not the primary control.** It governs only how many of the
+  *discardable* complement directions to keep, relative to the leading complement singular value.
+  The transport-relevant decision is made by the DMT rule itself, so `maxdim` and
+  `preserve_diameter` are the dials that matter. Note that `cutoff` means two different things in
+  this package, four decades apart and often two lines apart in a script: ITensors'
+  discarded-sum-of-squares in `operator_gibbs_state` and the plain-SVD paths, and this
+  complement-relative threshold in the DMT path.
 - **Higher-spin budgets grow fast.** The protected block has dimension `2 d^(2n)`
   (`n = (preserve_diameter - 1) / 2`), so at fixed `preserve_diameter` a spin-1 (`d = 3`) run
   needs a substantially larger `maxdim` than the equivalent spin-1/2 (`d = 2`) run for the same

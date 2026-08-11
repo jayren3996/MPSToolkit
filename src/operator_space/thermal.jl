@@ -93,25 +93,37 @@ function operator_gibbs_state(
     copy(initial_state)
   end
 
-  starts = Int[]
-  gates = Matrix{ComplexF64}[]
-  for ((start, h), weight) in zip(terms, weights)
-    iszero(weight) && continue
-    push!(starts, Int(start))
-    # Each gate is applied twice per Trotter step (forward + reverse sweep), so the slice per
-    # application is w / (2 nsteps), accumulating to e^{-(w/2) h} on each side overall.
-    push!(gates, operator_gate_from_imaginary_time(h, weight / (2 * nsteps); d=d))
-  end
+  active = [(Int(start), h, weight) for ((start, h), weight) in zip(terms, weights)
+            if !iszero(weight)]
+  starts = [start for (start, _, _) in active]
+  # Each gate is applied twice per Trotter step (forward + reverse sweep), so the slice per
+  # application is w / (2 nsteps), accumulating to e^{-(w/2) h} on each side overall.
+  # Collected by comprehension rather than pushed into a `Matrix{ComplexF64}[]`: an annotated
+  # container would re-widen the real gates `operator_gate_from_imaginary_time` now returns, and
+  # would silently put this whole path back onto complex arithmetic.
+  gates = [operator_gate_from_imaginary_time(h, weight / (2 * nsteps); d=d)
+           for (_, h, weight) in active]
 
+  # Rescaled after *every* gate, not once at the end. An imaginary-time gate is not norm
+  # preserving: each application multiplies `norm(rho)` by a factor > 1 (measured ~1.125 per gate
+  # at `d = 3, dbeta = 0.5`), and there are `2 nsteps (L - 1)` of them, so the un-normalized
+  # `norm(rho) = (sum_m e^{-2 beta m})^{L/2}` overflows `Float64` on a cold or long chain and
+  # LAPACK throws `matrix contains Infs or NaNs` from inside the next gate's SVD -- about twenty
+  # frames below any MPSToolkit code, on a state whose bond dimension may be 1. Measured to fail
+  # at `(d, L, beta) = (3, 256, 6)` and `(3, 512, 2)` with the single trailing `normalize!`.
+  # The overall scale is arbitrary (see the docstring), so rescaling changes no physics, and it is
+  # free: `tebd_evolve!` leaves a single-site orthogonality centre, so `normalize!` reads the norm
+  # off that one tensor in `O(chi^2 d)` rather than sweeping the chain.
   for _ in 1:nsteps
     for i in eachindex(starts)
       tebd_evolve!(rho, gates[i], starts[i]; maxdim=Int(maxdim), cutoff=cutoff)
+      normalize!(rho)
     end
     for i in reverse(eachindex(starts))
       tebd_evolve!(rho, gates[i], starts[i]; maxdim=Int(maxdim), cutoff=cutoff)
+      normalize!(rho)
     end
   end
-  normalize!(rho)
   return rho
 end
 

@@ -18,7 +18,10 @@ Options controlling operator-space density matrix truncation (DMT).
 - `maxdim`: **Total** bond dimension after DMT truncation, inclusive of the protected block.
   The complement is truncated to `maxdim - 2 d^(preserve_diameter - 1)` directions, so `maxdim`
   must be at least `2 d^(preserve_diameter - 1) + 1` for the local dimension `d` in use.
-- `cutoff`: Truncation cutoff used in the final refactorization.
+- `cutoff`: Relative cutoff on the *discarded complement*, measured against the leading
+  complement singular value. It never reaches the protected block or the trace connector, so
+  the preservation guarantee holds at every `cutoff`; `maxdim` and `preserve_diameter` remain
+  the dials that decide accuracy.
 - `gate_maxdim`: Temporary bond dimension cap applied while the raw gate is applied, before DMT
   truncates the bond back to `maxdim`. **`0` (the default) means no cap: the gate is applied
   exactly.** A positive cap pre-truncates the inflated bond with a plain SVD, which discards the
@@ -56,9 +59,10 @@ struct DMTOptions
   cutoff::Float64
   gate_maxdim::Int
   preserve_diameter::Int
+  preserve_operators::Any
   truncation::Symbol
 
-  function DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, truncation)
+  function DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, preserve_operators, truncation)
     maxdim >= 1 || throw(ArgumentError("DMTOptions requires maxdim >= 1"))
     cutoff >= 0 || throw(ArgumentError("DMTOptions requires cutoff >= 0"))
     gate_maxdim >= 0 || throw(ArgumentError("DMTOptions requires gate_maxdim >= 0 (0 = no cap)"))
@@ -66,13 +70,14 @@ struct DMTOptions
       "DMTOptions requires a positive odd preserve_diameter, got $(preserve_diameter)"))
     truncation in (:dense, :random) ||
       throw(ArgumentError("DMTOptions truncation must be :dense or :random, got $(truncation)"))
-    return new(Int(maxdim), Float64(cutoff), Int(gate_maxdim), Int(preserve_diameter), Symbol(truncation))
+    return new(Int(maxdim), Float64(cutoff), Int(gate_maxdim), Int(preserve_diameter),
+               preserve_operators, Symbol(truncation))
   end
 
   function DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=0,
-    preserve_diameter=3, truncation=:dense, connector_buffer=nothing)
+    preserve_diameter=3, preserve_operators=nothing, truncation=:dense, connector_buffer=nothing)
     _reject_connector_buffer(connector_buffer)
-    return DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, truncation)
+    return DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, preserve_operators, truncation)
   end
 end
 
@@ -158,6 +163,15 @@ end
 # `_dmt_bond_truncate!` (index identity, then norm of the difference). Off in production; the
 # ED-oracle tests flip it on to prove the threaded path reproduces the rebuild bit-for-bit.
 const _DMT_VERIFY_ENVS = Ref(false)
+
+# When true, `_dmt_bond_solve` asserts that both refactorization factors really are in the element
+# type threaded through the step. This is the only cheap detector for the failure mode the whole
+# element-type threading exists to avoid: `hcat(::Matrix{Float64}, ::Matrix{ComplexF64})` is
+# `Matrix{ComplexF64}`, so ONE unconverted block re-promotes the assembled factor at that line,
+# with no error, and the step pays the complex price while every input still looks real. Off in
+# production (it is a type check, but it runs per bond); the tests that already flip
+# `_DMT_VERIFY_ENVS` flip this too.
+const _DMT_VERIFY_ELTYPE = Ref(false)
 
 """
     _left_env_at!(cache, psi, k)
@@ -263,7 +277,7 @@ function _validate_operator_space(psi::MPS, start::Integer, span::Integer)
   return d
 end
 
-function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span::Integer, direction::Symbol, maxdim::Integer, preserve_diameter::Integer)
+function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span::Integer, direction::Symbol, maxdim::Integer, preserve_diameter::Integer, preserve_operators=nothing)
   direction === :R || direction === :L || throw(ArgumentError("DMT direction must be :R or :L"))
   maxdim >= 1 || throw(ArgumentError("DMT maxdim must be >= 1"))
   start >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
@@ -278,7 +292,7 @@ function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span
   # kernel-side throw would leave a half-updated state behind and break the "invalid DMT calls
   # do not mutate the state" invariant. Checked before the `span == 1` return as well, which
   # otherwise never reaches the kernel and would skip budget validation entirely.
-  _validate_dmt_budget(psi, maxdim, preserve_diameter)
+  _validate_dmt_budget(psi, maxdim, preserve_diameter, preserve_operators)
   span == 1 && return nothing
   start == length(psi) && throw(ArgumentError("periodic boundary DMT is not implemented for local gates"))
   for bond in start:(last_site - 1)
@@ -287,7 +301,7 @@ function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span
   return nothing
 end
 
-function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::Integer, cutoff::Real, direction::Symbol, preserve_diameter::Integer=3, truncation::Symbol=:dense, cache::Union{Nothing,_DMTEnvCache}=nothing)
+function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::Integer, cutoff::Real, direction::Symbol, preserve_diameter::Integer=3, preserve_operators=nothing, truncation::Symbol=:dense, cache::Union{Nothing,_DMTEnvCache}=nothing)
   span <= 1 && return psi
 
   # Truncate every bond inside the gate window as an independent single-bond DMT update, with
@@ -337,6 +351,7 @@ function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::
       cutoff=cutoff,
       direction=direction,
       preserve_diameter=preserve_diameter,
+      preserve_operators=preserve_operators,
       truncation=truncation,
       orthogonalize=true,
       cache=cache,
@@ -361,7 +376,10 @@ is (and is not) the appropriate choice.
 # Keyword Arguments
 - `maxdim`: **Total** post-truncation bond dimension, inclusive of the protected block; it must
   be at least `2 d^(preserve_diameter - 1) + 1`.
-- `cutoff`: Truncation cutoff used in the final refactorization.
+- `cutoff`: Relative cutoff on the *discarded complement*, measured against the leading
+  complement singular value. It never reaches the protected block or the trace connector, so
+  the preservation guarantee holds at every `cutoff`; `maxdim` and `preserve_diameter` remain
+  the dials that decide accuracy.
 - `direction`: Sweep direction, either `:R` or `:L`.
 - `gate_maxdim`: Temporary bond dimension cap for the raw gate application, before DMT truncates
   the bond back to `maxdim`. `0` (the default) means no cap, i.e. the gate is applied exactly;
@@ -397,6 +415,7 @@ function dmt_step!(
   direction::Symbol=:R,
   gate_maxdim::Integer=0,
   preserve_diameter::Integer=3,
+  preserve_operators=nothing,
   truncation::Symbol=:dense,
   cache::Union{Nothing,_DMTEnvCache}=nothing,
   connector_buffer=nothing,
@@ -407,7 +426,8 @@ function dmt_step!(
   # Checked before the gate runs, like every other budget here, so a rejected call leaves `psi`
   # untouched. `0` is the "no cap" sentinel; anything below it is a typo, not a smaller cap.
   gate_maxdim >= 0 || throw(ArgumentError("DMT gate_maxdim must be >= 0 (0 = no cap)"))
-  _validate_dmt_step(psi, gate, start, span, direction, Int(maxdim), Int(preserve_diameter))
+  _validate_dmt_step(psi, gate, start, span, direction, Int(maxdim), Int(preserve_diameter),
+                     preserve_operators)
   # `tebd_evolve!` (ITensorMPS `product`) re-gauges the path between the old orthocenter and the
   # gate window. Capture the limits first so the env cache can invalidate that bounded range.
   if !isnothing(cache)
@@ -435,6 +455,7 @@ function dmt_step!(
     cutoff=cutoff,
     direction=direction,
     preserve_diameter=Int(preserve_diameter),
+    preserve_operators=preserve_operators,
     truncation=truncation,
     cache=cache,
   )
@@ -460,6 +481,7 @@ function dmt_step!(psi::MPS, gate::AbstractMatrix, bond, opts::DMTOptions; direc
     direction=direction,
     gate_maxdim=opts.gate_maxdim,
     preserve_diameter=opts.preserve_diameter,
+    preserve_operators=opts.preserve_operators,
     truncation=opts.truncation,
   )
 end
@@ -563,6 +585,7 @@ function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normal
         direction=:R,
         gate_maxdim=evo.gate_maxdim,
         preserve_diameter=evo.preserve_diameter,
+        preserve_operators=evo.preserve_operators,
         truncation=evo.truncation,
         cache=cache,
       )
@@ -578,6 +601,7 @@ function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normal
         direction=:L,
         gate_maxdim=evo.gate_maxdim,
         preserve_diameter=evo.preserve_diameter,
+        preserve_operators=evo.preserve_operators,
         truncation=evo.truncation,
         cache=cache,
       )

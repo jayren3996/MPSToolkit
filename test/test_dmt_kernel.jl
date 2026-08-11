@@ -441,3 +441,142 @@ end
   @test norm(old) < 0.995 * norm(exact)
   @test deficit > 1e-3
 end
+
+@testset "_mps_eltype promotes over the whole chain" begin
+  # The type the bond step runs in is inferred from every tensor in the chain, not from
+  # `psi[bond]`: the step also consumes `psi[bond + 1]`, the interior protected sites, and both
+  # identity/trace environments, which contract over every tensor there is.
+  sites = operator_siteinds(4; d = 2)
+  @test MPSToolkit._mps_eltype(random_mps(sites; linkdims = 4)) === Float64
+  @test MPSToolkit._mps_eltype(random_mps(ComplexF64, sites; linkdims = 4)) === ComplexF64
+  # A MIXED chain -- exactly what the kernel used to return -- is the case the scan exists for.
+  mixed = random_mps(sites; linkdims = 4)
+  mixed[3] = ComplexF64(1) * mixed[3]
+  @test eltype(mixed[1]) === Float64                  # ... genuinely mixed, not wholly promoted
+  @test MPSToolkit._mps_eltype(mixed) === ComplexF64
+  # `float`: an integer-valued tensor is legal in ITensors, and the DMT algebra divides.
+  integral = ITensor(sites[1])
+  integral[sites[1] => 1] = 1
+  @test eltype(integral) === Int
+  @test MPSToolkit._mps_eltype(MPS([integral])) === Float64
+  # An unset tensor is `NDTensors.EmptyNumber`, which carries no information but subtypes `Real`,
+  # so NO subtype test against `Number`/`Real`/`Complex` screens it out and `float` of it is
+  # `Float64`. It has to be recognized by name; these assertions are why.
+  unset = MPS([ITensor(site) for site in sites])
+  @test eltype(unset[1]) === ITensors.NDTensors.EmptyNumber
+  @test eltype(unset[1]) <: Real
+  @test float(eltype(unset[1])) === Float64
+  @test MPSToolkit._mps_eltype(unset) === ComplexF64
+end
+
+@testset "a real-coefficient state stays real through a bond step" begin
+  # Every onsite operator basis element is Hermitian, so a Hermitian operator -- any density
+  # matrix -- has REAL coefficients in this basis, and the whole bond step can run in `Float64`.
+  # What the step must return is a chain that is real END TO END. A MIXED
+  # `[Float64, ComplexF64]` result is the failure mode: `NDTensors` handles a mismatched element
+  # type by materializing a promoted copy of the larger operand (184 MB per bond at chi = 800),
+  # and `orthogonalize!` spreads the mixedness through the rest of the chain -- so a real state
+  # pays the complex price while every per-tensor check still reads "real". `mps_eltype` is the
+  # whole-chain promotion, which is the only view that sees this.
+  #
+  # `_DMT_VERIFY_ELTYPE[]` is on throughout, which catches the same failure one layer further in:
+  # the assembled refactorization factors must be in the threaded element type, and a single
+  # unconverted block re-promotes them at the `hcat` with no error at all.
+  Random.seed!(20260810)
+  previous = MPSToolkit._DMT_VERIFY_ELTYPE[]
+  MPSToolkit._DMT_VERIFY_ELTYPE[] = true
+  try
+    for (d, nsites, bond, chi) in ((2, 7, 4, 40), (3, 6, 3, 60))
+      maxdim = 2 * d^2 + 12
+      sites = operator_siteinds(nsites; d = d)
+      # Both factorizations and both truncation modes: `:svd` reaches the real-`Diagonal` bond
+      # matrix, and `:random` is the branch that draws `randn(T, ...)`.
+      for factorize in (:qr, :svd), truncation in (:dense, :random)
+        rho = add(operator_basis_state(sites, fill(1, nsites)),
+          0.3 * random_mps(sites; linkdims = chi); maxdim = chi + 1, cutoff = 0.0)
+        @test mps_eltype(rho) === Float64               # the input really is real ...
+        @test dim(linkind(rho, bond)) > maxdim          # ... and the truncation really fires
+        MPSToolkit._dmt_bond_truncate!(rho, bond; maxdim = maxdim, cutoff = 0.0,
+          factorize = factorize, truncation = truncation)
+        @test mps_eltype(rho) === Float64
+        @test dim(linkind(rho, bond)) <= maxdim
+      end
+    end
+    # ... and the detector is not vacuous. `T = Float32` against `Float64` inputs reproduces the
+    # failure shape it exists for: the protected blocks and the connector convert to `T`, the bond
+    # matrix does not, so the widest block wins the `hcat` and the factors come out `Float64`
+    # instead. Reachable only by calling `_dmt_bond_solve` directly, which is the point -- inside
+    # the kernel `T` comes from `_mps_eltype` and every conversion widens.
+    chi = 40
+    @test_throws ErrorException MPSToolkit._dmt_bond_solve(Float32, Diagonal(rand(chi)),
+      randn(chi, 4), randn(chi, 4), 20, 0.0, :dense)
+  finally
+    MPSToolkit._DMT_VERIFY_ELTYPE[] = previous
+  end
+end
+
+@testset "the real path reproduces the complex path" begin
+  # Running in `Float64` must not change the answer. The two runs cannot be compared tensor by
+  # tensor: `_dmt_bond_truncate!` mints a fresh `Index` for the new link, so the two results carry
+  # non-identical link indices and `inner` rejects them ("indices are not permutations of each
+  # other"). The comparison is therefore over gauge-invariant quantities only -- the whole
+  # diameter-3 expectation profile and the trace. Agreement is ~1e-15 rather than exact because
+  # `dgeqrf`/`dgesdd` are not `zgeqrf`/`zgesdd`.
+  Random.seed!(20260810)
+  for (d, nsites, bond, chi) in ((2, 7, 4, 40), (3, 6, 3, 60))
+    maxdim = 2 * d^2 + 12
+    sites = operator_siteinds(nsites; d = d)
+    probes = diameter_probes(nsites, d, 3)
+    real_state = add(operator_basis_state(sites, fill(1, nsites)),
+      0.3 * random_mps(sites; linkdims = chi); maxdim = chi + 1, cutoff = 0.0)
+    complex_state = complex(real_state)
+    @test mps_eltype(real_state) === Float64
+    @test mps_eltype(complex_state) === ComplexF64
+    @test dim(linkind(real_state, bond)) > maxdim        # the truncation really fires
+    before = operator_expectation_profile(real_state, probes; normalize = false)
+    # The same operator to begin with, so every disagreement below is made by the kernel.
+    @test preservation_error(before,
+      operator_expectation_profile(complex_state, probes; normalize = false)) < 1e-14
+
+    MPSToolkit._dmt_bond_truncate!(real_state, bond; maxdim = maxdim, cutoff = 0.0)
+    MPSToolkit._dmt_bond_truncate!(complex_state, bond; maxdim = maxdim, cutoff = 0.0)
+    after_real = operator_expectation_profile(real_state, probes; normalize = false)
+    after_complex = operator_expectation_profile(complex_state, probes; normalize = false)
+    agreement = preservation_error(after_real, after_complex)
+    trace_agreement = abs(operator_trace(real_state) - operator_trace(complex_state)) /
+                      abs(operator_trace(complex_state))
+    @info "d = $(d): real vs complex DMT agreement $(agreement) (trace $(trace_agreement)); " *
+          "preservation error $(preservation_error(before, after_real)) (real) vs " *
+          "$(preservation_error(before, after_complex)) (complex)"
+    @test agreement < 1e-12
+    @test trace_agreement < 1e-12
+    @test dim(linkind(real_state, bond)) == dim(linkind(complex_state, bond))
+    # ... and the guarantee holds on the real path to the same tolerance as on the complex one.
+    @test preservation_error(before, after_real) < 1e-11
+    @test preservation_error(before, after_complex) < 1e-11
+  end
+end
+
+@testset "factorize = :svd on a complex state does not narrow the element type" begin
+  # The bond matrix is the one thing in the step that must NOT take part in inferring the threaded
+  # element type. `_dmt_bond_factorize` returns the `:svd` singular values as a REAL `Diagonal`
+  # (they are real, and `_bond_mul(::Diagonal, x)` is elementwise rather than BLAS, so a real
+  # `Diagonal` against complex blocks costs nothing). Inferring from `eltype(bond_matrix)` would
+  # pick `Float64` for a complex state and then throw on the first protected block it converted.
+  # Only `:svd` reaches this; `:qr`'s bond matrix carries the state's own element type.
+  Random.seed!(20260810)
+  d, nsites, bond, chi = 2, 6, 3, 40
+  maxdim = 2 * d^2 + 12
+  sites = operator_siteinds(nsites; d = d)
+  psi = random_mps(ComplexF64, sites; linkdims = chi)
+  normalize!(psi)
+  orthogonalize!(psi, bond)
+  @test dim(linkind(psi, bond)) > maxdim              # the truncation really fires
+  # Pin the premise: the bond matrix really is real even though the state is not.
+  @test MPSToolkit._dmt_bond_factorize(copy(psi), bond,
+    (linkind(psi, bond - 1), siteind(psi, bond)); factorize = :svd)[2] isa Diagonal{Float64}
+  truncated = MPSToolkit._dmt_bond_truncate!(copy(psi), bond; maxdim = maxdim, cutoff = 1e-14,
+    factorize = :svd)                                 # must not throw
+  @test mps_eltype(truncated) === ComplexF64
+  @test dim(linkind(truncated, bond)) <= maxdim
+end
