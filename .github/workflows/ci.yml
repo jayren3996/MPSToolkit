@@ -38,6 +38,14 @@ jobs:
 
       - uses: julia-actions/cache@v3
 
+      # The repo tracks a root Manifest.toml resolved on Julia 1.12, and 1.10 cannot use it --
+      # the stdlib set differs, so resolution dies with "Could not locate the source code for
+      # the OpenSSL_jll package" before a single test runs. Resolve fresh per leg instead, which
+      # tests each Julia version against Project.toml's [compat] bounds -- what those bounds are
+      # for. This touches only the runner's checkout; the committed manifest is never rewritten.
+      - name: Resolve dependencies per Julia version
+        run: rm -f Manifest.toml
+
       - uses: julia-actions/julia-buildpkg@v1
 
       - uses: julia-actions/julia-runtest@v1
