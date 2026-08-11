@@ -272,7 +272,7 @@ function _validate_operator_space(psi::MPS, start::Integer, span::Integer)
   return d
 end
 
-function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span::Integer, direction::Symbol, maxdim::Integer, preserve_diameter::Integer)
+function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span::Integer, direction::Symbol, maxdim::Integer, preserve_diameter::Integer, preserve_operators=nothing)
   direction === :R || direction === :L || throw(ArgumentError("DMT direction must be :R or :L"))
   maxdim >= 1 || throw(ArgumentError("DMT maxdim must be >= 1"))
   start >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
@@ -287,7 +287,7 @@ function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span
   # kernel-side throw would leave a half-updated state behind and break the "invalid DMT calls
   # do not mutate the state" invariant. Checked before the `span == 1` return as well, which
   # otherwise never reaches the kernel and would skip budget validation entirely.
-  _validate_dmt_budget(psi, maxdim, preserve_diameter)
+  _validate_dmt_budget(psi, maxdim, preserve_diameter, preserve_operators)
   span == 1 && return nothing
   start == length(psi) && throw(ArgumentError("periodic boundary DMT is not implemented for local gates"))
   for bond in start:(last_site - 1)
@@ -296,7 +296,7 @@ function _validate_dmt_step(psi::MPS, gate::AbstractMatrix, start::Integer, span
   return nothing
 end
 
-function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::Integer, cutoff::Real, direction::Symbol, preserve_diameter::Integer=3, truncation::Symbol=:dense, cache::Union{Nothing,_DMTEnvCache}=nothing)
+function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::Integer, cutoff::Real, direction::Symbol, preserve_diameter::Integer=3, preserve_operators=nothing, truncation::Symbol=:dense, cache::Union{Nothing,_DMTEnvCache}=nothing)
   span <= 1 && return psi
 
   # Truncate every bond inside the gate window as an independent single-bond DMT update, with
@@ -346,6 +346,7 @@ function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::
       cutoff=cutoff,
       direction=direction,
       preserve_diameter=preserve_diameter,
+      preserve_operators=preserve_operators,
       truncation=truncation,
       orthogonalize=true,
       cache=cache,
@@ -406,6 +407,7 @@ function dmt_step!(
   direction::Symbol=:R,
   gate_maxdim::Integer=0,
   preserve_diameter::Integer=3,
+  preserve_operators=nothing,
   truncation::Symbol=:dense,
   cache::Union{Nothing,_DMTEnvCache}=nothing,
   connector_buffer=nothing,
@@ -416,7 +418,8 @@ function dmt_step!(
   # Checked before the gate runs, like every other budget here, so a rejected call leaves `psi`
   # untouched. `0` is the "no cap" sentinel; anything below it is a typo, not a smaller cap.
   gate_maxdim >= 0 || throw(ArgumentError("DMT gate_maxdim must be >= 0 (0 = no cap)"))
-  _validate_dmt_step(psi, gate, start, span, direction, Int(maxdim), Int(preserve_diameter))
+  _validate_dmt_step(psi, gate, start, span, direction, Int(maxdim), Int(preserve_diameter),
+                     preserve_operators)
   # `tebd_evolve!` (ITensorMPS `product`) re-gauges the path between the old orthocenter and the
   # gate window. Capture the limits first so the env cache can invalidate that bounded range.
   if !isnothing(cache)
@@ -444,6 +447,7 @@ function dmt_step!(
     cutoff=cutoff,
     direction=direction,
     preserve_diameter=Int(preserve_diameter),
+    preserve_operators=preserve_operators,
     truncation=truncation,
     cache=cache,
   )

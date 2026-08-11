@@ -348,3 +348,109 @@ include("dmt_test_helpers.jl")
     @test nontrivial >= 6
   end
 end
+
+@testset "selective operator preservation" begin
+  # Protecting a CHOSEN span instead of the full d^(2 radius) local block. The guarantee is
+  # deliberately weaker, and the test has to prove the weakness as well as the strength: a test
+  # that only checked the listed operators would pass on an implementation that protected
+  # everything, and one that only checked unlisted operators would pass on a no-op.
+  #
+  # Probes must STRADDLE the cut. Anything supported entirely on one side is preserved exactly
+  # by the rank-one trace connector whatever is protected, so a one-sided probe cannot fail and
+  # proves nothing. Note also the probe format: one `(start, matrix)` tuple per term, with a
+  # multi-site operator supplied as a single kron -- `[(4, A), (5, B)]` is two SEPARATE
+  # single-site terms, not the product A_4 B_5.
+  d = 3
+  sz = Matrix{ComplexF64}(Diagonal([1.0, 0.0, -1.0]))
+  sx = Matrix{ComplexF64}([0 1 0; 1 0 1; 0 1 0] / sqrt(2))
+  Random.seed!(12)
+  nsites, bond, chi = 7, 4, 60
+  sites = operator_siteinds(nsites; d = d)
+  base = add(operator_basis_state(sites, fill(1, nsites)),
+    0.3 * random_mps(sites; linkdims = chi); maxdim = chi, cutoff = 0.0)
+  orthogonalize!(base, bond)
+  zz = (bond, ComplexF64.(kron(sz, sz)))
+  xx = (bond, ComplexF64.(kron(sx, sx)))
+  value(rho, probe) = operator_expectation_profile(rho, [probe]; normalize = false)[1]
+  before_zz, before_xx = value(base, zz), value(base, xx)
+  drift(rho, probe, reference) = abs(value(rho, probe) - reference) / abs(reference)
+
+  truncated(specs, maxdim) = (t = deepcopy(base);
+    MPSToolkit._dmt_bond_truncate!(t, bond; maxdim = maxdim, cutoff = 0.0,
+      preserve_operators = specs); t)
+
+  @testset "the protected span is exactly the selected one" begin
+    keep_z = truncated([sz], 8)
+    @test drift(keep_z, zz, before_zz) < 1e-11          # listed: exact
+    @test drift(keep_z, xx, before_xx) > 1e-2           # unlisted: genuinely broken
+    # Swapping which operator is listed swaps which observable survives. Nothing else in the
+    # setup changes, so this cannot be explained by one probe being intrinsically robust.
+    keep_x = truncated([sx], 8)
+    @test drift(keep_x, xx, before_xx) < 1e-11
+    @test drift(keep_x, zz, before_zz) > 1e-2
+    # With only the identity protected, neither survives -- the connector alone does not carry
+    # a straddling two-site observable.
+    identity_only = truncated(Matrix{ComplexF64}[], 8)
+    @test drift(identity_only, zz, before_zz) > 1e-2
+    @test drift(identity_only, xx, before_xx) > 1e-2
+    # ... while the full block carries both, at a budget that admits it.
+    full_block = truncated(nothing, 20)
+    @test drift(full_block, zz, before_zz) < 1e-11
+    @test drift(full_block, xx, before_xx) < 1e-11
+  end
+
+  @testset "selecting the whole local basis reproduces the full block" begin
+    # The strongest check on the construction, and specifically on the index ordering when the
+    # flat kron expansion is reshaped onto site indices: hand it the entire local basis as
+    # explicit operators and it must agree with the combiner path bit for bit.
+    for local_dim in (2, 3)
+      Random.seed!(11)
+      sites = operator_siteinds(7; d = local_dim)
+      state = add(operator_basis_state(sites, fill(1, 7)),
+        0.3 * random_mps(sites; linkdims = 40); maxdim = 40, cutoff = 0.0)
+      specs = [Matrix{ComplexF64}(m) for m in operator_basis_matrices(local_dim)[2:end]]
+      maxdim = 2 * local_dim^2 + 10
+      default = deepcopy(state)
+      MPSToolkit._dmt_bond_truncate!(default, 4; maxdim = maxdim, cutoff = 0.0)
+      explicit = deepcopy(state)
+      MPSToolkit._dmt_bond_truncate!(explicit, 4; maxdim = maxdim, cutoff = 0.0,
+        preserve_operators = specs)
+      @test dim(linkind(default, 4)) == dim(linkind(explicit, 4))
+      probes = diameter_probes(7, local_dim, 3)
+      @test preservation_error(operator_expectation_profile(default, probes; normalize = false),
+        operator_expectation_profile(explicit, probes; normalize = false)) < 1e-12
+    end
+  end
+
+  @testset "d = 4 at preserve_diameter = 5, which the full block cannot reach" begin
+    # The configuration this feature exists for. The full block needs 2 * 4^4 + 1 = 513 and
+    # ~0.5 GB protected blocks; protecting a charge and an energy density needs 9.
+    d4 = 4
+    sz4 = Matrix{ComplexF64}(Diagonal([1.5, 0.5, -0.5, -1.5]))
+    h4 = ComplexF64.(kron(sz4, sz4))
+    sx4 = Matrix{ComplexF64}([0 1 0 0; 1 0 1 0; 0 1 0 1; 0 0 1 0] / sqrt(2))
+    @test MPSToolkit._preserved_count(d4, 2, nothing) == 256
+    @test MPSToolkit._preserved_count(d4, 2, [sz4, h4]) == 4      # I, Sz at 2 offsets, SzSz
+    Random.seed!(13)
+    sites = operator_siteinds(6; d = d4)
+    rho = add(operator_basis_state(sites, fill(1, 6)),
+      0.3 * random_mps(sites; linkdims = 80); maxdim = 80, cutoff = 0.0)
+    orthogonalize!(rho, 3)
+    # Straddling the cut between sites 3 and 4, inside the selected span on both sides.
+    protected = (2, ComplexF64.(kron(sz4, sz4, sz4, sz4)))
+    unprotected = (3, ComplexF64.(kron(sx4, sx4)))
+    before_p = operator_expectation_profile(rho, [protected]; normalize = false)[1]
+    before_u = operator_expectation_profile(rho, [unprotected]; normalize = false)[1]
+    truncated4 = deepcopy(rho)
+    MPSToolkit._dmt_bond_truncate!(truncated4, 3; maxdim = 30, cutoff = 0.0,
+      preserve_diameter = 5, preserve_operators = [sz4, h4])
+    @test dim(linkind(truncated4, 3)) <= 30
+    after_p = operator_expectation_profile(truncated4, [protected]; normalize = false)[1]
+    after_u = operator_expectation_profile(truncated4, [unprotected]; normalize = false)[1]
+    @test abs(after_p - before_p) / abs(before_p) < 1e-11
+    @test abs(after_u - before_u) / abs(before_u) > 1e-3
+    # The full block really is out of reach at this budget, which is the point.
+    @test_throws ArgumentError MPSToolkit._dmt_bond_truncate!(deepcopy(rho), 3; maxdim = 30,
+      cutoff = 0.0, preserve_diameter = 5)
+  end
+end

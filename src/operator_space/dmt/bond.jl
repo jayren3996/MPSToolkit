@@ -1,14 +1,16 @@
 """
-    _dmt_complement_budget(maxdim, d, radius)
+    _dmt_complement_budget(maxdim, left_count, right_count)
 
 Return the number of complement singular directions `chi'` that fit inside a total bond budget
-`maxdim`, given `radius` protected sites per side at local dimension `d`.
+`maxdim`, given `left_count` and `right_count` protected directions on the two sides of the cut.
 
-`maxdim = chi_preserve + chi_extra` with `chi_preserve = 2 d^(2 radius)`; this is the convention
-of arXiv:1902.01859 and of the reference implementations.
+`maxdim = chi_preserve + chi_extra` with `chi_preserve = left_count + right_count`; this is the
+convention of arXiv:1902.01859 and of the reference implementations. For the default full local
+block both counts are `d^(2 radius)`; with `preserve_operators` they are the number of selected
+operators per side (see [`_preserved_operator_tensors`](@ref)).
 
 # Notes
-- `2 d^(2 radius)` is **not** one too many, and tightening it to `2 d^(2 radius) - 1` is a bug
+- `left_count + right_count` is **not** one too many, and tightening it by one is a bug
   that the suite catches only via the traceless testset. On a trace-carrying bond the reinstated
   rank really is `2 d^(2 radius) - 1`, because [`_dmt_connector`](@ref) leaves
   `B = S - a b^T` annihilating the identity directions (`B r0 = 0`, `q0' B = 0`), costing
@@ -22,12 +24,36 @@ of arXiv:1902.01859 and of the reference implementations.
   which is ~0 exactly where this kernel switches the connector off. The one-direction
   difference buys support for operators that implementation cannot evolve.
 """
-function _dmt_complement_budget(maxdim::Integer, d::Integer, radius::Integer)
-  return Int(maxdim) - 2 * Int(d)^(2 * Int(radius))
+function _dmt_complement_budget(maxdim::Integer, left_count::Integer, right_count::Integer)
+  return Int(maxdim) - (Int(left_count) + Int(right_count))
 end
 
 """
-    _validate_dmt_budget(psi, maxdim, preserve_diameter)
+    _preserved_count(d, radius, specs)
+
+Return how many directions [`_preserved_operator_tensors`](@ref) protects per side in the bulk,
+without building them. Used by [`_validate_dmt_budget`](@ref), which runs before a state is in
+hand.
+
+# Notes
+- The bulk value is the worst case: a window clipped by a chain edge is narrower and protects
+  fewer directions, so a budget that clears the bulk clears every bond.
+"""
+function _preserved_count(d::Integer, radius::Integer, specs)
+  isnothing(specs) && return Int(d)^(2 * Int(radius))
+  total = 1                                    # the identity is always protected
+  for op in specs
+    support = _operator_span(size(op, 1), Int(d))
+    support <= Int(radius) || throw(ArgumentError(
+      "preserve_operators entry has support $(support) but only $(radius) sites are protected " *
+      "per side at preserve_diameter = $(2 * Int(radius) + 1)"))
+    total += Int(radius) - support + 1         # every offset that fits in the window
+  end
+  return total
+end
+
+"""
+    _validate_dmt_budget(psi, maxdim, preserve_diameter, preserve_operators)
 
 Throw an `ArgumentError` unless `maxdim` leaves room for the protected block. Called once at the
 entry to a DMT step or sweep, so the failure is immediate rather than mid-sweep.
@@ -37,17 +63,107 @@ entry to a DMT step or sweep, so the failure is immediate rather than mid-sweep.
   leaves a partially updated `psi` behind. [`_dmt_bond_truncate!`](@ref) repeats the check as a
   backstop for callers that reach the kernel directly.
 """
-function _validate_dmt_budget(psi::MPS, maxdim::Integer, preserve_diameter::Integer)
+function _validate_dmt_budget(psi::MPS, maxdim::Integer, preserve_diameter::Integer,
+                              preserve_operators=nothing)
   isodd(preserve_diameter) && preserve_diameter >= 1 ||
     throw(ArgumentError("DMT preserve_diameter must be a positive odd integer, got $(preserve_diameter)"))
   radius = (Int(preserve_diameter) - 1) ÷ 2
   d = local_dimension(siteind(psi, 1))
-  floor_value = 2 * d^(2 * radius) + 1
-  Int(maxdim) >= floor_value || throw(ArgumentError(
-    "DMT requires maxdim >= 2 d^(preserve_diameter - 1) + 1 = $(floor_value) " *
-    "for local dimension d = $(d) at preserve_diameter = $(preserve_diameter); got maxdim = $(maxdim). " *
-    "maxdim is the total bond dimension, inclusive of the protected block."))
+  per_side = _preserved_count(d, radius, preserve_operators)
+  floor_value = 2 * per_side + 1
+  if Int(maxdim) < floor_value
+    detail = isnothing(preserve_operators) ?
+      "2 d^(preserve_diameter - 1) + 1 = $(floor_value) for local dimension d = $(d) at " *
+      "preserve_diameter = $(preserve_diameter)" :
+      "2 * $(per_side) + 1 = $(floor_value) for the $(length(preserve_operators)) selected " *
+      "preserve_operators at preserve_diameter = $(preserve_diameter) (each is protected at " *
+      "every offset that fits the window, plus the identity)"
+    throw(ArgumentError(
+      "DMT requires maxdim >= $(detail); got maxdim = $(maxdim). " *
+      "maxdim is the total bond dimension, inclusive of the protected block."))
+  end
   return nothing
+end
+
+"""
+    _preserved_operator_tensors(window_sites, d, specs)
+
+Return the operator-space coefficient tensors whose span DMT should protect on one side of a
+cut, as `ITensor`s over `window_sites`. The identity is always first.
+
+# Arguments
+- `window_sites`: Operator-space site indices of the protected window, in chain order.
+- `d`: Local Hilbert space dimension.
+- `specs`: `nothing` for the full local-operator block (`d^(2 length(window_sites))` directions),
+  or a collection of dense physical matrices, each acting on `1 <= support <= length(window_sites)`
+  contiguous sites. Each is placed at **every** offset that fits inside the window.
+
+# Returns
+- A `Vector{ITensor}`, element 1 the identity. Its length is what the budget arithmetic must
+  reserve, so callers take it from `length(...)` rather than recomputing it.
+
+# Notes
+- Selecting a proper subset is a **weaker** guarantee than the full block: only observables in
+  the selected span survive truncation exactly. It exists because the full block costs
+  `d^(2 radius)` per side, which at `d = 4, preserve_diameter = 5` is 256 per side and a floor of
+  513 — protecting energy density and a charge instead costs of order ten. This is the
+  `presAll_ = false` path of Jack Kemp's reference implementation (`DMT.h:159-206`), which is
+  marked experimental there; the construction here is independent.
+- Each operator is padded to the full window with identity and expanded on
+  [`_operator_basis_operators`](@ref), rather than tracked per site. The window is `radius` sites
+  wide, so the padded matrix is `d^radius x d^radius` — 16 x 16 at the largest configuration
+  this unlocks — and the cost is irrelevant next to the bond step.
+- The flat expansion enumerates the site-1 label slowest (it is built by `kron`), while `reshape`
+  makes the first dimension fastest, so the site indices are attached in reverse. Getting this
+  backwards would silently mirror a multi-site operator across the window; the full-block
+  equivalence test is what pins it.
+"""
+function _preserved_operator_tensors(window_sites, d::Integer, specs)
+  width = length(window_sites)
+  local_dim = Int(d)
+  basis = _operator_basis_operators(width, local_dim)
+  full_dim = local_dim^width
+  coefficient_tensor(matrix) = ITensor(
+    reshape(ComplexF64[tr(adjoint(element) * matrix) for element in basis],
+            ntuple(_ -> local_dim^2, width)),
+    reverse(collect(window_sites))...)
+
+  identity_matrix = Matrix{ComplexF64}(I, full_dim, full_dim)
+  isnothing(specs) && return [coefficient_tensor(element) for element in basis]
+
+  tensors = ITensor[coefficient_tensor(identity_matrix)]
+  for op in specs
+    size(op, 1) == size(op, 2) ||
+      throw(ArgumentError("preserve_operators entries must be square, got $(size(op))"))
+    support = _operator_span(size(op, 1), local_dim)
+    support <= width || throw(ArgumentError(
+      "preserve_operators entry has support $(support) but only $(width) sites are protected " *
+      "per side at this preserve_diameter; widen preserve_diameter or shrink the operator"))
+    dense = Matrix{ComplexF64}(op)
+    for offset in 0:(width - support)
+      before = Matrix{ComplexF64}(I, local_dim^offset, local_dim^offset)
+      after_dim = local_dim^(width - support - offset)
+      after = Matrix{ComplexF64}(I, after_dim, after_dim)
+      push!(tensors, coefficient_tensor(kron(before, dense, after)))
+    end
+  end
+  return tensors
+end
+
+"""
+    _protected_columns(protected_tensor, link, operator_tensors)
+
+Contract the protected half-chain tensor against each preserved operator, returning the
+`chi x length(operator_tensors)` protected block whose column 1 is the trace direction.
+
+# Notes
+- Contracting operator by operator rather than fusing the window with a `combiner` keeps this
+  independent of the order `combiner` happens to fuse in, and is what lets the selected and
+  full-block paths share one code path.
+"""
+function _protected_columns(protected_tensor::ITensor, link::Index, operator_tensors)
+  columns = [vector(protected_tensor * op, link) for op in operator_tensors]
+  return reduce(hcat, columns)
 end
 
 """
@@ -189,7 +305,7 @@ function _dmt_bond_factorize(psi::MPS, bond::Integer, left_inds, ::Type{T}=Compl
 end
 
 """
-    _dmt_bond_solve(T, bond_matrix, protected_left, protected_right, d, radius, maxdim, cutoff,
+    _dmt_bond_solve(T, bond_matrix, protected_left, protected_right, maxdim, cutoff,
                     truncation)
 
 Apply the DMT rule to a bond matrix already expressed in orthonormal bases on both sides of the
@@ -197,14 +313,13 @@ cut, returning the truncated bond matrix in SVD form `(U, S, V)`.
 
 The protected row and column spaces and the rank-one trace connector are reinstated **exactly**;
 only the doubly-orthogonal complement `D = P_L^perp B P_R^perp` is truncated, to
-`maxdim - 2 d^(2 radius)` directions.
+`maxdim` minus the protected widths.
 
 # Arguments
 - `T`: Element type to work in, a promotion over the whole chain (see [`_mps_eltype`](@ref)).
 - `bond_matrix`: Bond matrix over `(left_link, right_link)` from [`_dmt_bond_factorize`](@ref).
 - `protected_left`, `protected_right`: `chi x d^(2 n)` protected blocks, conjugated on the left,
   with column 1 the all-identity multi-index (the trace direction).
-- `d`, `radius`: Local dimension and protected sites per side, for the budget arithmetic.
 - `maxdim`, `cutoff`: Total post-truncation bond dimension and refactorization cutoff.
 - `truncation`: `:dense` or `:random` (see [`_truncated_svd`](@ref)).
 
@@ -225,7 +340,7 @@ only the doubly-orthogonal complement `D = P_L^perp B P_R^perp` is truncated, to
   failure mode `_DMT_VERIFY_ELTYPE` exists to catch.
 """
 function _dmt_bond_solve(::Type{T}, bond_matrix::AbstractMatrix, protected_left::AbstractMatrix,
-                         protected_right::AbstractMatrix, d::Integer, radius::Integer,
+                         protected_right::AbstractMatrix,
                          maxdim::Integer, cutoff::Real, truncation::Symbol) where {T}
   chi = size(bond_matrix, 1)
   ql = _protected_basis(protected_left, T)
@@ -236,7 +351,8 @@ function _dmt_bond_solve(::Type{T}, bond_matrix::AbstractMatrix, protected_left:
   a, b, _ = _dmt_connector(bond_matrix, q0, r0, T)
   ops = _dmt_complement_ops(bond_matrix, a, b, ql, qr_basis)
 
-  budget = max(_dmt_complement_budget(maxdim, d, radius), 1)
+  budget = max(_dmt_complement_budget(maxdim, size(protected_left, 2),
+                                      size(protected_right, 2)), 1)
   uc, sc, vc = _truncated_svd(ops.mul, ops.adj, chi, budget, T; mode=truncation)
 
   # M' = C + QL (QL' B) + BQRc QR' + Uc Sc Vc'  in factored form.
@@ -273,6 +389,11 @@ protected block always fits inside `maxdim` and never has to be clipped.
 - `direction`: `:R` leaves the orthogonality center at `bond + 1`, `:L` at `bond`.
 - `preserve_diameter`: Odd; every observable of diameter at most this value is preserved
   exactly. `radius = (preserve_diameter - 1) / 2` sites are protected per side.
+- `preserve_operators`: `nothing` (default) protects the full `d^(2 radius)` local block per
+  side. A collection of dense physical matrices instead protects only their span, at every
+  offset that fits the window, plus the identity — a **weaker** guarantee, and the only way to
+  reach `preserve_diameter = 5` at `d = 4`, whose full-block floor is 513. See
+  [`_preserved_operator_tensors`](@ref).
 - `truncation`: `:dense` or `:random` complement truncation (see [`_truncated_svd`](@ref)).
 - `factorize`: `:qr` or `:svd` bond factorization (see [`_dmt_bond_factorize`](@ref)). Both give
   the same truncated operator; `:qr` is the faster, by 1.2x to 1.9x on a whole bond step.
@@ -305,6 +426,7 @@ function _dmt_bond_truncate!(
   cutoff::Real,
   direction::Symbol=:R,
   preserve_diameter::Integer=3,
+  preserve_operators=nothing,
   truncation::Symbol=:dense,
   factorize::Symbol=:qr,
   orthogonalize::Bool=true,
@@ -318,7 +440,7 @@ function _dmt_bond_truncate!(
   1 <= bond < length(psi) || throw(ArgumentError("DMT bond must lie in 1:length(psi)-1"))
   # Backstop: `_validate_dmt_step` already rejected an under-floor budget before the gate ran,
   # so this only fires for callers that enter the kernel directly.
-  _validate_dmt_budget(psi, maxdim, preserve_diameter)
+  _validate_dmt_budget(psi, maxdim, preserve_diameter, preserve_operators)
   link = linkind(psi, bond)
   isnothing(link) && return psi
   dim(link) <= maxdim && return psi
@@ -374,22 +496,34 @@ function _dmt_bond_truncate!(
 
   left_sites = [siteind(psi, site) for site in (bond - left_count + 1):bond]
   right_sites = [siteind(psi, site) for site in (bond + 1):(bond + right_count)]
-  left_combiner = combiner(left_sites...)
-  right_combiner = combiner(right_sites...)
   # conj: the paper's pairing is M = Q_L^T s Q_R, a transpose on the left. Omitting this is
   # silently correct for a Hermitian operator and badly wrong otherwise.
-  protected_left = conj(matrix(left_protected * left_combiner, left_link, combinedind(left_combiner)))
-  protected_right = matrix(right_protected * right_combiner, right_link, combinedind(right_combiner))
-  # The fused width is the `d^(2 radius)` the budget arithmetic assumes; assert it rather than
-  # trust that `left_sites`/`right_sites` still enumerate the protected window. `combiner` fuses
-  # in an unspecified order, which is harmless for the span, but column 1 must still be the
-  # all-identity multi-index for `q0`/`r0` below -- index 1 of every factor maps to index 1 of
-  # any product ordering, and `test_dmt_higher_spin.jl` pins that against an identity cap.
-  @assert size(protected_left, 2) == d^(2 * left_count)
-  @assert size(protected_right, 2) == d^(2 * right_count)
+  if isnothing(preserve_operators)
+    # Default: the whole local block, fused in one contraction. Going operator by operator here
+    # would cost `d^(2 radius)` contractions per side -- 256 at `d = 4, radius = 2` -- for a
+    # basis the combiner spans in one.
+    left_combiner = combiner(left_sites...)
+    right_combiner = combiner(right_sites...)
+    protected_left = conj(matrix(left_protected * left_combiner, left_link,
+                                 combinedind(left_combiner)))
+    protected_right = matrix(right_protected * right_combiner, right_link,
+                             combinedind(right_combiner))
+    # The fused width is the `d^(2 radius)` the budget arithmetic assumes; assert it rather than
+    # trust that `left_sites`/`right_sites` still enumerate the protected window. `combiner` fuses
+    # in an unspecified order, which is harmless for the span, but column 1 must still be the
+    # all-identity multi-index for `q0`/`r0` below -- index 1 of every factor maps to index 1 of
+    # any product ordering, and `test_dmt_higher_spin.jl` pins that against an identity cap.
+    @assert size(protected_left, 2) == d^(2 * left_count)
+    @assert size(protected_right, 2) == d^(2 * right_count)
+  else
+    protected_left = conj(_protected_columns(left_protected, left_link,
+      _preserved_operator_tensors(left_sites, d, preserve_operators)))
+    protected_right = _protected_columns(right_protected, right_link,
+      _preserved_operator_tensors(right_sites, d, preserve_operators))
+  end
 
   new_u, new_s, new_v = _dmt_bond_solve(elt, bond_matrix, protected_left, protected_right,
-                                        d, radius, maxdim, cutoff, truncation)
+                                        maxdim, cutoff, truncation)
 
   # Absorb the singular values on the side the sweep is moving away from, so the orthogonality
   # centre ends up where the next step expects it: at bond + 1 for :R, at bond for :L.
