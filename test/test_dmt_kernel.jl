@@ -509,7 +509,7 @@ end
     # the kernel `T` comes from `_mps_eltype` and every conversion widens.
     chi = 40
     @test_throws ErrorException MPSToolkit._dmt_bond_solve(Float32, Diagonal(rand(chi)),
-      randn(chi, 4), randn(chi, 4), 2, 1, 20, 0.0, :dense)
+      randn(chi, 4), randn(chi, 4), 20, 0.0, :dense)
   finally
     MPSToolkit._DMT_VERIFY_ELTYPE[] = previous
   end
