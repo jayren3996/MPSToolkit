@@ -127,7 +127,7 @@ computed without ever forming the quantity itself.
   arrives as a plain linear-space contraction, so it can overflow before this function is
   reached: for the *unnormalized* product operator `ρ = ⊗_j e^{-β Z_j}`, whose identity
   coefficient is exactly `(√d cosh β)^N`, that happens at `β ≥ 2.11` for `N = 400` and `β ≥ 3.90`
-  for `N = 200` (`d = 2`). [`_reject_unresolvable_trace`](@ref) reports the resulting `Inf`/`NaN`
+  for `N = 200` (`d = 2`). `_reject_unresolvable_trace` reports the resulting `Inf`/`NaN`
   as its own error. A `normalize!`d operator is immune at any feasible size: positivity confines
   its identity coefficient to `[d^(-N/2), 1]`, which stays inside `Float64` for the same
   `N ≲ 2048 / log2(d)` that bounds the `(√d)^N` prefactor everywhere else in this file. This is
@@ -210,7 +210,7 @@ vectorized operator `rho`, in one O(N) sweep with cumulative identity environmen
   unnormalized `tr(ρ O_k)`. The unnormalized branch carries a `(√d)^N` factor that overflows
   `Float64` for `N ≳ 2048 / log2(d)` (far beyond feasible MPS sizes); the normalized ratio is
   immune. `true` throws an `ArgumentError` when `|tr(ρ)| ≤ sqrt(eps) ||ρ||_HS`, which is the
-  traceless case (see [`_reject_unresolvable_trace`](@ref)); measure a traceless operator with
+  traceless case (see `_reject_unresolvable_trace`); measure a traceless operator with
   `normalize=false`. A positive `ρ` — any thermal state, at any temperature and chain length —
   satisfies `tr(ρ) ≥ ||ρ||_HS` and is never rejected for being ill-conditioned. It can still be
   rejected for being unrepresentable: an *unnormalized* `⊗_j e^{-β Z_j}` overflows its identity

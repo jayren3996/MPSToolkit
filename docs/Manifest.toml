@@ -537,7 +537,7 @@ uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 version = "1.11.0"
 
 [[deps.MPSToolkit]]
-deps = ["ITensorMPS", "ITensors", "KrylovKit", "LinearAlgebra"]
+deps = ["ITensorMPS", "ITensors", "KrylovKit", "LinearAlgebra", "Printf", "Serialization"]
 path = ".."
 uuid = "9fc92dc4-a6d3-4a85-b5fe-6a206e4c3402"
 version = "0.1.0"
