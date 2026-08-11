@@ -540,7 +540,7 @@ version = "1.11.0"
 deps = ["ITensorMPS", "ITensors", "KrylovKit", "LinearAlgebra", "Printf", "Serialization"]
 path = ".."
 uuid = "9fc92dc4-a6d3-4a85-b5fe-6a206e4c3402"
-version = "0.1.0"
+version = "0.2.0"
 
 [[deps.MacroTools]]
 git-tree-sha1 = "1e0228a030642014fe5cfe68c2c0a818f9e3f522"

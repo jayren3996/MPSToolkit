@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "0b56b2e572552065e0846e3058f4d5433958e09c"
+project_hash = "f307374d1bf9bc2e3cde73533c6134787383db60"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -456,10 +456,10 @@ uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 version = "1.11.0"
 
 [[deps.MPSToolkit]]
-deps = ["ITensorMPS", "ITensors", "KrylovKit", "LinearAlgebra"]
+deps = ["ITensorMPS", "ITensors", "KrylovKit", "LinearAlgebra", "Printf", "Serialization"]
 path = "."
 uuid = "9fc92dc4-a6d3-4a85-b5fe-6a206e4c3402"
-version = "0.1.0"
+version = "0.2.0"
 
 [[deps.MacroTools]]
 git-tree-sha1 = "1e0228a030642014fe5cfe68c2c0a818f9e3f522"
