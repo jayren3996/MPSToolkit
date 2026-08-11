@@ -92,6 +92,7 @@ struct DMTGateEvolution{TG,TS,TR}
   cutoff::Float64
   gate_maxdim::Int
   preserve_diameter::Int
+  preserve_operators::Any
   truncation::Symbol
   normalize::Bool
 end
@@ -140,6 +141,10 @@ Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
   truncated that bond), so this is a no-op there and a correctness fix at `d >= 5`.
 - `preserve_diameter`: Positive odd diameter of the observables preserved exactly;
   `radius = (preserve_diameter - 1) / 2` sites are protected on each side of the cut.
+- `preserve_operators`: `nothing` protects the full `d^(2 radius)` local block. A collection of
+  dense physical matrices instead protects only their span (plus the identity) at every offset
+  that fits the window — a weaker guarantee, and the only way to reach `preserve_diameter = 5`
+  at `d = 4`, whose full-block floor is 513.
 - `truncation`: `:dense` (default) or `:random` complement truncation. `:random` measures
   1.05x-1.2x faster on a whole sweep at moderate budgets and ~1.4x once the gate-inflated bond
   passes ~2500, and preserves the guarantee to the same `1e-15` — but it draws from the global
@@ -170,6 +175,7 @@ function DMTGateEvolution(
   cutoff=1e-12,
   gate_maxdim=0,
   preserve_diameter=3,
+  preserve_operators=nothing,
   truncation=:dense,
   normalize=true,
   connector_buffer=nothing,
@@ -194,6 +200,7 @@ function DMTGateEvolution(
     Float64(cutoff),
     Int(gate_maxdim),
     Int(preserve_diameter),
+    preserve_operators,
     Symbol(truncation),
     Bool(normalize),
   )

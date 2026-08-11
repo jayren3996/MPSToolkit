@@ -56,9 +56,10 @@ struct DMTOptions
   cutoff::Float64
   gate_maxdim::Int
   preserve_diameter::Int
+  preserve_operators::Any
   truncation::Symbol
 
-  function DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, truncation)
+  function DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, preserve_operators, truncation)
     maxdim >= 1 || throw(ArgumentError("DMTOptions requires maxdim >= 1"))
     cutoff >= 0 || throw(ArgumentError("DMTOptions requires cutoff >= 0"))
     gate_maxdim >= 0 || throw(ArgumentError("DMTOptions requires gate_maxdim >= 0 (0 = no cap)"))
@@ -66,13 +67,14 @@ struct DMTOptions
       "DMTOptions requires a positive odd preserve_diameter, got $(preserve_diameter)"))
     truncation in (:dense, :random) ||
       throw(ArgumentError("DMTOptions truncation must be :dense or :random, got $(truncation)"))
-    return new(Int(maxdim), Float64(cutoff), Int(gate_maxdim), Int(preserve_diameter), Symbol(truncation))
+    return new(Int(maxdim), Float64(cutoff), Int(gate_maxdim), Int(preserve_diameter),
+               preserve_operators, Symbol(truncation))
   end
 
   function DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=0,
-    preserve_diameter=3, truncation=:dense, connector_buffer=nothing)
+    preserve_diameter=3, preserve_operators=nothing, truncation=:dense, connector_buffer=nothing)
     _reject_connector_buffer(connector_buffer)
-    return DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, truncation)
+    return DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, preserve_operators, truncation)
   end
 end
 
@@ -473,6 +475,7 @@ function dmt_step!(psi::MPS, gate::AbstractMatrix, bond, opts::DMTOptions; direc
     direction=direction,
     gate_maxdim=opts.gate_maxdim,
     preserve_diameter=opts.preserve_diameter,
+    preserve_operators=opts.preserve_operators,
     truncation=opts.truncation,
   )
 end
@@ -576,6 +579,7 @@ function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normal
         direction=:R,
         gate_maxdim=evo.gate_maxdim,
         preserve_diameter=evo.preserve_diameter,
+        preserve_operators=evo.preserve_operators,
         truncation=evo.truncation,
         cache=cache,
       )
@@ -591,6 +595,7 @@ function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normal
         direction=:L,
         gate_maxdim=evo.gate_maxdim,
         preserve_diameter=evo.preserve_diameter,
+        preserve_operators=evo.preserve_operators,
         truncation=evo.truncation,
         cache=cache,
       )
