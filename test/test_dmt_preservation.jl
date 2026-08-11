@@ -163,4 +163,67 @@ include("dmt_test_helpers.jl")
     @test MPSToolkit._dmt_bond_truncate!(rho, 3; maxdim=9, cutoff=0.0) === rho
     @test_throws ArgumentError DMTOptions(maxdim=30, preserve_diameter=4)   # must be odd
   end
+
+  @testset "the guarantee survives the cutoff, not just cutoff = 0" begin
+    # Every other preservation cell in this suite runs at `cutoff = 0.0` while the default
+    # everywhere in the package is `1e-12` -- so the guarantee used to be verified only at a
+    # setting nobody runs. It did not hold at the others. `cutoff` was applied by `_dmt_refactor`
+    # to the REASSEMBLED bond matrix, whose top-k singular directions need not contain the
+    # protected row and column spaces, and in operator space the identity dominates `sigma_1`: on
+    # a signal `eps` above an infinite-temperature background, every cutoff above `eps` discarded
+    # the protected block wholesale. Measured pre-fix, and the failure is total rather than
+    # graceful: at d = 2, eps = 1e-6, bond 4, maxdim = 14, `cutoff = 1e-6` collapsed the bond to
+    # `chi_out = 1` -- the pure identity -- for a preservation error of 0.98, against 1.5e-7 at
+    # `cutoff = 0`. At d = 3 it was chi_out = 1 and 0.76. Even at eps = 1e-3 the guarantee broke
+    # by `cutoff = 1e-4` (0.37 at d = 2, 0.21 at d = 3). The cutoff now binds on the complement
+    # alone (`_dmt_complement_keep`).
+    #
+    # The claim under test is cutoff *invariance*, not one fixed bound. The reachable floor is set
+    # by the signal-to-background ratio -- an absolute 1e-16 roundoff on `sigma_1` is a relative
+    # `1e-16 / eps` on the signal -- so at eps = 1e-6 it is ~1e-7 and no implementation beats it.
+    # What must hold is that turning the cutoff up does not move it.
+    for d in (2, 3)
+      nsites, chi = 8, 40
+      maxdim = 2 * d^2 + 6
+      sites = operator_siteinds(nsites; d=d)
+      # Structured probes only. A dense random probe has an O(1) identity overlap, so its
+      # expectation does not scale with `eps` and it would put a constant ~0.8 in
+      # `preservation_error`'s denominator -- masking the destruction of a 1e-6 signal by
+      # measuring it against a background that survives. Every structured probe carries at least
+      # one traceless factor, so the whole profile scales with the signal.
+      probes = diameter_probes(nsites, d, 3; nrandom=0)
+      covered = [k for (k, (start, op)) in enumerate(probes)
+                 if guarantee_covers(start, probe_span(op, d), 4, 1)]
+      for eps in (1e-3, 1e-6)
+        Random.seed!(9182)
+        base = add(operator_basis_state(sites, fill(1, nsites)),
+          eps * random_mps(sites; linkdims=chi); maxdim=chi, cutoff=0.0)
+        # Without this the cell is vacuous: `_dmt_bond_truncate!` returns untouched when the bond
+        # already fits, and every cutoff then trivially "preserves" everything.
+        @test dim(linkind(base, 4)) > maxdim
+        before = operator_expectation_profile(base, probes)
+        # The probes see the signal and nothing else: a structured probe's expectation is
+        # proportional to `eps` and below it -- two decades down at d = 2, three at d = 3, where
+        # the same random state spreads over 9 basis directions per site instead of 4.
+        @test 1e-4 * eps < maximum(abs, before[covered]) < eps
+
+        function truncated_error(cutoff)
+          rho = copy(base)
+          MPSToolkit._dmt_bond_truncate!(rho, 4; maxdim=maxdim, cutoff=cutoff)
+          @test dim(linkind(rho, 4)) <= maxdim
+          return preservation_error(before[covered],
+                                    operator_expectation_profile(rho, probes)[covered])
+        end
+        floor_error = truncated_error(0.0)
+        # At a resolvable signal the guarantee is machine precision outright; at eps = 1e-6 the
+        # conditioning floor above applies and only invariance is assertable.
+        eps == 1e-3 && @test floor_error < 1e-11
+        for cutoff in (1e-12, 1e-8, 1e-6, 1e-4)
+          # A factor of 10 against a pre-fix excursion of 6 to 7 orders of magnitude. `max` keeps
+          # a `floor_error` that happens to land at exactly zero from making this unsatisfiable.
+          @test truncated_error(cutoff) <= 10 * max(floor_error, 1e-14)
+        end
+      end
+    end
+  end
 end

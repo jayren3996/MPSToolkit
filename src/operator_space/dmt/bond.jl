@@ -305,6 +305,51 @@ function _dmt_bond_factorize(psi::MPS, bond::Integer, left_inds, ::Type{T}=Compl
 end
 
 """
+    _dmt_complement_keep(complement_values, cutoff)
+
+Return how many of the complement singular values `complement_values` to keep under a relative
+`cutoff`, measured against the **complement's own** leading value.
+
+# Notes
+- The complement `D = P_L^perp B P_R^perp` is the only subspace DMT is allowed to discard, so it
+  is the only one a cutoff may be applied to. Applying the cutoff to the reassembled bond matrix
+  instead — which is what [`_dmt_refactor`](@ref) does when handed a physics cutoff — voids the
+  preservation guarantee outright, because the top-`k` singular directions of the reassembled
+  matrix need not contain the protected row and column spaces. That failure is not hypothetical
+  and not graceful: in operator space the identity direction dominates `sigma_1`, so on a state
+  carrying a signal `eps` above an infinite-temperature background *every* cutoff larger than
+  `eps` discards the whole protected block. Measured at `d = 2, eps = 1e-6, maxdim = 14`, a
+  `cutoff = 1e-6` collapsed the bond to `chi = 1` — the pure identity — for a diameter-3
+  preservation error of `0.98`, against `1.5e-7` at `cutoff = 0`. The `d = 3` cell of the same
+  sweep gave `chi = 1` and `0.76`, and even at `eps = 1e-3` the guarantee was gone by
+  `cutoff = 1e-4`.
+- Measuring against `complement_values[1]` rather than the bond's own scale is what makes the
+  cutoff scale-free inside the subspace it governs. It cannot then interact with the identity
+  background at all, which is what the manual's "invariant to the cutoff itself" claims and what
+  was previously true only in the regime where the signal was a few percent of the norm.
+"""
+function _dmt_complement_keep(complement_values::AbstractVector, cutoff::Real)
+  (cutoff <= 0 || isempty(complement_values)) && return length(complement_values)
+  return count(>(cutoff * complement_values[1]), complement_values)
+end
+
+"""
+    _dmt_refactor_tolerance(factor)
+
+Return the relative tolerance for the final repair SVD: a *numerical rank* threshold, not a
+physics cutoff.
+
+# Notes
+- `LinearAlgebra.rank`'s convention, `min(size(A)...) * eps`. Directions below it are null to the
+  accuracy of the QR/SVD that just reassembled the bond, so dropping them changes nothing
+  measurable — while dropping anything above it could clip a protected direction (see
+  [`_dmt_complement_keep`](@ref)). The traceless bond needs this: there the connector is disabled
+  and `hcat`'s first column is exactly zero, so without a rank cut the bond would carry one
+  guaranteed-null direction.
+"""
+_dmt_refactor_tolerance(factor::AbstractMatrix) = minimum(size(factor)) * eps(Float64)
+
+"""
     _dmt_bond_solve(T, bond_matrix, protected_left, protected_right, maxdim, cutoff,
                     truncation)
 
@@ -320,7 +365,10 @@ only the doubly-orthogonal complement `D = P_L^perp B P_R^perp` is truncated, to
 - `bond_matrix`: Bond matrix over `(left_link, right_link)` from [`_dmt_bond_factorize`](@ref).
 - `protected_left`, `protected_right`: `chi x d^(2 n)` protected blocks, conjugated on the left,
   with column 1 the all-identity multi-index (the trace direction).
-- `maxdim`, `cutoff`: Total post-truncation bond dimension and refactorization cutoff.
+- `maxdim`: Total post-truncation bond dimension, inclusive of the protected block.
+- `cutoff`: Relative cutoff on the **complement** singular values only (see
+  [`_dmt_complement_keep`](@ref)). The final repair SVD runs at a numerical-rank tolerance
+  instead, so no cutoff can clip a protected direction.
 - `truncation`: `:dense` or `:random` (see [`_truncated_svd`](@ref)).
 
 # Returns
@@ -354,6 +402,11 @@ function _dmt_bond_solve(::Type{T}, bond_matrix::AbstractMatrix, protected_left:
   budget = max(_dmt_complement_budget(maxdim, size(protected_left, 2),
                                       size(protected_right, 2)), 1)
   uc, sc, vc = _truncated_svd(ops.mul, ops.adj, chi, budget, T; mode=truncation)
+  # `cutoff` binds *here*, on the complement, and nowhere else. See `_dmt_complement_keep`: the
+  # protected block and the trace connector are reinstated exactly, so a cutoff applied after
+  # reassembly would be free to clip them.
+  complement = _dmt_complement_keep(sc, cutoff)
+  uc, sc, vc = uc[:, 1:complement], sc[1:complement], vc[:, 1:complement]
 
   # M' = C + QL (QL' B) + BQRc QR' + Uc Sc Vc'  in factored form.
   factor_left = hcat(a, ql, ops.BQRc, uc * Diagonal(sc))
@@ -364,7 +417,8 @@ function _dmt_bond_solve(::Type{T}, bond_matrix::AbstractMatrix, protected_left:
       "$(eltype(factor_left)) (left) / $(eltype(factor_right)) (right). `hcat` re-promotes a " *
       "partially converted factor with no error, so this is a silently widened step.")
   end
-  return _dmt_refactor(factor_left, factor_right, Int(maxdim), cutoff)
+  return _dmt_refactor(factor_left, factor_right, Int(maxdim),
+                       _dmt_refactor_tolerance(factor_left))
 end
 
 """
@@ -385,7 +439,9 @@ protected block always fits inside `maxdim` and never has to be clipped.
 
 # Keyword Arguments
 - `maxdim`: Total post-truncation bond dimension, inclusive of the protected block.
-- `cutoff`: Relative cutoff applied in the final refactorization.
+- `cutoff`: Relative cutoff on the discarded complement, measured against the leading complement
+  singular value. It cannot reach the protected block or the trace connector, so the preservation
+  guarantee holds at every `cutoff` (see [`_dmt_complement_keep`](@ref)).
 - `direction`: `:R` leaves the orthogonality center at `bond + 1`, `:L` at `bond`.
 - `preserve_diameter`: Odd; every observable of diameter at most this value is preserved
   exactly. `radius = (preserve_diameter - 1) / 2` sites are protected per side.

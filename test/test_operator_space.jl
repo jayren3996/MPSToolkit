@@ -976,6 +976,36 @@ end
     # The bond energies themselves are far from zero, so the agreement above has content.
     @test minimum(abs, wanted) > 0.1
   end
+
+  @testset "a long cold chain does not overflow during preparation" begin
+    # An imaginary-time gate is not norm preserving, and `operator_gibbs_state` used to rescale
+    # only once, after the last one. The un-normalized `norm(rho) = (sum_m e^{-2 beta m})^{L/2}`
+    # then overflows `Float64` and LAPACK throws `matrix contains Infs or NaNs` from inside the
+    # NEXT gate's SVD -- about twenty frames below any MPSToolkit code, and on a state whose bond
+    # dimension may be 1, so nothing is ill-conditioned and the message points nowhere useful.
+    # Measured to fail at (d, L, beta) = (3, 256, 6) and (3, 512, 2).
+    d, nsites, beta = 3, 200, 6.0
+    sites = operator_siteinds(nsites; d = d)
+    identity3 = Matrix{ComplexF64}(I, d, d)
+    # A two-site gate acting on its LEFT site only. That keeps the state an exact product -- so a
+    # 200-site cold chain is cheap and the answer is the closed-form single-site Gibbs value --
+    # while still routing every application through the two-site SVD where the overflow surfaced.
+    # `sum_j beta = 1194` in log-norm, comfortably past `log(floatmax) = 709`.
+    terms = [(j, kron(_S1_Z, identity3)) for j in 1:(nsites - 1)]
+    rho = operator_gibbs_state(sites, terms, fill(beta, length(terms));
+                               nsteps = 1, maxdim = 8, cutoff = 0.0)
+    @test all(all(isfinite, Array(t, inds(t)...)) for t in ITensorMPS.data(rho))
+
+    # Correct in value, not merely non-throwing: sites 1..L-1 each carry exactly one term.
+    wanted = -2 * sinh(beta) / (1 + 2 * cosh(beta))
+    @test abs(wanted) > 0.9                       # not a zero-against-zero comparison
+    for site in (1, 2, 100, nsites - 1)
+      @test operator_expectation(rho, _S1_Z, site) ≈ ComplexF64(wanted) atol = 1e-12
+    end
+    # The last site is outside every term's support and must stay infinite-temperature. Without
+    # this, a state that had collapsed to a uniform product would still pass the checks above.
+    @test abs(operator_expectation(rho, _S1_Z, nsites)) < 1e-12
+  end
 end
 
 @testset "spin-1/2-only helpers reject higher local dimension" begin

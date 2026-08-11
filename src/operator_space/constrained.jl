@@ -35,7 +35,14 @@ contaminates transport observables.
   correlator, N=64) show no measurable accuracy gain while the inflated bonds add substantial
   cost per sweep (1.3-2x at moderate `maxdim`, growing with `maxdim` as the cubic SVD scaling
   takes over).
-- `projector_cutoff`: Truncation cutoff for the projector application.
+- `projector_cutoff`: Truncation cutoff for the projector application. This is **ITensors'**
+  cutoff — discarded sum of squares relative to the total weight — not the DMT one, which bounds
+  the discarded complement relative to the leading complement singular value. Defaulting it to
+  `evo.cutoff` therefore reuses one number under two meanings that can sit decades apart. The
+  projector step is a plain SVD and carries no preservation guarantee, so on a state whose signal
+  is `eps` above an infinite-temperature background it can discard weight `eps^2` that the DMT
+  sweeps around it are protecting exactly; pass a smaller `projector_cutoff` (or `0.0`) when
+  `eps^2` approaches `evo.cutoff`.
 - `normalize`: Whether to renormalize after each checkpoint (and let the chunked
   `dmt_evolve!` sweeps renormalize). Defaults to `evo.normalize`, so a
   `DMTGateEvolution(...; normalize=false)` is honored without re-passing the keyword here —

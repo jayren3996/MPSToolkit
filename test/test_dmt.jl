@@ -212,11 +212,21 @@ end
     # `B QR` a zero first COLUMN: the rank-one trace connector shares one direction with the
     # two protected blocks instead of adding one, giving
     # 1 + (d^2 - 1) + (d^2 - 1) + (maxdim - 2 d^2) = maxdim - 1.
-    # The reported DIMENSION only reaches that rank when `cutoff > 0`; at `cutoff = 0.0` the
-    # surplus direction survives at ~1e-16 and the bond stays at maxdim. Either way the budget
-    # chi' = maxdim - 2 d^2 never overflows maxdim -- and on a traceless bond, where the
-    # connector is disabled, the rank does saturate maxdim (see the traceless testset above).
+    # The reported DIMENSION now matches that rank at every `cutoff`, including 0: the repair SVD
+    # applies a `min(size) * eps` numerical-rank tolerance of its own (`_dmt_refactor_tolerance`)
+    # rather than the caller's cutoff, so the surplus direction -- which sits at ~1e-16 -- is
+    # dropped either way. It used to survive at `cutoff = 0.0`, leaving the bond at maxdim.
+    # The budget chi' = maxdim - 2 d^2 never overflows maxdim -- and on a traceless bond, where
+    # the connector is disabled, the rank does saturate maxdim (see the traceless testset above).
     @test dim(linkind(psi, 3)) == 11
+
+    # Pinned at cutoff = 0 too, because that is the difference: `cutoff` can no longer influence
+    # the reinstated rank at all, which is the same property the preservation suite asserts as
+    # cutoff invariance.
+    exact = random_mps(sites; linkdims=20)
+    normalize!(exact)
+    dmt_step!(exact, _identity_gate(2), 3; maxdim=12, cutoff=0.0, gate_maxdim=40)
+    @test dim(linkind(exact, 3)) == 11
   end
 
   @testset "DMT preserves identity and local Pauli data under truncation" begin

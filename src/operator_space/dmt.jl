@@ -18,7 +18,10 @@ Options controlling operator-space density matrix truncation (DMT).
 - `maxdim`: **Total** bond dimension after DMT truncation, inclusive of the protected block.
   The complement is truncated to `maxdim - 2 d^(preserve_diameter - 1)` directions, so `maxdim`
   must be at least `2 d^(preserve_diameter - 1) + 1` for the local dimension `d` in use.
-- `cutoff`: Truncation cutoff used in the final refactorization.
+- `cutoff`: Relative cutoff on the *discarded complement*, measured against the leading
+  complement singular value. It never reaches the protected block or the trace connector, so
+  the preservation guarantee holds at every `cutoff`; `maxdim` and `preserve_diameter` remain
+  the dials that decide accuracy.
 - `gate_maxdim`: Temporary bond dimension cap applied while the raw gate is applied, before DMT
   truncates the bond back to `maxdim`. **`0` (the default) means no cap: the gate is applied
   exactly.** A positive cap pre-truncates the inflated bond with a plain SVD, which discards the
@@ -373,7 +376,10 @@ is (and is not) the appropriate choice.
 # Keyword Arguments
 - `maxdim`: **Total** post-truncation bond dimension, inclusive of the protected block; it must
   be at least `2 d^(preserve_diameter - 1) + 1`.
-- `cutoff`: Truncation cutoff used in the final refactorization.
+- `cutoff`: Relative cutoff on the *discarded complement*, measured against the leading
+  complement singular value. It never reaches the protected block or the trace connector, so
+  the preservation guarantee holds at every `cutoff`; `maxdim` and `preserve_diameter` remain
+  the dials that decide accuracy.
 - `direction`: Sweep direction, either `:R` or `:L`.
 - `gate_maxdim`: Temporary bond dimension cap for the raw gate application, before DMT truncates
   the bond back to `maxdim`. `0` (the default) means no cap, i.e. the gate is applied exactly;
