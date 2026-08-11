@@ -231,6 +231,9 @@ vectorized operator `rho`, in one O(N) sweep with cumulative identity environmen
 function operator_expectation_profile(rho::MPS, terms; normalize::Bool=true)
   nsites = length(rho)
   d = _validate_operator_space(rho, 1, nsites)
+  # Materialize so a lazy (non-indexable) generator of (start, op) pairs is accepted; the windowed
+  # sweep below indexes terms[k] after sorting by window start.
+  terms = collect(terms)
   isempty(terms) && return ComplexF64[]
   windows = _validated_operator_windows(rho, terms, d)
 

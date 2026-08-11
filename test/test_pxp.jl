@@ -294,6 +294,11 @@ end
     # Unnormalized variant scales by the trace.
     raw_profile = pauli_expectation_profile(rho, terms; normalize=false)
     @test raw_profile ≈ profile .* tr(dense_rho) atol = 1e-9
+    # A lazy, non-indexable generator of (start, op) pairs must be accepted: the windowed sweep
+    # indexes terms[k] after sorting, so the input has to be materialized first rather than
+    # throwing a MethodError on getindex.
+    gen = ((first(pxp_term_support(nsites, j)), pxp_term_hamiltonian(nsites, j)) for j in 1:nsites)
+    @test pauli_expectation_profile(rho, gen) ≈ profile atol = 1e-12
   end
 
   @testset "Hermitian state gives real energies" begin

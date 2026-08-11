@@ -96,7 +96,11 @@ function _operator_span_at(psi::MPS, op::AbstractMatrix, start::Integer)
       break
     end
   end
-  if Int(start) == length(psi)
+  # Periodic-wraparound fallback for a 2-site gate on the last bond (site N paired with site 1).
+  # Require length(psi) >= 2 so a length-1 chain does not multiply site 1's dimension onto itself,
+  # match the two-site operator size and report span 2; it falls through to the dimension error
+  # below instead of BoundsError-ing downstream.
+  if Int(start) == length(psi) && length(psi) >= 2
     product_dim *= dim(siteind(psi, 1))
     product_dim == size(op, 1) && return 2
   end

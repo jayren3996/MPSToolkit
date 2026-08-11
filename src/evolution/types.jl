@@ -283,7 +283,7 @@ function TDVPEvolution(
 )
   isnothing(nsteps) || nsteps >= 1 || throw(ArgumentError("TDVPEvolution requires nsteps >= 1 when provided"))
   isnothing(nsweeps) || nsweeps >= 1 || throw(ArgumentError("TDVPEvolution requires nsweeps >= 1 when provided"))
-  reserved_solver_keys = (:time_step, :nsteps, :reverse_step, :updater_backend, :updater, :normalize)
+  reserved_solver_keys = (:time_step, :nsteps, :nsweeps, :reverse_step, :updater_backend, :updater, :normalize)
   conflicting_keys = intersect(keys(solver_kwargs), reserved_solver_keys)
   isempty(conflicting_keys) ||
     throw(ArgumentError("TDVPEvolution solver_kwargs must not contain reserved keys $(collect(conflicting_keys)); these are forwarded to `tdvp` last and would silently override the dedicated TDVPEvolution keyword arguments. Set them through the dedicated keyword arguments instead."))

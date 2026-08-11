@@ -168,6 +168,15 @@ end
     @test_throws ArgumentError dmt_step!(psi, _identity_gate(2), 1; maxdim=0)
   end
 
+  @testset "operator span rejects an oversized operator on a length-1 chain" begin
+    # A two-site gate cannot act on a single site. The periodic-wraparound fallback in
+    # _operator_span_at must not fire on a length-1 chain: it would multiply site 1's dimension
+    # onto itself, match the two-site operator size, and report span 2, which BoundsErrors
+    # downstream. A clean dimension ArgumentError is required instead.
+    psi = pauli_basis_state(pauli_siteinds(1), [2])
+    @test_throws ArgumentError MPSToolkit._operator_span_at(psi, _identity_gate(2), 1)
+  end
+
   @testset "maxdim is the total budget" begin
     sites = operator_siteinds(6; d=2)
     psi = random_mps(ComplexF64, sites; linkdims=40)
