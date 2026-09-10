@@ -109,7 +109,11 @@ function _scarfinder_rebuild_evolution(evolution::TDVPEvolution, steps)
   return TDVPEvolution(
     evolution.generator,
     evolution.t;
-    time_step=evolution.time_step,
+    # Forcing nsteps -> steps changes the substep count, so the original time_step (which a
+    # single-step object carries as time_step == t) would violate ITensorMPS tdvp's
+    # time_step * nsteps == t invariant and throw. Drop it and let tdvp derive t/steps, covering
+    # the same total interval evolution.t in `steps` substeps.
+    time_step=nothing,
     nsteps=steps,
     nsweeps=evolution.nsweeps,
     reverse_step=evolution.reverse_step,
@@ -229,7 +233,10 @@ function _match_energy_dense!(psi, evolution, truncation, target)
       rollback_evolution = LocalGateEvolution(
         rollback_gate,
         correction_dt;
-        schedule=evolution.schedule,
+        # Same deduplication as the forward step above: the rollback undoes a correction that was
+        # applied once per unique bond, so applying it once per schedule *entry* would over-reverse
+        # every repeated bond of a multi-visit schedule.
+        schedule=correction_schedule,
         nstep=1,
         maxdim=truncation.maxdim,
         cutoff=truncation.cutoff,
@@ -242,7 +249,7 @@ function _match_energy_dense!(psi, evolution, truncation, target)
       rollback_evolution = LocalGateEvolution(
         rollback_gate,
         correction_dt;
-        schedule=evolution.schedule,
+        schedule=correction_schedule,
         nstep=1,
         maxdim=truncation.maxdim,
         cutoff=truncation.cutoff,

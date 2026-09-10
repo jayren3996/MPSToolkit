@@ -1,7 +1,24 @@
 using Base.Docs
 
-function _has_binding_doc(mod::Module, name::Symbol)
-  return Docs.hasdoc(mod, name)
+@static if isdefined(Docs, :hasdoc)
+  _has_binding_doc(mod::Module, name::Symbol) = Docs.hasdoc(mod, name)
+else
+  # `Docs.hasdoc` arrived in Julia 1.11, and Project.toml declares a 1.10 floor. Reproduce its
+  # lookup: scan the doc metadata of every module that registered any, then follow the binding's
+  # alias so a name re-exported from a submodule resolves to the definition carrying the
+  # docstring. Verified against 1.10.11 and 1.12.6 to agree on documented bindings, undocumented
+  # ones, the re-export path, and names that do not exist.
+  _has_binding_doc(mod::Module, name::Symbol) = _has_binding_doc(Docs.Binding(mod, name))
+  function _has_binding_doc(binding::Docs.Binding)
+    for m in Docs.modules
+      dict = Docs.meta(m; autoinit=false)
+      if !isnothing(dict) && haskey(dict, binding)
+        return true
+      end
+    end
+    alias = Docs.aliasof(binding)
+    return alias == binding ? false : _has_binding_doc(alias)
+  end
 end
 
 @testset "docstring coverage" begin

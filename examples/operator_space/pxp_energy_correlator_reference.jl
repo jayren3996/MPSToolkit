@@ -18,7 +18,8 @@
 # diffusive value 2/z = 1.0 and descending toward the KPZ value 4/3 = 1.333 FROM ABOVE. The
 # conserved-total drift (the truncation error bar with normalize=false) grows 1.8% (t=8) ->
 # 12.2% (t=14), so the plateau is trustworthy only to t ~ 10; the z=3/2 asymptote needs
-# t >= 20-30 at chi > 48 and is NOT established here. test/test_pxp.jl pins this fit in CI.
+# t >= 20-30 at chi > 48 and is NOT established here. test/test_transport_reference.jl pins this
+# fit in CI.
 
 using Printf
 

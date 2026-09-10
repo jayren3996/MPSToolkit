@@ -1,6 +1,6 @@
 name = "MPSToolkit"
 uuid = "9fc92dc4-a6d3-4a85-b5fe-6a206e4c3402"
-version = "0.1.0"
+version = "0.2.0"
 
 [deps]
 ITensorMPS = "0d1a4710-d33b-49a5-8f18-73bdf49b47e2"

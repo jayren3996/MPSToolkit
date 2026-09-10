@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "*"
+  pull_request:
+
+# A newer push to the same branch makes the in-flight run obsolete. Never cancel on main:
+# its runs are the record of what actually landed.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: Julia ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # "1.10" is the floor declared in Project.toml [compat]; "1" is the current stable
+        # release. Testing both is what makes the compat bound a claim rather than a guess.
+        version:
+          - "1.10"
+          - "1"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: ${{ matrix.version }}
+
+      - uses: julia-actions/cache@v3
+
+      # The repo tracks a root Manifest.toml resolved on Julia 1.12, and 1.10 cannot use it --
+      # the stdlib set differs, so resolution dies with "Could not locate the source code for
+      # the OpenSSL_jll package" before a single test runs. Resolve fresh per leg instead, which
+      # tests each Julia version against Project.toml's [compat] bounds -- what those bounds are
+      # for. This touches only the runner's checkout; the committed manifest is never rewritten.
+      - name: Resolve dependencies per Julia version
+        run: rm -f Manifest.toml
+
+      - uses: julia-actions/julia-buildpkg@v1
+
+      - uses: julia-actions/julia-runtest@v1

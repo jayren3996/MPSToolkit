@@ -232,6 +232,33 @@ end
   tdvp_evo = TDVPEvolution(reshape(1:4, 2, 2), -0.1im; nsteps=1, normalize=false)
   tdvp_upgraded = MPSToolkit._scarfinder_evolution(tdvp_evo; warn=false)
   @test tdvp_upgraded.normalize == false
+
+  # The rebuild forces nsteps -> 10, so it must also drop time_step: ITensorMPS tdvp requires
+  # time_step * nsteps == t, and a naturally-constructed single-step object carries
+  # time_step == t. Keeping the original time_step alongside nsteps=10 makes the upgraded
+  # object un-runnable.
+  tdvp_ts = TDVPEvolution(reshape(1:4, 2, 2), -0.1im; time_step=-0.1im, nsteps=1, normalize=false)
+  @test isnothing(MPSToolkit._scarfinder_evolution(tdvp_ts; warn=false).time_step)
+end
+
+@testset "scarfinder runs a single-step TDVPEvolution carrying an explicit time_step" begin
+  # ScarFinder's single-step upgrade forces nsteps=10. Unless time_step is dropped, the rebuilt
+  # object violates tdvp's time_step * nsteps == t invariant and throws the moment the evolution
+  # actually runs -- a hard crash in the public scarfinder_step! path for the idiomatic
+  # time_step/nsteps usage. The mock-based upgrade tests leave time_step=nothing and never reach
+  # tdvp, so only a real-MPS run covers this.
+  sites = siteinds("S=1/2", 6)
+  H = MPO(OpSum() + ("Sz", 1) + ("Sz", 2) + ("Sz", 3) + ("Sz", 4) + ("Sz", 5) + ("Sz", 6), sites)
+  psi = MPS(sites, n -> "Up")
+  trunc = BondDimTruncation(8; cutoff=1e-10)
+  evo = TDVPEvolution(H, -0.1im; time_step=-0.1im, nsteps=1, normalize=false)
+  @test scarfinder_step!(psi, evo, trunc) === psi
+end
+
+@testset "TDVPEvolution rejects nsweeps passed through solver_kwargs" begin
+  # nsweeps is a dedicated field. solver_kwargs is forwarded to tdvp last, so an nsweeps in there
+  # would silently override the dedicated value; it must be rejected like the other reserved keys.
+  @test_throws ArgumentError TDVPEvolution(reshape(1:4, 2, 2), -0.1im; solver_kwargs=(nsweeps=3,))
 end
 
 @testset "scarfinder preserves non-unit step counts" begin
@@ -351,4 +378,31 @@ end
   psi_dup = make_state()
   MPSToolkit.match_energy!(psi_dup, evo_dup, trunc, mk_target())
   @test energy_density(psi_single, h) ≈ energy_density(psi_dup, h) atol = 1e-9
+end
+
+@testset "dense energy matching rollback is schedule-duplication independent" begin
+  # The forward correction deduplicates the schedule, but the overshoot and no-progress rollback
+  # branches must too: applying the rollback gate once per schedule *entry* on a multi-visit
+  # schedule over-reverses the repeated bonds and lands at a schedule-dependent energy. The
+  # package's own tebd_strang_schedule is vcat(odd, even, odd), so a bond listed twice is the
+  # idiomatic configuration, not an edge case. This drives an actual rollback -- a large alpha
+  # overshoots the small gap -- with a non-commuting operator so the rollback gate genuinely
+  # moves the state. The testset above cannot catch it: its small alpha never triggers a rollback.
+  X = ComplexF64[0 1; 1 0]
+  Z = ComplexF64[1 0; 0 -1]
+  Id = ComplexF64[1 0; 0 1]
+  h = -(kron(X, Id) + kron(Id, X)) / 2 + 0.3 * kron(Z, Z)
+  sites = siteinds("S=1/2", 3)
+  make_state() = MPS(sites, n -> "Up")
+  trunc = BondDimTruncation(16; cutoff=1e-12)
+  target_value = energy_density(make_state(), h) - 0.05   # small gap: a large alpha overshoots
+  mk_target() = EnergyTarget(target_value; operator=h, alpha=8.0, maxstep=1, tol=1e-12)
+  gate = exp(0.0 * h)
+  evo_single = LocalGateEvolution(gate, 0.0; schedule=[1, 2], nstep=1, maxdim=16, cutoff=1e-12)
+  evo_strang = LocalGateEvolution(gate, 0.0; schedule=[1, 2, 1], nstep=1, maxdim=16, cutoff=1e-12)
+  psi_single = make_state()
+  MPSToolkit.match_energy!(psi_single, evo_single, trunc, mk_target())
+  psi_strang = make_state()
+  MPSToolkit.match_energy!(psi_strang, evo_strang, trunc, mk_target())
+  @test energy_density(psi_single, h) ≈ energy_density(psi_strang, h) atol = 1e-9
 end
