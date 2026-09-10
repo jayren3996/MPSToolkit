@@ -105,16 +105,8 @@ const MSD_CSV  = joinpath(@__DIR__, "mixed_field_ising_diffusion.csv")
 # Mixed-field Ising bond Hamiltonian in the Pauli basis, with open-boundary field splitting so the
 # sum over bonds reproduces H = J sum Z_iZ_{i+1} + g_x sum X_i + g_z sum Z_i exactly (bulk sites get
 # half their field from each adjacent bond; edge sites get their full field from the single bond).
-function mfi_bond_hamiltonian(nsites::Integer, bond::Integer; J::Real=J, gx::Real=GX, gz::Real=GZ)
-    1 <= bond < nsites || throw(ArgumentError("bond index must satisfy 1 <= bond < nsites"))
-    p = pauli_matrices()
-    lw = bond == 1 ? 1.0 : 0.5
-    rw = bond == nsites - 1 ? 1.0 : 0.5
-    zz = J * kron(p.Z, p.Z)
-    fx = gx * (lw * kron(p.X, p.I) + rw * kron(p.I, p.X))
-    fz = gz * (lw * kron(p.Z, p.I) + rw * kron(p.I, p.Z))
-    return zz + fx + fz
-end
+mfi_bond_hamiltonian(nsites::Integer, bond::Integer; J::Real=J, gx::Real=GX, gz::Real=GZ) =
+    spinhalf_mixed_field_ising_bond_hamiltonian(nsites, bond; J=J, gx=gx, gz=gz)
 
 # Local energy densities as (start, dense) pairs -- the gate generators, the melt energy profile,
 # and the spread autocorrelation targets all use this one consistent decomposition of H.

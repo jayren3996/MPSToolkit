@@ -179,6 +179,83 @@ The truncation budget has a few knobs worth understanding:
 `maxdim` must be at least `2 d^(2n) + 1`; an `ArgumentError` naming `d`, `preserve_diameter`,
 and the implied floor is raised at the start of the step or sweep, before anything is mutated.
 
+For dense two-site gates, `gate_backend=:fused` forms the exact gated two-site tensor and passes
+its full SVD factors directly to the DMT solve. This removes the intermediate expanded-MPS
+writeback and the second bond factorization, but it does not remove the full center SVD.
+
+The opt-in `gate_backend=:direct` instead applies DMT to the rectangular gated center
+`(d² chi_left) x (d² chi_right)` in the canonical external bases. It numerically verifies the
+canonical premise, constructs the protected columns from the external environments and local
+operator basis (without contracting the center into them), and skips the full center SVD. It
+still performs the complement SVD and final low-rank refactorization. The first implementation
+supports only `truncation=:dense`; `:random` is rejected before mutation. `:qr` remains the
+generic bond-plan default, while `:product` remains the lower-level compatibility default.
+
+### Choosing a gate backend
+
+| Backend | Recommended use | Full gated-center SVD | Restrictions |
+|:--|:--|:--:|:--|
+| `:qr` | **Default and recommended starting point** for generic two-site production plans | No | Dense gates; `gate_maxdim=0` |
+| `:direct` | Opt-in performance experiment after checkpoint-specific correctness and timing A/B | No | Two-site dense gates; `truncation=:dense`; `gate_maxdim=0` |
+| `:fused` | Correctness/performance comparison with the SVD-first formulation | Yes | Two-site dense gates; `gate_maxdim=0` |
+| `:product` | Compatibility with the ITensorMPS gate-application path | Backend-dependent | Only backend supporting positive `gate_maxdim` |
+| `:controlled` | Structured PXP/PXP+chemical-potential plans | No dense center gate | `PXPControlledGate` entries only |
+
+For an Agent choosing automatically: start with `:qr`. Consider `:direct` only when all of the
+following are true:
+
+1. Every scheduled gate acts on exactly two sites.
+2. `truncation=:dense` and `gate_maxdim=0` are acceptable.
+3. The input is representative of the intended bond/rank profile, preferably a production
+   checkpoint.
+4. The same observable-error target is satisfied by both paths, and direct improves actual wall
+   time or allocation on that input.
+
+Do not request `:direct` with `truncation=:random`; the constructor rejects this combination
+before state mutation. Do not describe direct as SVD-free, and do not remove intermediate DMT
+operations when comparing it with another backend.
+
+## Generic second- and fourth-order bond plans
+
+For an open chain with one Hermitian two-site Hamiltonian per bond, `bond_dmt_plan` compiles a
+complete physical-time step:
+
+```julia
+sites = pauli_siteinds(nsites)
+terms = [spinhalf_xyz_bond_hamiltonian(Jx=1, Jy=1, Jz=0.5)
+         for _ in 1:(nsites - 1)]
+plan = bond_dmt_plan(sites, terms, 0.05;
+  order=4, composition=:merged7, gate_backend=:qr,
+  maxdim=32, normalize=false)
+dmt_evolve!(rho, plan)
+```
+
+Use `gate_backend=:direct` to opt into the direct-center experiment without changing the
+fourth-order, merged-seven-layer or dense-complement defaults.
+
+For time-step selection, compare S2 and S4 at fixed physical time and fixed observable-error
+threshold. The current generated-input development benchmark found S2 cheaper at error `1e-3`,
+while S4 became cheaper around `1e-4` and tighter because it tolerated a larger `tau`. This is a
+workflow recommendation, not a universal step-size rule: finite-`maxdim` errors can plateau or be
+non-monotone. Re-run `dev/bench_bond_s2_s4.jl` on representative inputs before choosing a
+production step size; production-checkpoint acceptance remains separate from generated-input
+development measurements.
+
+Second order uses odd-even-odd Strang splitting. Fourth order composes three Strang steps with
+the exact Yoshida coefficients, including the negative middle duration. `:merged7` combines
+adjacent odd layers; `:yoshida9` retains all nine layers. They are separate finite-`maxdim`
+algorithms because merging removes intermediate DMT operations. Gates are cached by identical
+bond Hamiltonian and signed duration, while boundary-specific terms remain distinct. On-site
+fields must be allocated into the supplied bond terms; the model helper
+`spinhalf_mixed_field_ising_bond_hamiltonian` supplies the correct open-boundary allocation for
+the mixed-field Ising model.
+
+The PXP plan builders also accept `mu`, using the convention
+`H = omega sum_j P X_j P + mu sum_j n_j`, `n=(I-Z)/2`. Each center gate retains the exact
+two-product representation `I⊗V⊗I + P⊗(W-V)⊗P`, so its physical MPO bond dimension remains at
+most 2 and its operator-space bond dimension at most 4. The chemical-potential term is included
+inside every S2/S4 center gate; it is not appended as an asymmetric extra layer.
+
 | `preserve_diameter` | protected block `2 d^(2n)` | minimum `maxdim`, `d = 2` | `d = 3` | `d = 4` |
 |:--|--:|--:|--:|--:|
 | 3 | `2 d^2`  | 9  | 19  | 33  |
@@ -455,15 +532,38 @@ schedule = [start for (start, _) in terms]     # 3-site bulk gates, 2-site edge 
 evo = DMTGateEvolution(gates, dt; schedule, reverse_schedule=reverse(schedule),
     nstep=1, maxdim=32, cutoff=1e-12, gate_maxdim=128)
 projector = pauli_pxp_constraint_projector(sites)
+run_state = ConstrainedDMTRunState()
 
 profile(state) = real.(pauli_expectation_profile(state, terms))   # e_j = tr(rho h_j)/tr(rho)
 e0 = profile(rho)
 dE = Float64[]
 for k in 1:50                                   # one call advances t by 2*dt
-    constrained_dmt_evolve!(rho, evo, projector; project_every=1)
+    constrained_dmt_evolve!(rho, evo, projector; project_every=1, run_state)
     push!(dE, sum(profile(rho)[(wall + 1):end] - e0[(wall + 1):end]))
 end
 ```
+
+The experimental parity path is constructed explicitly rather than changing this default
+schedule:
+
+```julia
+plan = pxp_s2_dmt_plan(sites, 2dt; maxdim=32, cutoff=1e-12, normalize=false)
+run_state = ConstrainedDMTRunState()
+constrained_dmt_evolve!(rho, plan, projector; project_every=2, run_state)
+```
+
+`plan.entries` records each gate's center, support, signed duration, layer and direction. S2 uses
+`O(τ/2) E(τ) O(τ/2)`, disables the automatic reverse sweep, and attempts `3(L-1)` DMT bond
+updates per physical step. It remains opt-in because its truncation locations differ from the
+legacy forward/reverse trajectory. `pxp_s4_dmt_plan` supplies the seven-layer fourth-order
+Yoshida comparison with analytic coefficients and `7(L-1)` attempted updates; its negative
+middle durations are explicit in `plan.entries`. The extra four truncation layers mean S4 must
+win an observable-error comparison at equal cost before being preferred over S2.
+
+`pxp_layer_dmt_plan(sites, τ; scheme=:S2, ...)` is the separate layerwise experiment. It caches
+each exact bond-4 parity MPO, applies the whole layer without a bond cap, then performs one
+directed DMT sweep. This changes truncation locations and has its own algorithm signature. A
+small finite-χ development benchmark was slower than gatewise S2, so this path is not a default.
 
 The transferred energy ``\Delta E(t) = \sum_{j > \mathrm{wall}} [e_j(t) - e_j(0)] \sim
 t^{1/z}`` is fitted on a late window, with the same caveats as the XXZ example plus one more:
@@ -471,11 +571,11 @@ the domain-wall quench approaches its hydrodynamic power law *slowly* (quadratic
 ballistic-looking middle), so short runs measure an **effective, crossover-bound exponent**
 that overestimates ``1/z`` — the example prints the local log-log slope so the drift toward
 the asymptote is visible. The projector application at a checkpoint compresses back to
-`projector_maxdim` (default `2 * maxdim`) immediately: the projected state is only an
-``O(\text{leakage})`` perturbation of the state DMT just compressed, so this plain-SVD step
-perturbs the protected components at the same negligible order, while letting the bond stay
-inflated until the next sweep adds substantial cost per sweep (measured 1.3–2× at moderate
-``\chi`` and growing with ``\chi``) for no measured accuracy gain.
+`projector_maxdim` (default `2 * maxdim`) immediately. This plain-SVD compression has no DMT
+preservation guarantee, so convergence checks should compare it with a larger cap and smaller
+`projector_cutoff`. Passing `run_state` keeps the projection cadence and physical clock stable
+when the run is split across calls or checkpoints; the legacy stateless API retains its older
+behavior of projecting a final short chunk.
 
 One further lesson from the production-scale validation runs: **profile mirror symmetry is
 a useful truncation gauge**. The melt is a mirror-symmetric setup, so the profile
@@ -494,8 +594,8 @@ leakage accrued by one unprojected sweep):
     Nothing in `constrained_dmt_evolve!` is PXP-specific: it interleaves DMT sweeps with any
     operator-space MPO. Other kinetically constrained models need only their own constraint
     MPO — build it in physical space (cf. `pxp_constraint_mpo`) and lift it with
-    `pauli_superoperator_mpo`. The same pattern also fits DAOE-style projectors
-    ([DAOE](daoe.md)).
+    `pauli_superoperator_mpo`. Save `run_state` with `dmt_checkpoint_save(...; run_state)` and
+    restore it with `dmt_checkpoint_run_state` so a restart does not shift a projection event.
 
 ## Higher spin
 

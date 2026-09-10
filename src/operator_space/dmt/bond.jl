@@ -63,12 +63,11 @@ entry to a DMT step or sweep, so the failure is immediate rather than mid-sweep.
   leaves a partially updated `psi` behind. [`_dmt_bond_truncate!`](@ref) repeats the check as a
   backstop for callers that reach the kernel directly.
 """
-function _validate_dmt_budget(psi::MPS, maxdim::Integer, preserve_diameter::Integer,
-                              preserve_operators=nothing)
+function _validate_dmt_budget_dimension(d::Integer, maxdim::Integer,
+                                        preserve_diameter::Integer, preserve_operators=nothing)
   isodd(preserve_diameter) && preserve_diameter >= 1 ||
     throw(ArgumentError("DMT preserve_diameter must be a positive odd integer, got $(preserve_diameter)"))
   radius = (Int(preserve_diameter) - 1) ÷ 2
-  d = local_dimension(siteind(psi, 1))
   per_side = _preserved_count(d, radius, preserve_operators)
   floor_value = 2 * per_side + 1
   if Int(maxdim) < floor_value
@@ -83,6 +82,12 @@ function _validate_dmt_budget(psi::MPS, maxdim::Integer, preserve_diameter::Inte
       "maxdim is the total bond dimension, inclusive of the protected block."))
   end
   return nothing
+end
+
+function _validate_dmt_budget(psi::MPS, maxdim::Integer, preserve_diameter::Integer,
+                              preserve_operators=nothing)
+  return _validate_dmt_budget_dimension(local_dimension(siteind(psi, 1)), maxdim,
+    preserve_diameter, preserve_operators)
 end
 
 """
@@ -363,8 +368,8 @@ only the doubly-orthogonal complement `D = P_L^perp B P_R^perp` is truncated, to
 # Arguments
 - `T`: Element type to work in, a promotion over the whole chain (see [`_mps_eltype`](@ref)).
 - `bond_matrix`: Bond matrix over `(left_link, right_link)` from [`_dmt_bond_factorize`](@ref).
-- `protected_left`, `protected_right`: `chi x d^(2 n)` protected blocks, conjugated on the left,
-  with column 1 the all-identity multi-index (the trace direction).
+- `protected_left`, `protected_right`: respectively `nL x kL` and `nR x kR` protected blocks,
+  conjugated on the left, with column 1 the all-identity multi-index (the trace direction).
 - `maxdim`: Total post-truncation bond dimension, inclusive of the protected block.
 - `cutoff`: Relative cutoff on the **complement** singular values only (see
   [`_dmt_complement_keep`](@ref)). The final repair SVD runs at a numerical-rank tolerance
@@ -390,7 +395,7 @@ only the doubly-orthogonal complement `D = P_L^perp B P_R^perp` is truncated, to
 function _dmt_bond_solve(::Type{T}, bond_matrix::AbstractMatrix, protected_left::AbstractMatrix,
                          protected_right::AbstractMatrix,
                          maxdim::Integer, cutoff::Real, truncation::Symbol) where {T}
-  chi = size(bond_matrix, 1)
+  nleft, nright = size(bond_matrix)
   ql = _protected_basis(protected_left, T)
   qr_basis = _protected_basis(protected_right, T)
   # Column 1 of each protected block is the all-identity multi-index, i.e. the trace direction.
@@ -399,9 +404,9 @@ function _dmt_bond_solve(::Type{T}, bond_matrix::AbstractMatrix, protected_left:
   a, b, _ = _dmt_connector(bond_matrix, q0, r0, T)
   ops = _dmt_complement_ops(bond_matrix, a, b, ql, qr_basis)
 
-  budget = max(_dmt_complement_budget(maxdim, size(protected_left, 2),
-                                      size(protected_right, 2)), 1)
-  uc, sc, vc = _truncated_svd(ops.mul, ops.adj, chi, budget, T; mode=truncation)
+  budget = max(_dmt_complement_budget(maxdim, size(ql, 2), size(qr_basis, 2)), 1)
+  uc, sc, vc = _truncated_svd(
+    ops.mul, ops.adj, nleft, nright, budget, T; mode=truncation, dense=ops.dense)
   # `cutoff` binds *here*, on the complement, and nowhere else. See `_dmt_complement_keep`: the
   # protected block and the trace connector are reinstated exactly, so a cutoff applied after
   # reassembly would be free to clip them.
@@ -475,6 +480,235 @@ protected block always fits inside `maxdim` and never has to be clipped.
   to randomized-SVD accuracy, because the two calls draw independent sketches — one of the
   reasons `:dense` is the default (see [`_truncated_svd`](@ref)).
 """
+function _dmt_bond_truncate_factors!(
+  psi::MPS,
+  bond::Integer,
+  left_isometry,
+  bond_matrix,
+  right_block,
+  left_link,
+  right_link;
+  maxdim::Integer,
+  cutoff::Real,
+  direction::Symbol,
+  preserve_diameter::Integer,
+  preserve_operators,
+  truncation::Symbol,
+  cache::Union{Nothing,_DMTEnvCache},
+)
+  elt = _mps_eltype(psi)
+  radius = (Int(preserve_diameter) - 1) ÷ 2
+  nsites = length(psi)
+  left_count, right_count = _dmt_protected_sites(bond, nsites, radius)
+  left_env_stop = left_count == 0 ? bond - 1 : bond - left_count
+  right_env_start = right_count == 0 ? bond + 2 : bond + 1 + right_count
+  if isnothing(cache)
+    left_env = _left_identity_environment(psi, left_env_stop)
+    right_env = _right_identity_environment(psi, right_env_start)
+  else
+    left_env = _left_env_at!(cache, psi, left_env_stop)
+    right_env = _right_env_at!(cache, psi, right_env_start)
+    if _DMT_VERIFY_ENVS[]
+      _assert_env_matches("left b=$bond", left_env,
+        _left_identity_environment(psi, left_env_stop))
+      _assert_env_matches("right b=$bond", right_env,
+        _right_identity_environment(psi, right_env_start))
+    end
+  end
+  left_site = siteind(psi, bond)
+  d = local_dimension(left_site)
+  left_protected = left_env
+  for site in (bond - left_count + 1):(bond - 1)
+    left_protected *= psi[site]
+  end
+  left_protected *= left_isometry
+  left_count == 0 && (left_protected *= _identity_env(siteind(psi, bond)))
+  right_protected = right_block
+  right_count == 0 && (right_protected *= _identity_env(siteind(psi, bond + 1)))
+  for site in (bond + 2):(bond + right_count)
+    right_protected *= psi[site]
+  end
+  right_protected *= right_env
+  left_sites = [siteind(psi, site) for site in (bond - left_count + 1):bond]
+  right_sites = [siteind(psi, site) for site in (bond + 1):(bond + right_count)]
+  if isnothing(preserve_operators)
+    protected_left = if left_count == 0
+      reshape(conj(vector(left_protected, left_link)), :, 1)
+    else
+      left_combiner = combiner(left_sites...)
+      conj(matrix(left_protected * left_combiner, left_link, combinedind(left_combiner)))
+    end
+    protected_right = if right_count == 0
+      reshape(vector(right_protected, right_link), :, 1)
+    else
+      right_combiner = combiner(right_sites...)
+      matrix(right_protected * right_combiner, right_link, combinedind(right_combiner))
+    end
+    @assert size(protected_left, 2) == d^(2 * left_count)
+    @assert size(protected_right, 2) == d^(2 * right_count)
+  else
+    protected_left = conj(_protected_columns(left_protected, left_link,
+      _preserved_operator_tensors(left_sites, d, preserve_operators)))
+    protected_right = _protected_columns(right_protected, right_link,
+      _preserved_operator_tensors(right_sites, d, preserve_operators))
+  end
+  new_u, new_s, new_v = _dmt_bond_solve(elt, bond_matrix, protected_left,
+    protected_right, maxdim, cutoff, truncation)
+  new_link = Index(length(new_s), "Link,l=$(bond)")
+  if direction === :R
+    psi[bond] = left_isometry * ITensor(new_u, left_link, new_link)
+    psi[bond + 1] = ITensor(Diagonal(new_s) * new_v', dag(new_link), right_link) * right_block
+  else
+    psi[bond] = left_isometry * ITensor(new_u * Diagonal(new_s), left_link, new_link)
+    psi[bond + 1] = ITensor(Matrix(new_v'), dag(new_link), right_link) * right_block
+  end
+  isnothing(cache) || _invalidate_env!(cache, bond - left_count, bond + 1 + right_count)
+  return psi
+end
+
+function _dmt_two_site_gate_fused!(
+  psi::MPS,
+  gate::AbstractMatrix,
+  bond::Integer;
+  maxdim::Integer,
+  cutoff::Real,
+  direction::Symbol,
+  preserve_diameter::Integer,
+  preserve_operators,
+  truncation::Symbol,
+  cache::Union{Nothing,_DMTEnvCache}=nothing,
+)
+  elt = float(promote_type(_mps_eltype(psi), eltype(gate)))
+  _promote_mps_eltype!(psi, elt)
+  isnothing(cache) ? orthogonalize!(psi, bond) : _orthogonalize_env!(cache, psi, bond)
+  sites = [siteind(psi, bond), siteind(psi, bond + 1)]
+  block = noprime(_dense_local_operator(sites, convert(AbstractMatrix{elt}, gate)) *
+    psi[bond] * psi[bond + 1])
+  previous_link = linkind(psi, bond - 1)
+  left_inds = isnothing(previous_link) ? (sites[1],) : (previous_link, sites[1])
+  left_isometry, singular, right_block = svd(block, left_inds)
+  left_link = commonind(left_isometry, singular)
+  right_link = commonind(right_block, singular)
+  bond_matrix = Diagonal(real.(diag(matrix(singular, left_link, right_link))))
+  if length(bond_matrix.diag) <= maxdim
+    if direction === :R
+      psi[bond] = left_isometry
+      psi[bond + 1] = singular * right_block
+    else
+      psi[bond] = left_isometry * singular
+      psi[bond + 1] = right_block
+    end
+    isnothing(cache) || _invalidate_env!(cache, bond, bond + 1)
+    return psi
+  end
+  return _dmt_bond_truncate_factors!(psi, bond, left_isometry, bond_matrix, right_block,
+    left_link, right_link; maxdim=maxdim, cutoff=cutoff, direction=direction,
+    preserve_diameter=preserve_diameter, preserve_operators=preserve_operators,
+    truncation=truncation, cache=cache)
+end
+
+function _direct_canonical_residual(psi::MPS, bond::Integer)
+  residual = 0.0
+  for site in 1:(Int(bond) - 1)
+    link = linkind(psi, site)
+    isnothing(link) && continue
+    gram = psi[site] * dag(prime(psi[site], link))
+    residual = max(residual, norm(matrix(gram, link, link') - I))
+  end
+  for site in (Int(bond) + 2):length(psi)
+    link = linkind(psi, site - 1)
+    isnothing(link) && continue
+    gram = psi[site] * dag(prime(psi[site], link))
+    residual = max(residual, norm(matrix(gram, link, link') - I))
+  end
+  return residual
+end
+
+function _direct_protected_columns(base::ITensor, ambient_inds, operator_tensors,
+                                   ::Type{T}) where {T}
+  columns = [reshape(convert(Array{T}, array(base * op, ambient_inds...)), :) for
+    op in operator_tensors]
+  return reduce(hcat, columns)
+end
+
+function _dmt_two_site_gate_direct!(
+  psi::MPS,
+  gate::AbstractMatrix,
+  bond::Integer;
+  maxdim::Integer,
+  cutoff::Real,
+  direction::Symbol,
+  preserve_diameter::Integer,
+  preserve_operators,
+  truncation::Symbol,
+  cache::Union{Nothing,_DMTEnvCache}=nothing,
+)
+  # Direct-center means "no full SVD before DMT", not "no SVD". The dense complement SVD and
+  # the final skinny repair SVD are essential parts of the existing DMT rule and stay in place.
+  # Requiring dense truncation here also prevents a request from silently changing algorithms.
+  truncation === :dense || throw(ArgumentError(
+    "DMT gate_backend=:direct currently requires truncation=:dense"))
+  elt = float(promote_type(_mps_eltype(psi), eltype(gate)))
+  _promote_mps_eltype!(psi, elt)
+  isnothing(cache) ? orthogonalize!(psi, bond) : _orthogonalize_env!(cache, psi, bond)
+  # The matrix formula below is valid only when the two exterior MPS bases are orthonormal.
+  # `orthogonalize!` can trust stale metadata, so verify the actual tensor isometries numerically.
+  residual = _direct_canonical_residual(psi, bond)
+  residual <= 100 * eps(Float64) * max(length(psi), 1) || throw(ArgumentError(
+    "DMT gate_backend=:direct requires canonical external bases; residual=$(residual)"))
+
+  sites = (siteind(psi, bond), siteind(psi, bond + 1))
+  block = noprime(_dense_local_operator(collect(sites), convert(AbstractMatrix{elt}, gate)) *
+    psi[bond] * psi[bond + 1])
+  previous_link = linkind(psi, bond - 1)
+  following_link = linkind(psi, bond + 1)
+  left_inds = isnothing(previous_link) ? (sites[1],) : (previous_link, sites[1])
+  right_inds = isnothing(following_link) ? (sites[2],) : (sites[2], following_link)
+  center = reshape(convert(Array{elt}, array(block, left_inds..., right_inds...)),
+    prod(dim.(left_inds)), prod(dim.(right_inds)))
+
+  radius = (Int(preserve_diameter) - 1) ÷ 2
+  nsites = length(psi)
+  left_count, right_count = _dmt_protected_sites(bond, nsites, radius)
+  left_env_stop = left_count == 0 ? bond - 1 : bond - left_count
+  right_env_start = right_count == 0 ? bond + 2 : bond + 1 + right_count
+  left_env = isnothing(cache) ? _left_identity_environment(psi, left_env_stop) :
+    _left_env_at!(cache, psi, left_env_stop)
+  right_env = isnothing(cache) ? _right_identity_environment(psi, right_env_start) :
+    _right_env_at!(cache, psi, right_env_start)
+  left_base = left_env
+  for site in (bond - left_count + 1):(bond - 1)
+    left_base *= psi[site]
+  end
+  right_base = right_env
+  for site in (bond + right_count):-1:(bond + 2)
+    right_base = psi[site] * right_base
+  end
+  left_sites = [siteind(psi, site) for site in (bond - left_count + 1):bond]
+  right_sites = [siteind(psi, site) for site in (bond + 1):(bond + right_count)]
+  left_ops = left_count == 0 ? [_identity_env(sites[1])] :
+    _preserved_operator_tensors(left_sites, local_dimension(sites[1]), preserve_operators)
+  right_ops = right_count == 0 ? [_identity_env(sites[2])] :
+    _preserved_operator_tensors(right_sites, local_dimension(sites[1]), preserve_operators)
+  # These columns come from exterior environments and local basis tensors. Contracting the gated
+  # center into them would double-count the center and turn this back into the old SVD-first path.
+  # Keep the conjugation on the left: it implements the existing DMT pairing convention.
+  protected_left = conj(_direct_protected_columns(left_base, left_inds, left_ops, elt))
+  protected_right = _direct_protected_columns(right_base, right_inds, right_ops, elt)
+
+  new_u, new_s, new_v = _dmt_bond_solve(elt, center, protected_left,
+    protected_right, maxdim, cutoff, truncation)
+  new_link = Index(length(new_s), "Link,l=$(bond)")
+  left_matrix = direction === :R ? new_u : new_u * Diagonal(new_s)
+  right_matrix = direction === :R ? Diagonal(new_s) * new_v' : new_v'
+  psi[bond] = ITensor(reshape(left_matrix, dim.(left_inds)..., length(new_s)),
+    left_inds..., new_link)
+  psi[bond + 1] = ITensor(reshape(right_matrix, length(new_s), dim.(right_inds)...),
+    dag(new_link), right_inds...)
+  isnothing(cache) || _invalidate_env!(cache, bond - left_count, bond + 1 + right_count)
+  return psi
+end
+
 function _dmt_bond_truncate!(
   psi::MPS,
   bond::Integer;
@@ -501,96 +735,17 @@ function _dmt_bond_truncate!(
   isnothing(link) && return psi
   dim(link) <= maxdim && return psi
 
-  # One element type for the whole step, taken from the state rather than forced to `ComplexF64`
-  # (see `_mps_eltype`). Scanned here, before the re-gauge below, because gauging preserves
-  # element types and the promotion over the chain is therefore the same either side of it.
-  elt = _mps_eltype(psi)
-  radius = (Int(preserve_diameter) - 1) ÷ 2
-  nsites = length(psi)
-  left_count, right_count = _dmt_protected_sites(bond, nsites, radius)
-
   if orthogonalize
     isnothing(cache) ? orthogonalize!(psi, bond) : _orthogonalize_env!(cache, psi, bond)
   end
 
-  left_site = siteind(psi, bond)
-  d = local_dimension(left_site)
-
-  # The identity/trace environments depend only on the untouched tensors outside the protected
-  # window, so a supplied `cache` memoizes them (see `_DMTEnvCache`); `_DMT_VERIFY_ENVS[]`
-  # asserts the memoized value equals the from-scratch rebuild.
-  if isnothing(cache)
-    left_env = _left_identity_environment(psi, bond - left_count)
-    right_env = _right_identity_environment(psi, bond + 1 + right_count)
-  else
-    left_env = _left_env_at!(cache, psi, bond - left_count)
-    right_env = _right_env_at!(cache, psi, bond + 1 + right_count)
-    if _DMT_VERIFY_ENVS[]
-      _assert_env_matches("left b=$bond", left_env,
-        _left_identity_environment(psi, bond - left_count))
-      _assert_env_matches("right b=$bond", right_env,
-        _right_identity_environment(psi, bond + 1 + right_count))
-    end
-  end
-
   previous_link = linkind(psi, bond - 1)
+  left_site = siteind(psi, bond)
   left_inds = isnothing(previous_link) ? (left_site,) : (previous_link, left_site)
   left_isometry, bond_matrix, right_block, left_link, right_link =
-    _dmt_bond_factorize(psi, bond, left_inds, elt; factorize=factorize)
-
-  # Protected blocks: identity on every site except the `radius` sites adjacent to the cut.
-  left_protected = left_env
-  for site in (bond - left_count + 1):(bond - 1)
-    left_protected *= psi[site]
-  end
-  left_protected *= left_isometry
-  right_protected = right_block
-  for site in (bond + 2):(bond + right_count)
-    right_protected *= psi[site]
-  end
-  right_protected *= right_env
-
-  left_sites = [siteind(psi, site) for site in (bond - left_count + 1):bond]
-  right_sites = [siteind(psi, site) for site in (bond + 1):(bond + right_count)]
-  # conj: the paper's pairing is M = Q_L^T s Q_R, a transpose on the left. Omitting this is
-  # silently correct for a Hermitian operator and badly wrong otherwise.
-  if isnothing(preserve_operators)
-    # Default: the whole local block, fused in one contraction. Going operator by operator here
-    # would cost `d^(2 radius)` contractions per side -- 256 at `d = 4, radius = 2` -- for a
-    # basis the combiner spans in one.
-    left_combiner = combiner(left_sites...)
-    right_combiner = combiner(right_sites...)
-    protected_left = conj(matrix(left_protected * left_combiner, left_link,
-                                 combinedind(left_combiner)))
-    protected_right = matrix(right_protected * right_combiner, right_link,
-                             combinedind(right_combiner))
-    # The fused width is the `d^(2 radius)` the budget arithmetic assumes; assert it rather than
-    # trust that `left_sites`/`right_sites` still enumerate the protected window. `combiner` fuses
-    # in an unspecified order, which is harmless for the span, but column 1 must still be the
-    # all-identity multi-index for `q0`/`r0` below -- index 1 of every factor maps to index 1 of
-    # any product ordering, and `test_dmt_higher_spin.jl` pins that against an identity cap.
-    @assert size(protected_left, 2) == d^(2 * left_count)
-    @assert size(protected_right, 2) == d^(2 * right_count)
-  else
-    protected_left = conj(_protected_columns(left_protected, left_link,
-      _preserved_operator_tensors(left_sites, d, preserve_operators)))
-    protected_right = _protected_columns(right_protected, right_link,
-      _preserved_operator_tensors(right_sites, d, preserve_operators))
-  end
-
-  new_u, new_s, new_v = _dmt_bond_solve(elt, bond_matrix, protected_left, protected_right,
-                                        maxdim, cutoff, truncation)
-
-  # Absorb the singular values on the side the sweep is moving away from, so the orthogonality
-  # centre ends up where the next step expects it: at bond + 1 for :R, at bond for :L.
-  new_link = Index(length(new_s), "Link,l=$(bond)")
-  if direction === :R
-    psi[bond] = left_isometry * ITensor(new_u, left_link, new_link)
-    psi[bond + 1] = ITensor(Diagonal(new_s) * new_v', dag(new_link), right_link) * right_block
-  else
-    psi[bond] = left_isometry * ITensor(new_u * Diagonal(new_s), left_link, new_link)
-    psi[bond + 1] = ITensor(Matrix(new_v'), dag(new_link), right_link) * right_block
-  end
-  isnothing(cache) || _invalidate_env!(cache, bond - left_count, bond + 1 + right_count)
-  return psi
+    _dmt_bond_factorize(psi, bond, left_inds, _mps_eltype(psi); factorize=factorize)
+  return _dmt_bond_truncate_factors!(psi, bond, left_isometry, bond_matrix, right_block,
+    left_link, right_link; maxdim=maxdim, cutoff=cutoff, direction=direction,
+    preserve_diameter=preserve_diameter, preserve_operators=preserve_operators,
+    truncation=truncation, cache=cache)
 end

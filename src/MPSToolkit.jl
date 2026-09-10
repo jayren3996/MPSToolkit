@@ -7,6 +7,7 @@ module MPSToolkit
 using LinearAlgebra
 using Printf
 using Serialization
+using SHA
 using ITensors
 using ITensorMPS
 
@@ -38,6 +39,7 @@ include("operator_space/dmt.jl")
 # After dmt.jl: `_dmt_bond_truncate!` annotates its `cache` keyword with `_DMTEnvCache`, and a
 # type annotation in a method signature is resolved when the method is defined.
 include("operator_space/dmt/bond.jl")
+include("operator_space/bond_plan.jl")
 include("operator_space/daoe.jl")
 include("operator_space/constrained.jl")
 include("chebyshev/types.jl")
@@ -134,6 +136,21 @@ using ..MPSToolkit:
   operator_superoperator_mpo,
   pauli_pxp_constraint_state,
   pauli_pxp_constraint_projector,
+  pauli_pxp_controlled_gate,
+  PXPControlledGate,
+  PXPDMTPlanEntry,
+  PXPDMTPlan,
+  pxp_s2_dmt_plan,
+  pxp_s4_dmt_plan,
+  pxp_dmt_attempted_updates,
+  PXPParityLayer,
+  PXPLayerDMTPlan,
+  pauli_pxp_parity_layer,
+  pxp_layer_dmt_plan,
+  BondDMTPlanEntry,
+  BondDMTPlan,
+  bond_dmt_plan,
+  bond_dmt_attempted_updates,
   pauli_trace,
   pauli_expectation,
   pauli_expectation_profile,
@@ -144,6 +161,8 @@ using ..MPSToolkit:
   pauli_gibbs_state,
   operator_gibbs_state,
   constrained_dmt_evolve!,
+  ConstrainedDMTRunState,
+  constraint_leakage_squared,
   DMTOptions,
   dmt_step!,
   dmt_evolve!,
@@ -174,6 +193,21 @@ export pauli_siteinds,
   operator_superoperator_mpo,
   pauli_pxp_constraint_state,
   pauli_pxp_constraint_projector,
+  pauli_pxp_controlled_gate,
+  PXPControlledGate,
+  PXPDMTPlanEntry,
+  PXPDMTPlan,
+  pxp_s2_dmt_plan,
+  pxp_s4_dmt_plan,
+  pxp_dmt_attempted_updates,
+  PXPParityLayer,
+  PXPLayerDMTPlan,
+  pauli_pxp_parity_layer,
+  pxp_layer_dmt_plan,
+  BondDMTPlanEntry,
+  BondDMTPlan,
+  bond_dmt_plan,
+  bond_dmt_attempted_updates,
   pauli_trace,
   pauli_expectation,
   pauli_expectation_profile,
@@ -184,6 +218,8 @@ export pauli_siteinds,
   pauli_gibbs_state,
   operator_gibbs_state,
   constrained_dmt_evolve!,
+  ConstrainedDMTRunState,
+  constraint_leakage_squared,
   DMTOptions,
   dmt_step!,
   dmt_evolve!,
@@ -201,12 +237,14 @@ using ..MPSToolkit:
   spinhalf_matrices,
   spinhalf_xyz_bond_hamiltonian,
   spinhalf_tfim_bond_hamiltonian,
+  spinhalf_mixed_field_ising_bond_hamiltonian,
   pxp_term_hamiltonian,
   pxp_term_support,
   pxp_constraint_mpo
 export spinhalf_matrices,
   spinhalf_xyz_bond_hamiltonian,
   spinhalf_tfim_bond_hamiltonian,
+  spinhalf_mixed_field_ising_bond_hamiltonian,
   pxp_term_hamiltonian,
   pxp_term_support,
   pxp_constraint_mpo
@@ -245,12 +283,12 @@ export scarfinder_step!, scarfinder!
 export LocalGateEvolution, DMTGateEvolution, TDVPEvolution, BondDimTruncation, EnergyTarget, SelectionContext, EntropySelector, FidelitySelector
 export tebd_evolve!, dmt_evolve!, tdvp_evolve!, local_gates_from_hamiltonians, tebd_evolution_from_hamiltonians, tebd_strang_schedule, tebd_strang_evolution
 export pauli_matrices, pauli_basis, pauli_components, operator_basis_matrices, local_dimension
-export spinhalf_matrices, spinhalf_xyz_bond_hamiltonian, spinhalf_tfim_bond_hamiltonian
+export spinhalf_matrices, spinhalf_xyz_bond_hamiltonian, spinhalf_tfim_bond_hamiltonian, spinhalf_mixed_field_ising_bond_hamiltonian
 export pxp_term_hamiltonian, pxp_term_support, pxp_constraint_mpo
 export pauli_siteinds, pauli_basis_state, pauli_total_sz_state, pauli_domain_wall_state, operator_siteinds, operator_basis_state, operator_product_state, operator_local_sum_state, pauli_gate, pauli_gate_from_hamiltonian, pauli_lindblad_generator, pauli_gate_from_lindbladian, operator_gate, operator_gate_from_hamiltonian, operator_gate_from_imaginary_time, operator_lindblad_generator, operator_gate_from_lindbladian, DMTOptions, dmt_step!, dmt_evolve!, pauli_daoe_projector, pauli_fdaoe_projector, fdaoe_projector
-export pauli_state_from_mpo, pauli_superoperator_mpo, operator_state_from_mpo, operator_superoperator_mpo, pauli_pxp_constraint_state, pauli_pxp_constraint_projector, pauli_trace, pauli_expectation, pauli_expectation_profile, operator_trace, operator_expectation, operator_expectation_profile
-export pauli_gate_from_imaginary_time, pauli_gibbs_state, operator_gibbs_state, constrained_dmt_evolve!
-export DMTCheckpoint, dmt_checkpoint_path, dmt_checkpoint_save, dmt_checkpoint_load, dmt_checkpoint_latest, dmt_checkpoint_resume
+export pauli_state_from_mpo, pauli_superoperator_mpo, operator_state_from_mpo, operator_superoperator_mpo, pauli_pxp_constraint_state, pauli_pxp_constraint_projector, pauli_pxp_controlled_gate, PXPControlledGate, PXPDMTPlanEntry, PXPDMTPlan, pxp_s2_dmt_plan, pxp_s4_dmt_plan, pxp_dmt_attempted_updates, PXPParityLayer, PXPLayerDMTPlan, pauli_pxp_parity_layer, pxp_layer_dmt_plan, BondDMTPlanEntry, BondDMTPlan, bond_dmt_plan, bond_dmt_attempted_updates, pauli_trace, pauli_expectation, pauli_expectation_profile, operator_trace, operator_expectation, operator_expectation_profile
+export pauli_gate_from_imaginary_time, pauli_gibbs_state, operator_gibbs_state, constrained_dmt_evolve!, ConstrainedDMTRunState, constraint_leakage_squared
+export DMTCheckpoint, dmt_checkpoint_path, dmt_checkpoint_save, dmt_checkpoint_load, dmt_checkpoint_latest, dmt_checkpoint_resume, dmt_checkpoint_observables, dmt_checkpoint_run_state, dmt_checkpoint_provenance, dmt_run_provenance
 export ChebyshevRescaling, chebyshev_rescaling, rescale_hamiltonian, SpectralFunction, chebyshev_moments, energy_cutoff!, jackson_damping, jackson_kernel, reconstruct_chebyshev, spectral_function
 
 end

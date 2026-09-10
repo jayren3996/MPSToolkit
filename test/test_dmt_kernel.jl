@@ -83,6 +83,7 @@ include("dmt_test_helpers.jl")
     x = randn(ComplexF64, chi, 3)
     y = randn(ComplexF64, chi, 3)
     @test tr(y' * ops.mul(x)) ≈ tr((ops.adj(y))' * x) atol = 1e-10
+    @test ops.dense() ≈ ops.mul(Matrix{ComplexF64}(I, chi, chi)) atol = 1e-12
   end
 
   @testset "randomized truncated SVD matches the dense one" begin
@@ -113,6 +114,60 @@ include("dmt_test_helpers.jl")
     u2, s2, v2 = MPSToolkit._dmt_refactor(f, g, 10, 0.0)
     @test length(s2) == 10
   end
+end
+
+
+@testset "rectangular direct-center matrix DMT" begin
+  Random.seed!(20260910)
+  for (nleft, nright) in ((7, 11), (12, 8), (9, 9)), T in (Float64, ComplexF64)
+    center = randn(T, nleft, nright)
+    protected_left = randn(T, nleft, 2)
+    protected_right = randn(T, nright, 2)
+    u, s, v = MPSToolkit._dmt_bond_solve(T, center, protected_left,
+      protected_right, 7, 0.0, :dense)
+    truncated = u * Diagonal(s) * v'
+    ql = MPSToolkit._protected_basis(protected_left, T)
+    qr = MPSToolkit._protected_basis(protected_right, T)
+    @test size(u, 1) == nleft
+    @test size(v, 1) == nright
+    @test length(s) <= 7
+    @test norm(ql' * (truncated - center)) <= 2e-12 * norm(center)
+    @test norm((truncated - center) * qr) <= 2e-12 * norm(center)
+    @test eltype(u) === T
+    @test eltype(v) === T
+  end
+
+  for (nleft, nright) in ((5, 9), (10, 6))
+    zero_center = zeros(Float64, nleft, nright)
+    left = hcat(ones(nleft), zeros(nleft), ones(nleft))
+    right = hcat(ones(nright), ones(nright), zeros(nright))
+    u, s, v = MPSToolkit._dmt_bond_solve(Float64, zero_center, left, right,
+      min(nleft, nright), 1e-3, :dense)
+    @test all(isfinite, u)
+    @test all(isfinite, s)
+    @test all(isfinite, v)
+    @test norm(u * Diagonal(s) * v') == 0
+  end
+
+  left = randn(7, 4)
+  right = randn(11, 4)
+  u, s, v = MPSToolkit._dmt_refactor(left, right, 4, 0.0)
+  @test u * Diagonal(s) * v' ≈ left * right' atol=1e-12
+
+  center = randn(ComplexF64, 6, 9)
+  left = randn(ComplexF64, 6, 2)
+  right = randn(ComplexF64, 9, 2)
+  full_u, full_s, full_v = MPSToolkit._dmt_bond_solve(ComplexF64, center, left,
+    right, 10, 0.0, :dense)
+  @test full_u * Diagonal(full_s) * full_v' ≈ center atol=2e-12
+  ul = Matrix(qr(randn(ComplexF64, 6, 6)).Q)
+  ur = Matrix(qr(randn(ComplexF64, 9, 9)).Q)
+  cov_u, cov_s, cov_v = MPSToolkit._dmt_bond_solve(ComplexF64, ul * center * ur',
+    ul * left, ur * right, 5, 0.0, :dense)
+  ref_u, ref_s, ref_v = MPSToolkit._dmt_bond_solve(ComplexF64, center, left, right,
+    5, 0.0, :dense)
+  @test cov_u * Diagonal(cov_s) * cov_v' ≈
+    ul * (ref_u * Diagonal(ref_s) * ref_v') * ur' atol=5e-12
 end
 
 @testset "QR and SVD bond factorization give the same truncation" begin

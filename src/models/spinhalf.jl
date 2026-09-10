@@ -64,3 +64,27 @@ function spinhalf_tfim_bond_hamiltonian(nsites::Integer, bond::Integer; J::Real=
   right_weight = bond == nsites - 1 ? 1.0 : 0.5
   return -J * kron(spins.Sz, spins.Sz) - g * (left_weight * kron(spins.Sx, spins.I) + right_weight * kron(spins.I, spins.Sx))
 end
+
+"""
+    spinhalf_mixed_field_ising_bond_hamiltonian(nsites, bond; J=1.0, gx=0.0, gz=0.0)
+
+Return the two-site bond term for
+`J sum Z_j Z_{j+1} + gx sum X_j + gz sum Z_j` in the Pauli convention. Open-boundary
+fields have weight one at an edge and one half on each adjacent bulk bond, so summing all bond
+terms reproduces the full Hamiltonian exactly.
+"""
+function spinhalf_mixed_field_ising_bond_hamiltonian(
+  nsites::Integer,
+  bond::Integer;
+  J::Real=1.0,
+  gx::Real=0.0,
+  gz::Real=0.0,
+)
+  1 <= bond < nsites || throw(ArgumentError("bond index must satisfy 1 <= bond < nsites"))
+  p = pauli_matrices()
+  left_weight = bond == 1 ? 1.0 : 0.5
+  right_weight = bond == nsites - 1 ? 1.0 : 0.5
+  return J * kron(p.Z, p.Z) +
+    gx * (left_weight * kron(p.X, p.I) + right_weight * kron(p.I, p.X)) +
+    gz * (left_weight * kron(p.Z, p.I) + right_weight * kron(p.I, p.Z))
+end

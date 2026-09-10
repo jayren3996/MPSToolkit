@@ -27,6 +27,8 @@ Enumerate the normalized multi-site operator-basis matrices for `nsites` sites o
 dimension `d`, ordered so the site-`1` label varies slowest (matching `kron`).
 """
 function _operator_basis_operators(nsites::Integer, d::Integer)
+  nsites >= 0 || throw(ArgumentError("operator-basis site count must be nonnegative"))
+  nsites == 0 && return [Matrix{ComplexF64}(I, 1, 1)]
   local_basis = operator_basis_matrices(d)
   operators = local_basis
   for _ in 2:Int(nsites)

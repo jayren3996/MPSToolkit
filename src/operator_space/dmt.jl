@@ -1,5 +1,6 @@
 """
-    DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=0, preserve_diameter=3, truncation=:dense)
+    DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=0, preserve_diameter=3,
+               truncation=:dense, gate_backend=:product)
 
 Options controlling operator-space density matrix truncation (DMT).
 
@@ -45,6 +46,11 @@ Options controlling operator-space density matrix truncation (DMT).
   — 0.33 GB at `d = 3, maxdim = 200`, 1.1 GB at `d = 4, maxdim = 200`, and ~7 GB at
   `d = 4, preserve_diameter = 5, maxdim = 513` — so at `d >= 4`, or at `preserve_diameter = 5`,
   choosing `:random` is a memory decision and not only a speed one.
+- `gate_backend`: `:product` (default), `:qr`, `:fused`, `:direct`, or `:controlled`. The opt-in `:qr`
+  backend contracts an exact dense gate window; `:fused` sends the exact SVD factors of a
+  two-site gated tensor into DMT; `:direct` applies DMT to the rectangular gated center without
+  that full SVD and currently requires `truncation=:dense`; `:controlled` accepts
+  [`PXPControlledGate`](@ref) MPOs. Non-product backends require `gate_maxdim=0`.
 
 # Notes
 - The `gate_maxdim` default was `max(maxdim * 16, 64)`, which in steady state capped nothing: a
@@ -61,8 +67,10 @@ struct DMTOptions
   preserve_diameter::Int
   preserve_operators::Any
   truncation::Symbol
+  gate_backend::Symbol
 
-  function DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, preserve_operators, truncation)
+  function DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, preserve_operators,
+                      truncation, gate_backend)
     maxdim >= 1 || throw(ArgumentError("DMTOptions requires maxdim >= 1"))
     cutoff >= 0 || throw(ArgumentError("DMTOptions requires cutoff >= 0"))
     gate_maxdim >= 0 || throw(ArgumentError("DMTOptions requires gate_maxdim >= 0 (0 = no cap)"))
@@ -70,14 +78,22 @@ struct DMTOptions
       "DMTOptions requires a positive odd preserve_diameter, got $(preserve_diameter)"))
     truncation in (:dense, :random) ||
       throw(ArgumentError("DMTOptions truncation must be :dense or :random, got $(truncation)"))
+    gate_backend in (:product, :qr, :fused, :direct, :controlled) || throw(ArgumentError(
+      "DMTOptions gate_backend must be :product, :qr, :fused, :direct, or :controlled, got $(gate_backend)"))
+    gate_backend === :direct && truncation !== :dense && throw(ArgumentError(
+      "DMTOptions gate_backend=:direct currently requires truncation=:dense"))
+    gate_backend !== :product && gate_maxdim != 0 &&
+      throw(ArgumentError("DMTOptions gate_backend=$(gate_backend) requires gate_maxdim=0"))
     return new(Int(maxdim), Float64(cutoff), Int(gate_maxdim), Int(preserve_diameter),
-               preserve_operators, Symbol(truncation))
+               preserve_operators, Symbol(truncation), Symbol(gate_backend))
   end
 
   function DMTOptions(; maxdim=30, cutoff=1e-12, gate_maxdim=0,
-    preserve_diameter=3, preserve_operators=nothing, truncation=:dense, connector_buffer=nothing)
+    preserve_diameter=3, preserve_operators=nothing, truncation=:dense,
+    gate_backend=:product, connector_buffer=nothing)
     _reject_connector_buffer(connector_buffer)
-    return DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, preserve_operators, truncation)
+    return DMTOptions(maxdim, cutoff, gate_maxdim, preserve_diameter, preserve_operators,
+      truncation, gate_backend)
   end
 end
 
@@ -360,8 +376,91 @@ function _dmt_window_truncate!(psi::MPS, start::Integer, span::Integer; maxdim::
   return psi
 end
 
+function _exact_gate_qr!(psi::MPS, gate::AbstractMatrix, start::Integer, span::Integer,
+                         direction::Symbol)
+  direction in (:R, :L) || throw(ArgumentError("exact gate QR direction must be :R or :L"))
+  span == 1 && return tebd_evolve!(psi, gate, start; maxdim=0, cutoff=0.0)
+
+  elt = float(promote_type(_mps_eltype(psi), eltype(gate)))
+  gate_data = eltype(gate) === elt ? gate : convert(AbstractMatrix{elt}, gate)
+  _promote_mps_eltype!(psi, elt)
+  last_site = Int(start) + Int(span) - 1
+  orthogonalize!(psi, direction === :R ? Int(start) : last_site)
+  block = psi[Int(start)]
+  for site in (Int(start) + 1):last_site
+    block *= psi[site]
+  end
+  sites = [siteind(psi, site) for site in Int(start):last_site]
+  block = noprime(_dense_local_operator(sites, gate_data) * block)
+
+  if direction === :R
+    previous = Int(start) == 1 ? nothing : commonind(block, psi[Int(start) - 1])
+    for (offset, site) in enumerate(Int(start):(last_site - 1))
+      left_inds = isnothing(previous) ? (sites[offset],) : (previous, sites[offset])
+      q, block = qr(block, left_inds; tags="Link,l=$(site)")
+      psi[site] = q
+      previous = commonind(q, block)
+    end
+    psi[last_site] = block
+  else
+    following = last_site == length(psi) ? nothing : commonind(block, psi[last_site + 1])
+    for site in last_site:-1:(Int(start) + 1)
+      offset = site - Int(start) + 1
+      right_inds = isnothing(following) ? (sites[offset],) : (sites[offset], following)
+      left_inds = uniqueinds(block, right_inds)
+      block, q = lq(block, left_inds; tags="Link,l=$(site - 1)")
+      psi[site] = q
+      following = commonind(block, q)
+    end
+    psi[Int(start)] = block
+  end
+  return psi
+end
+
+function _exact_mpo_gate_qr!(psi::MPS, gate::MPO, start::Integer, direction::Symbol)
+  direction in (:R, :L) || throw(ArgumentError("exact MPO gate direction must be :R or :L"))
+  span = length(gate)
+  last_site = Int(start) + span - 1
+  sites = [siteind(psi, site) for site in Int(start):last_site]
+  for offset in 1:span
+    _mpo_unprimed_site_index(gate, offset) == sites[offset] || throw(ArgumentError(
+      "controlled gate site indices do not match the target state"))
+  end
+  orthogonalize!(psi, direction === :R ? Int(start) : last_site)
+  block = gate[1] * psi[Int(start)]
+  for offset in 2:span
+    block *= gate[offset] * psi[Int(start) + offset - 1]
+  end
+  block = noprime(block)
+
+  if direction === :R
+    previous = Int(start) == 1 ? nothing : commonind(block, psi[Int(start) - 1])
+    for (offset, site) in enumerate(Int(start):(last_site - 1))
+      left_inds = isnothing(previous) ? (sites[offset],) : (previous, sites[offset])
+      q, block = qr(block, left_inds; tags="Link,l=$(site)")
+      psi[site] = q
+      previous = commonind(q, block)
+    end
+    psi[last_site] = block
+  else
+    following = last_site == length(psi) ? nothing : commonind(block, psi[last_site + 1])
+    for site in last_site:-1:(Int(start) + 1)
+      offset = site - Int(start) + 1
+      right_inds = isnothing(following) ? (sites[offset],) : (sites[offset], following)
+      left_inds = uniqueinds(block, right_inds)
+      block, q = lq(block, left_inds; tags="Link,l=$(site - 1)")
+      psi[site] = q
+      following = commonind(block, q)
+    end
+    psi[Int(start)] = block
+  end
+  return psi
+end
+
 """
-    dmt_step!(psi, gate, bond; maxdim=30, cutoff=1e-12, direction=:R, gate_maxdim=0, preserve_diameter=3, truncation=:dense)
+    dmt_step!(psi, gate, bond; maxdim=30, cutoff=1e-12, direction=:R,
+              gate_maxdim=0, preserve_diameter=3, truncation=:dense,
+              gate_backend=:product)
 
 Apply one local operator-space gate and then perform DMT-preserving truncation.
 
@@ -387,6 +486,16 @@ is (and is not) the appropriate choice.
 - `preserve_diameter`: Positive odd diameter of the observables preserved exactly.
 - `truncation`: `:dense` (default) or `:random` complement truncation; see [`DMTOptions`](@ref)
   for the measured speedup and the determinism it costs.
+- `gate_backend`: `:product` (default), the opt-in exact `:qr` window splitter, or the two-site
+  `:fused`/`:direct` paths. `:direct` skips the full center SVD and currently supports only
+  `truncation=:dense`. All non-product backends require `gate_maxdim=0`.
+
+# Backend recommendation
+- For a compiled nearest-neighbor simulation, prefer [`bond_dmt_plan`](@ref), whose stable default
+  is `:qr` and whose default product formula is fourth-order `:merged7`.
+- At this lower-level entry point, `:product` remains the compatibility default.
+- Opt into `:direct` only for a two-site dense gate, with `gate_maxdim=0` and
+  `truncation=:dense`, after comparing observables and wall time on representative input.
 
 # Returns
 - The mutated `psi`.
@@ -396,15 +505,9 @@ is (and is not) the appropriate choice.
   truncates it back to `maxdim`, so the bond tensor the kernel factorizes is `d^2` times wider
   than `maxdim` suggests (`chi <= maxdim` in steady state). That is the dominant cost of a step,
   and it is the cost of not throwing away protected data.
-- Fusing the two stages — factorizing the gated two-site block **once** at the target rank
-  instead of applying the gate and then factorizing `psi[bond]` again — was scoped for this
-  rebuild and **not implemented**; the gate application and the DMT truncation below are
-  separate, as the code reads. The measurements point elsewhere: at `d = 3, maxdim = 318` the
-  gate application is 8.85 s of a bond step and the DMT truncation 14.03 s, and *both* spend most
-  of that materializing a tall orthogonal factor, so keeping `Q` in implicit Householder form and
-  applying it to the `chi x maxdim` result would attack ~60% of a step — twice the share the
-  randomized complement and exact gate application together reached. `dev/bench_dmt.jl` table 2
-  has the numbers.
+- `gate_backend=:qr` removes the ordinary SVD from exact gate application while retaining the
+  existing per-bond DMT locations and regauging. It remains separate from controlled-gate and
+  layerwise algorithms.
 """
 function dmt_step!(
   psi::MPS,
@@ -417,6 +520,7 @@ function dmt_step!(
   preserve_diameter::Integer=3,
   preserve_operators=nothing,
   truncation::Symbol=:dense,
+  gate_backend::Symbol=:product,
   cache::Union{Nothing,_DMTEnvCache}=nothing,
   connector_buffer=nothing,
 )
@@ -426,8 +530,28 @@ function dmt_step!(
   # Checked before the gate runs, like every other budget here, so a rejected call leaves `psi`
   # untouched. `0` is the "no cap" sentinel; anything below it is a typo, not a smaller cap.
   gate_maxdim >= 0 || throw(ArgumentError("DMT gate_maxdim must be >= 0 (0 = no cap)"))
+  gate_backend in (:product, :qr, :fused, :direct) || throw(ArgumentError(
+    "dense DMT gate_backend must be :product, :qr, :fused, or :direct, got $(gate_backend)"))
+  gate_backend !== :product && gate_maxdim != 0 &&
+    throw(ArgumentError("DMT gate_backend=$(gate_backend) requires gate_maxdim=0"))
   _validate_dmt_step(psi, gate, start, span, direction, Int(maxdim), Int(preserve_diameter),
                      preserve_operators)
+  if gate_backend in (:fused, :direct)
+    span == 2 || throw(ArgumentError("DMT gate_backend=$(gate_backend) requires a two-site gate"))
+    gate_backend === :direct && truncation !== :dense && throw(ArgumentError(
+      "DMT gate_backend=:direct currently requires truncation=:dense"))
+    if gate_backend === :direct
+      # This branch must stay opt-in: unlike `:fused`, it works in the larger ambient external
+      # bases, so rank-deficient protected columns can acquire different QR completion directions.
+      # It removes the *front* full SVD only; the complement and repair decompositions remain.
+      return _dmt_two_site_gate_direct!(psi, gate, start; maxdim=Int(maxdim), cutoff=cutoff,
+        direction=direction, preserve_diameter=Int(preserve_diameter),
+        preserve_operators=preserve_operators, truncation=truncation, cache=cache)
+    end
+    return _dmt_two_site_gate_fused!(psi, gate, start; maxdim=Int(maxdim), cutoff=cutoff,
+      direction=direction, preserve_diameter=Int(preserve_diameter),
+      preserve_operators=preserve_operators, truncation=truncation, cache=cache)
+  end
   # `tebd_evolve!` (ITensorMPS `product`) re-gauges the path between the old orthocenter and the
   # gate window. Capture the limits first so the env cache can invalidate that bounded range.
   if !isnothing(cache)
@@ -439,7 +563,11 @@ function dmt_step!(
   # `LocalGateEvolution` already uses for its own `maxdim`. Passing the sentinel straight through
   # is preferred over substituting `typemax(Int)`, which would push a sentinel-sized budget into
   # ITensors' truncation arithmetic instead of taking the branch that skips it.
-  tebd_evolve!(psi, gate, start; maxdim=Int(gate_maxdim), cutoff=0.0)
+  if gate_backend === :qr
+    _exact_gate_qr!(psi, gate, start, span, direction)
+  else
+    tebd_evolve!(psi, gate, start; maxdim=Int(gate_maxdim), cutoff=0.0)
+  end
   if !isnothing(cache)
     _invalidate_env!(
       cache,
@@ -462,6 +590,48 @@ function dmt_step!(
   return psi
 end
 
+function dmt_step!(
+  psi::MPS,
+  gate::PXPControlledGate,
+  bond;
+  maxdim::Integer=30,
+  cutoff::Real=1e-12,
+  direction::Symbol=:R,
+  gate_maxdim::Integer=0,
+  preserve_diameter::Integer=3,
+  preserve_operators=nothing,
+  truncation::Symbol=:dense,
+  gate_backend::Symbol=:controlled,
+  cache::Union{Nothing,_DMTEnvCache}=nothing,
+  connector_buffer=nothing,
+)
+  _reject_connector_buffer(connector_buffer)
+  start = _bond_start(bond)
+  start == gate.start || throw(ArgumentError(
+    "PXP controlled gate starts at $(gate.start), not schedule target $(start)"))
+  gate_backend === :controlled || throw(ArgumentError(
+    "PXPControlledGate requires gate_backend=:controlled"))
+  gate_maxdim == 0 || throw(ArgumentError("PXPControlledGate requires gate_maxdim=0"))
+  direction in (:R, :L) || throw(ArgumentError("DMT direction must be :R or :L"))
+  start >= 1 || throw(ArgumentError("local gate bond must be at least 1"))
+  start + gate.span - 1 <= length(psi) ||
+    throw(ArgumentError("local gate support exceeds chain length"))
+  _validate_operator_space(psi, start, gate.span)
+  _validate_dmt_budget(psi, maxdim, preserve_diameter, preserve_operators)
+  if !isnothing(cache)
+    ll = ITensorMPS.leftlim(psi)
+    rl = ITensorMPS.rightlim(psi)
+  end
+  _exact_mpo_gate_qr!(psi, gate.mpo, start, direction)
+  if !isnothing(cache)
+    _invalidate_env!(cache, clamp(min(ll, start), 1, length(psi)),
+      clamp(max(rl, start + gate.span - 1), 1, length(psi)))
+  end
+  return _dmt_window_truncate!(psi, start, gate.span; maxdim=Int(maxdim), cutoff=cutoff,
+    direction=direction, preserve_diameter=Int(preserve_diameter),
+    preserve_operators=preserve_operators, truncation=truncation, cache=cache)
+end
+
 """
     dmt_step!(psi, gate, bond, opts::DMTOptions; direction=:R)
 
@@ -471,7 +641,8 @@ convenience overload of [`dmt_step!`](@ref) that forwards `opts` fields to the k
 # Returns
 - The mutated `psi`.
 """
-function dmt_step!(psi::MPS, gate::AbstractMatrix, bond, opts::DMTOptions; direction::Symbol=:R)
+function dmt_step!(psi::MPS, gate::Union{AbstractMatrix,PXPControlledGate}, bond,
+                   opts::DMTOptions; direction::Symbol=:R)
   return dmt_step!(
     psi,
     gate,
@@ -483,6 +654,7 @@ function dmt_step!(psi::MPS, gate::AbstractMatrix, bond, opts::DMTOptions; direc
     preserve_diameter=opts.preserve_diameter,
     preserve_operators=opts.preserve_operators,
     truncation=opts.truncation,
+    gate_backend=opts.gate_backend,
   )
 end
 
@@ -532,6 +704,51 @@ function _reverse_gate_for_step(gate_spec, is_default, schedule, bond, index)
   return _gate_for_step(gate_spec, bond, index)
 end
 
+function _validate_static_dmt_evolution(psi::MPS, evo::DMTGateEvolution,
+                                        reverse_is_default::Bool)
+  evo.gate isa Function && return nothing
+  function validate_gate(gate, bond, index, direction)
+    start = _bond_start(bond)
+    if gate isa PXPControlledGate
+      evo.gate_backend === :controlled || throw(ArgumentError(
+        "PXPControlledGate requires gate_backend=:controlled"))
+      start == gate.start || throw(ArgumentError(
+        "PXP controlled gate starts at $(gate.start), not schedule target $(start)"))
+      start + gate.span - 1 <= length(psi) ||
+        throw(ArgumentError("local gate support exceeds chain length"))
+      _validate_operator_space(psi, start, gate.span)
+      _validate_dmt_budget(psi, evo.maxdim, evo.preserve_diameter, evo.preserve_operators)
+      for offset in 1:gate.span
+        _mpo_unprimed_site_index(gate.mpo, offset) == siteind(psi, start + offset - 1) ||
+          throw(ArgumentError("controlled gate site indices do not match the target state"))
+      end
+      return nothing
+    end
+    evo.gate_backend !== :controlled || throw(ArgumentError(
+      "gate_backend=:controlled requires PXPControlledGate entries"))
+    gate isa AbstractMatrix || throw(ArgumentError(
+      "DMT gate at $(direction === :R ? "forward" : "reverse") schedule index $(index) is not supported"))
+    span = _operator_span_at(psi, gate, start)
+    evo.gate_backend in (:fused, :direct) && span != 2 && throw(ArgumentError(
+      "DMT gate_backend=$(evo.gate_backend) requires every scheduled gate to act on two sites; " *
+      "$(direction) schedule index $(index) has span $(span)"))
+    evo.gate_backend === :direct && evo.truncation !== :dense && throw(ArgumentError(
+      "DMT gate_backend=:direct currently requires truncation=:dense"))
+    return _validate_dmt_step(psi, gate, start, span, direction, evo.maxdim,
+      evo.preserve_diameter, evo.preserve_operators)
+  end
+  for (index, bond) in pairs(evo.schedule)
+    gate = _gate_for_step(evo.gate, bond, index)
+    validate_gate(gate, bond, index, :R)
+  end
+  for (index, bond) in pairs(evo.reverse_schedule)
+    gate = _reverse_gate_for_step(
+      evo.gate, reverse_is_default, evo.schedule, bond, index)
+    validate_gate(gate, bond, index, :L)
+  end
+  return nothing
+end
+
 """
     dmt_evolve!(psi, evo::DMTGateEvolution; normalize=true)
 
@@ -567,6 +784,7 @@ This driver is intended for **transport simulations** (e.g. spin or energy diffu
 """
 function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normalize)
   reverse_is_default = _is_default_reverse_schedule(evo.schedule, evo.reverse_schedule)
+  _validate_static_dmt_evolution(psi, evo, reverse_is_default)
   # One environment cache threaded through the whole call: each `dmt_step!` mutates `psi`
   # locally and invalidates only the touched range, so the cache stays consistent across the
   # forward sweep, the forward->reverse turnaround, and successive `nstep` passes (no mutation
@@ -587,6 +805,7 @@ function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normal
         preserve_diameter=evo.preserve_diameter,
         preserve_operators=evo.preserve_operators,
         truncation=evo.truncation,
+        gate_backend=evo.gate_backend,
         cache=cache,
       )
     end
@@ -603,6 +822,7 @@ function dmt_evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normal
         preserve_diameter=evo.preserve_diameter,
         preserve_operators=evo.preserve_operators,
         truncation=evo.truncation,
+        gate_backend=evo.gate_backend,
         cache=cache,
       )
     end
@@ -621,4 +841,49 @@ unnormalized traces of a traceless operator (e.g. conserved `tr(H O(t))`).
 """
 function evolve!(psi::MPS, evo::DMTGateEvolution; normalize::Bool=evo.normalize)
   return dmt_evolve!(psi, evo; normalize=normalize)
+end
+
+function dmt_evolve!(psi::MPS, plan::PXPDMTPlan;
+                     normalize::Bool=plan.evolution.normalize)
+  return dmt_evolve!(psi, plan.evolution; normalize=normalize)
+end
+
+function evolve!(psi::MPS, plan::PXPDMTPlan;
+                 normalize::Bool=plan.evolution.normalize)
+  return dmt_evolve!(psi, plan; normalize=normalize)
+end
+
+function dmt_evolve!(psi::MPS, plan::PXPLayerDMTPlan;
+                     normalize::Bool=plan.normalize)
+  direction = plan.direction
+  length(psi) == length(first(plan.layers).mpo) || throw(ArgumentError(
+    "PXP layerwise plan and state must have matching lengths"))
+  for layer in plan.layers, site in 1:length(psi)
+    _mpo_unprimed_site_index(layer.mpo, site) == siteind(psi, site) || throw(ArgumentError(
+      "PXP layerwise plan site indices do not match the target state"))
+  end
+  _validate_dmt_budget(psi, plan.options.maxdim, plan.options.preserve_diameter,
+    plan.options.preserve_operators)
+  bonds = direction === :R ? (1:(length(psi) - 1)) : ((length(psi) - 1):-1:1)
+  for _ in 1:plan.nstep, layer in plan.layers
+    psi[:] = apply(layer.mpo, psi; alg="naive", truncate=false)
+    first_bond = first(bonds)
+    orthogonalize!(psi, first_bond)
+    cache = _DMTEnvCache(psi)
+    for bond in bonds
+      _orthogonalize_env!(cache, psi, bond)
+      _dmt_bond_truncate!(psi, bond; maxdim=plan.options.maxdim,
+        cutoff=plan.options.cutoff, direction=direction,
+        preserve_diameter=plan.options.preserve_diameter,
+        preserve_operators=plan.options.preserve_operators,
+        truncation=plan.options.truncation, orthogonalize=false, cache=cache)
+    end
+  end
+  normalize && normalize!(psi)
+  return psi
+end
+
+function evolve!(psi::MPS, plan::PXPLayerDMTPlan;
+                 normalize::Bool=plan.normalize)
+  return dmt_evolve!(psi, plan; normalize=normalize)
 end

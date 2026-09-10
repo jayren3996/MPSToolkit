@@ -73,6 +73,7 @@ end
     @test opts.gate_maxdim == 0
     @test opts.preserve_diameter == 3
     @test opts.truncation == :dense
+    @test opts.gate_backend == :product
     # gate_maxdim defaults to 0 = "apply the gate exactly, no pre-truncation", independently of
     # maxdim, and matches DMTGateEvolution / dmt_step!.
     @test DMTOptions(maxdim=8).gate_maxdim == 0
@@ -86,6 +87,10 @@ end
     @test_throws ArgumentError DMTOptions(preserve_diameter=0)
     @test_throws ArgumentError DMTOptions(preserve_diameter=4)
     @test_throws ArgumentError DMTOptions(truncation=:bogus)
+    @test_throws ArgumentError DMTOptions(gate_backend=:bogus)
+    @test_throws ArgumentError DMTOptions(gate_backend=:qr, gate_maxdim=12)
+    @test DMTOptions(gate_backend=:qr).gate_backend == :qr
+    @test DMTOptions(gate_backend=:controlled).gate_backend == :controlled
 
     # DMTOptions is consumed by dmt_step! and forwards equivalently to the keyword form.
     sites = pauli_siteinds(4)
@@ -289,6 +294,40 @@ end
     end
   end
 
+  @testset "exact QR gate application matches the product backend" begin
+    sites = pauli_siteinds(6)
+    base = random_mps(ComplexF64, sites; linkdims=7)
+    normalize!(base)
+    for span in 1:4, direction in (:R, :L)
+      gate = _identity_gate(span)
+      product_state = copy(base)
+      tebd_evolve!(product_state, gate, 2; maxdim=0, cutoff=0.0)
+      qr_state = copy(base)
+      MPSToolkit._exact_gate_qr!(qr_state, gate, 2, span, direction)
+      @test _dense_pauli_coefficients(qr_state) ≈
+        _dense_pauli_coefficients(product_state) atol=1e-11
+    end
+
+    x = ComplexF64[0 1; 1 0]
+    z = ComplexF64[1 0; 0 -1]
+    gate = pauli_gate(exp(-0.07im * kron(x, z)))
+    product_state = copy(base)
+    dmt_step!(product_state, gate, 3; maxdim=12, cutoff=1e-14,
+      gate_backend=:product)
+    qr_state = copy(base)
+    dmt_step!(qr_state, gate, 3; maxdim=12, cutoff=1e-14, gate_backend=:qr)
+    @test _dense_pauli_coefficients(qr_state) ≈
+      _dense_pauli_coefficients(product_state) atol=1e-10
+
+    rank_deficient = pauli_basis_state(sites, ["I", "X", "Y", "Z", "I", "X"])
+    via_product = copy(rank_deficient)
+    via_qr = copy(rank_deficient)
+    dmt_step!(via_product, gate, 3; maxdim=12, cutoff=0.0, gate_backend=:product)
+    dmt_step!(via_qr, gate, 3; maxdim=12, cutoff=0.0, gate_backend=:qr)
+    @test _dense_pauli_coefficients(via_qr) ≈
+      _dense_pauli_coefficients(via_product) atol=1e-11
+  end
+
   @testset "invalid DMT calls do not mutate the state" begin
     sites = pauli_siteinds(5)
     psi = random_mps(sites; linkdims=8)
@@ -323,6 +362,24 @@ end
     @test_throws ArgumentError dmt_step!(wide, _identity_gate(1), 2; maxdim=5, gate_maxdim=64)
     @test _link_dims(wide) == wide_dims
 
+    # Static schedules must validate every gate/backend pairing before the first gate mutates
+    # the state. The second entry is deliberately one-site and invalid for :fused.
+    x = ComplexF64[0 1; 1 0]
+    z = ComplexF64[1 0; 0 -1]
+    nontrivial_gate = pauli_gate(exp(-0.17im * kron(x, z)))
+    for backend in (:fused, :direct)
+      invalid_schedule = DMTGateEvolution([nontrivial_gate, _identity_gate(1)], 0.1;
+        schedule=[1, 2], reverse_schedule=Int[], maxdim=12, gate_backend=backend,
+        normalize=false)
+      input = random_mps(ComplexF64, sites; linkdims=8)
+      normalize!(input)
+      input_reference = copy(input)
+      input_coefficients = _dense_pauli_coefficients(input_reference)
+      @test_throws ArgumentError dmt_evolve!(input, invalid_schedule)
+      @test _link_dims(input) == _link_dims(input_reference)
+      @test _dense_pauli_coefficients(input) ≈ input_coefficients atol=1e-13
+    end
+
     bad_sites = [Index(3, "NotPauli,n=$n") for n in 1:4]
     bad_psi = random_mps(bad_sites; linkdims=4)
     bad_reference_dims = _link_dims(bad_psi)
@@ -343,6 +400,20 @@ end
     @test dmt_evolve!(scheduled, evo) === scheduled
 
     @test inner(manual, scheduled) ≈ 1.0 atol = 1e-8
+  end
+
+  @testset "static schedules are fully validated before mutation" begin
+    sites = pauli_siteinds(5)
+    state = random_mps(sites; linkdims=12)
+    normalize!(state)
+    reference = copy(state)
+    gate = _identity_gate(2)
+    invalid = DMTGateEvolution([gate, gate], 0.1; schedule=[1, 2],
+      reverse_schedule=[2, 3], maxdim=12, cutoff=0.0, gate_maxdim=0,
+      normalize=false)
+    @test_throws ArgumentError dmt_evolve!(state, invalid)
+    @test inner(reference, state) ≈ inner(reference, reference) atol=1e-12
+    @test _link_dims(state) == _link_dims(reference)
   end
 
   @testset "scheduled DMT evolution matches explicit three-site sweep" begin
