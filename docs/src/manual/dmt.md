@@ -796,6 +796,10 @@ For *when* to prefer DMT, DAOE, or plain TEBD — and in particular why a dynami
 ```@docs
 DMTOptions
 DMTGateEvolution
+PXPControlledGate
+pauli_pxp_controlled_gate
+ConstrainedDMTRunState
+bond_dmt_plan
 dmt_step!
 dmt_evolve!
 constrained_dmt_evolve!
