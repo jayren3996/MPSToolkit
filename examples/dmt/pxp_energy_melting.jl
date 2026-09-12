@@ -143,23 +143,24 @@ energy_profile(state, terms) = real.(pauli_expectation_profile(state, terms))
 
 # Hilbert-Schmidt weight outside the constrained sector: 1 - <rho, P_G rho P_G>/<rho, rho>.
 function sector_leakage(state, projector)
-    projected = apply(projector, state; maxdim=GATE_MAXDIM, cutoff=CUTOFF)
-    return 1 - real(inner(state, projected)) / real(inner(state, state))
+    return constraint_leakage_squared(state, projector)
 end
 
 # Build, constrained-DMT-evolve, and record (t, dE, energy drift, leakage, edge) at every sweep.
 function melt()
     rho, evo, projector, terms = _build_state_and_evolution()
+    run_state = ConstrainedDMTRunState()
     profile0 = energy_profile(rho, terms)
     e_right0 = sum(profile0[(WALL + 1):NSITES])
     total0 = sum(profile0)
     times = [0.0]; transferred = [0.0]; drift = [0.0]
     leak = [sector_leakage(rho, projector)]; edge = [0.0]
     for k in 1:NCALL
-        constrained_dmt_evolve!(rho, evo, projector; project_every=PROJECT_EVERY)
+        constrained_dmt_evolve!(rho, evo, projector; project_every=PROJECT_EVERY,
+            run_state=run_state, step_time=2 * DT)
         profile = energy_profile(rho, terms)
         delta = profile - profile0
-        push!(times, 2 * DT * k)
+        push!(times, run_state.physical_time)
         push!(transferred, sum(profile[(WALL + 1):NSITES]) - e_right0)        # dE(t) ~ t^(1/z)
         push!(drift, abs(sum(profile) - total0))                              # energy conservation bar
         push!(leak, sector_leakage(rho, projector))                          # constraint bar
@@ -171,12 +172,13 @@ end
 # Warmed-up timing probe -- the cold probe under-estimates because bond dims grow as the wall melts.
 function timing_probe(; warmup=12, calls=3)
     rho, evo, projector, _ = _build_state_and_evolution()
+    run_state = ConstrainedDMTRunState()
     for _ in 1:warmup
-        constrained_dmt_evolve!(rho, evo, projector; project_every=PROJECT_EVERY)
+        constrained_dmt_evolve!(rho, evo, projector; project_every=PROJECT_EVERY, run_state)
     end
     t0 = time()
     for _ in 1:calls
-        constrained_dmt_evolve!(rho, evo, projector; project_every=PROJECT_EVERY)
+        constrained_dmt_evolve!(rho, evo, projector; project_every=PROJECT_EVERY, run_state)
     end
     return (time() - t0) / calls
 end

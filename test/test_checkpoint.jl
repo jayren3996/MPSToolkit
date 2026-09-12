@@ -39,6 +39,48 @@ using Test
     @test after ≈ before rtol = 1e-14
   end
 
+  @testset "run cadence and provenance survive a restart" begin
+    dir = mktempdir()
+    rho = sample_state()
+    run_state = ConstrainedDMTRunState(
+      completed_steps=7, physical_time=0.7, steps_since_projection=1,
+      projection_count=2)
+    provenance = dmt_run_provenance(algorithm_version="pxp-dmt-v1")
+    path = dmt_checkpoint_save(dmt_checkpoint_path("stateful", 0.7; dir=dir), rho,
+      parameters; time=0.7, sweep=7, run_state=run_state, provenance=provenance)
+    restored = dmt_checkpoint_load(path)
+    restored_state = dmt_checkpoint_run_state(restored)
+    @test restored_state.completed_steps == 7
+    @test restored_state.physical_time == 0.7
+    @test restored_state.steps_since_projection == 1
+    @test restored_state.projection_count == 2
+    @test dmt_checkpoint_provenance(restored)[:algorithm_version] == "pxp-dmt-v1"
+    @test dmt_checkpoint_provenance(restored)[:code_sha] isa Union{Nothing,String}
+    @test_throws ArgumentError dmt_checkpoint_save(
+      dmt_checkpoint_path("bad-state", 0.8; dir=dir), rho, parameters;
+      time=0.8, sweep=8, run_state=run_state)
+
+    # Public data can be carried through a complete load -> advance -> save -> load cycle
+    # without exposing or accidentally resubmitting the reserved metadata keys.
+    carried = dmt_checkpoint_observables(restored)
+    carried[:trace] = [1.0]
+    restored_state.completed_steps += 1
+    restored_state.physical_time += 0.1
+    second_path = dmt_checkpoint_save(dmt_checkpoint_path("stateful", 0.8; dir=dir),
+      restored.state, parameters; time=0.8, sweep=8, observables=carried,
+      run_state=restored_state, provenance=dmt_checkpoint_provenance(restored))
+    second = dmt_checkpoint_load(second_path)
+    @test dmt_checkpoint_observables(second) == Dict(:trace => [1.0])
+    @test dmt_checkpoint_run_state(second).completed_steps == 8
+    @test dmt_checkpoint_provenance(second)[:algorithm_version] == "pxp-dmt-v1"
+
+    legacy_path = dmt_checkpoint_save(dmt_checkpoint_path("legacy", 0.0; dir=dir), rho,
+      parameters; time=0.0, sweep=0)
+    legacy = dmt_checkpoint_load(legacy_path)
+    @test dmt_checkpoint_run_state(legacy) === nothing
+    @test isempty(dmt_checkpoint_provenance(legacy))
+  end
+
   @testset "resume finds the newest checkpoint" begin
     dir = mktempdir()
     rho = sample_state()

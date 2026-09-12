@@ -31,7 +31,7 @@
 #     compared against. `elt = Float64` today still runs the shipped (complex-only-fast) kernel,
 #     so it is not expected to be faster yet; it is here to be re-run once it is.
 #
-# Table 1 also carries a peak-memory column for `:dense` (bytes allocated by one bond truncation at
+# Table 1 also carries a cumulative-allocation column for `:dense` (bytes allocated by one bond truncation at
 # the shipped `:qr` factorize default, via `@allocated` -- the idiom `test/test_dmt_kernel.jl`
 # already uses for this same kernel call). `:dense` materializes and factorizes the full
 # `chi' x chi'` complement, and halving that transient is the point of the real-arithmetic path:
@@ -149,8 +149,8 @@ for elt in (Float64, ComplexF64), d in (2, 3, 4), chi in CHIS
       bench_bond(psi, bond, maxdim; factorize=:qr, truncation=truncation))
   end
   # Memory is measured once, under the shipped `:qr` factorize default (see the file header: Stage
-  # A's factorize knob has no observable effect and is not user-facing), so this is the peak-memory
-  # number a real `dmt_evolve!` call actually pays.
+  # A's factorize knob has no observable effect and is not user-facing). `@allocated` reports
+  # cumulative allocation volume, not peak resident memory.
   mem_dense = bench_bond_memory(psi, bond, maxdim; factorize=:qr, truncation=:dense)
   @printf("%-11s %-3d %-6d %-12s %-7d %8.3f %8.3f %6.2fx %8.3f %8.3f %6.2fx %8.3f %8.3f %6.2fx %17.1f\n",
     elt, d, chi, "$(rows)x$(cols)", maxdim, factor_svd, factor_qr, factor_svd / factor_qr,

@@ -19,7 +19,9 @@ function _protected_basis(protected::AbstractMatrix, ::Type{T}=eltype(protected)
   size(protected, 2) == 0 && return zeros(T, size(protected, 1), 0)
   ncols = min(size(protected, 1), size(protected, 2))
   factorization = qr(Matrix{T}(protected))
-  return Matrix(factorization.Q)[:, 1:ncols]
+  basis = Matrix(factorization.Q)
+  @assert size(basis, 2) == ncols
+  return basis
 end
 
 """
@@ -59,7 +61,7 @@ function _dmt_connector(bond_matrix::AbstractMatrix, q0::AbstractVector, r0::Abs
   scaled_right = _bond_mul(bond_matrix, r0)
   denominator = dot(q0, scaled_right)
   has_connector = abs(denominator) > sqrt(eps(Float64)) * norm(bond_matrix)
-  a = has_connector ? convert(Vector{T}, scaled_right ./ denominator) : zeros(T, length(r0))
+  a = has_connector ? convert(Vector{T}, scaled_right ./ denominator) : zeros(T, length(q0))
   # b = (q0' S)^T = conj(S' q0)
   b = convert(Vector{T}, conj(_bond_adj(bond_matrix, q0)))
   return a, b, has_connector
@@ -92,14 +94,23 @@ function _dmt_complement_ops(bond_matrix::AbstractMatrix, a::AbstractVector, b::
     w = badj(x) - qltb' * (QL' * x)
     return w - QR * (QR' * w)
   end
-  return (mul=mul, adj=adj, QLtB=qltb, BQR=bqr, BQRc=bqrc)
+  function dense()
+    T = promote_type(eltype(bond_matrix), eltype(a), eltype(b), eltype(QL), eltype(QR))
+    result = Matrix{T}(bond_matrix)
+    mul!(result, reshape(a, :, 1), transpose(b), -one(T), one(T))
+    mul!(result, QL, qltb, -one(T), one(T))
+    mul!(result, bqrc, QR', -one(T), one(T))
+    return result
+  end
+  return (mul=mul, adj=adj, dense=dense, QLtB=qltb, BQR=bqr, BQRc=bqrc)
 end
 
 """
-    _truncated_svd(mul, adj, chi, rank, T=ComplexF64; mode=:dense, oversample=10, power=2)
+    _truncated_svd(mul, adj, nrows, ncols, rank, T=ComplexF64; mode=:dense, oversample=10, power=2)
 
-Return the leading `rank` singular triplet `(U, S, V)` of the `chi x chi` operator defined by
-the matrix-free products `mul` and `adj`, in element type `T`.
+Return the leading `rank` singular triplet `(U, S, V)` of the `nrows x ncols` operator defined
+by the matrix-free products `mul` and `adj`, in element type `T`. The legacy single-`chi`
+overload remains a square compatibility wrapper.
 
 # Arguments
 - `T`: Element type of the identity block `:dense` materializes and of the probes `:random`
@@ -131,20 +142,23 @@ the matrix-free products `mul` and `adj`, in element type `T`.
   seeded `:random` run is not reproducible *across* element types either. That is the documented
   property again rather than a new one, but it is worth knowing before A/B-ing the two types.
 """
-function _truncated_svd(mul, adj, chi::Integer, rank::Integer, ::Type{T}=ComplexF64;
-                        mode::Symbol=:dense, oversample::Integer=10,
+function _truncated_svd(mul, adj, nrows::Integer, ncols::Integer, rank::Integer,
+                        ::Type{T}=ComplexF64;
+                        mode::Symbol=:dense, dense=nothing, oversample::Integer=10,
                         power::Integer=2) where {T}
-  keep = max(min(Int(rank), Int(chi)), 0)
+  nrows, ncols = Int(nrows), Int(ncols)
+  keep = max(min(Int(rank), nrows, ncols), 0)
   # `T` rather than `ComplexF64` even for the empty return: these blocks are `hcat`ed into the
   # refactorization factors, and an empty `ComplexF64` block re-promotes a real `hcat` silently.
-  keep == 0 && return (zeros(T, chi, 0), Float64[], zeros(T, chi, 0))
+  keep == 0 && return (zeros(T, nrows, 0), Float64[], zeros(T, ncols, 0))
   if mode === :dense
-    factorization = svd(mul(Matrix{T}(I, chi, chi)))
+    matrix = isnothing(dense) ? mul(Matrix{T}(I, ncols, ncols)) : dense()
+    factorization = svd(matrix)
     return (factorization.U[:, 1:keep], factorization.S[1:keep], factorization.V[:, 1:keep])
   end
   mode === :random || throw(ArgumentError("DMT truncated SVD mode must be :dense or :random"))
-  probes = min(Int(chi), keep + Int(oversample))
-  sketch = mul(randn(T, Int(chi), probes))
+  probes = min(ncols, keep + Int(oversample))
+  sketch = mul(randn(T, ncols, probes))
   for _ in 1:Int(power)
     sketch = mul(adj(Matrix(qr(sketch).Q)))
   end
@@ -155,10 +169,14 @@ function _truncated_svd(mul, adj, chi::Integer, rank::Integer, ::Type{T}=Complex
   return (range_basis * factorization.U[:, 1:keep], factorization.S[1:keep], factorization.V[:, 1:keep])
 end
 
+_truncated_svd(mul, adj, chi::Integer, rank::Integer, ::Type{T}=ComplexF64; kwargs...) where {T} =
+  _truncated_svd(mul, adj, chi, chi, rank, T; kwargs...)
+
 """
     _dmt_refactor(left, right, maxdim, cutoff)
 
-Return the SVD `(U, S, V)` of the low-rank product `left * right'` without forming it.
+Return the SVD `(U, S, V)` of the low-rank product `left * right'` without forming it. The two
+factors may have different row counts but must have the same column count.
 
 # Notes
 - Costs `O(chi r^2 + r^3)` for `chi x r` inputs, versus `O(chi^3)` for a dense SVD (measured
@@ -167,9 +185,10 @@ Return the SVD `(U, S, V)` of the low-rank product `left * right'` without formi
 - Needs no type parameter: both factors are already assembled, so the promotion over the two of
   them is the element type to work in. Real inputs stay real, and `dgeqrf`/`dgesdd` then do the
   work instead of `zgeqrf`/`zgesdd`.
+- The Householder Q factors stay implicit: they are applied directly to the retained core
+  singular vectors instead of first materializing a separate Q matrix.
 """
 function _dmt_refactor(left::AbstractMatrix, right::AbstractMatrix, maxdim::Integer, cutoff::Real)
-  size(left, 1) == size(right, 1) || throw(ArgumentError("DMT refactorization needs matching row counts"))
   size(left, 2) == size(right, 2) || throw(ArgumentError("DMT refactorization needs matching column counts"))
   T = promote_type(eltype(left), eltype(right))
   left_qr = qr(Matrix{T}(left))
@@ -180,5 +199,6 @@ function _dmt_refactor(left::AbstractMatrix, right::AbstractMatrix, maxdim::Inte
     keep = max(count(>(cutoff * core.S[1]), core.S), 1)
   end
   keep = min(keep, Int(maxdim))
-  return (Matrix(left_qr.Q) * core.U[:, 1:keep], core.S[1:keep], Matrix(right_qr.Q) * core.V[:, 1:keep])
+  return (left_qr.Q * core.U[:, 1:keep], core.S[1:keep],
+          right_qr.Q * core.V[:, 1:keep])
 end

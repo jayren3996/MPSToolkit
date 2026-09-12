@@ -2,6 +2,8 @@
 # re-include a file whose parent directory is excluded, so the directory itself must not be.
 dev/*
 !dev/bench_dmt.jl
+!dev/bench_bond_dmt.jl
+!dev/bench_bond_s2_s4.jl
 .DS_Store
 .ipynb_checkpoints/
 docs/build/

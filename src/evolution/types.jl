@@ -72,13 +72,18 @@ Configuration for scheduled operator-space DMT evolution.
 - `reverse_schedule`: Reverse update schedule used for the backward sweep.
 - `nstep`: Number of complete forward-plus-reverse sweeps per `evolve!` call.
 - `maxdim`: **Total** post-DMT bond dimension, inclusive of the protected block.
-- `cutoff`: Truncation cutoff used in the final refactorization.
+- `cutoff`: Relative cutoff applied only to the doubly orthogonal complement before protected
+  components are reinstated.
 - `gate_maxdim`: Temporary bond dimension cap for raw gate application; `0` means no cap, i.e.
   the gate is applied exactly.
 - `preserve_diameter`: Positive odd diameter of the observables DMT preserves exactly.
 - `truncation`: `:dense` (default) or `:random` complement truncation; `:random` is faster and
   materially lighter on peak memory at large bond dimension, but not deterministic. See
   [`DMTOptions`](@ref).
+- `gate_backend`: `:product` (default) uses ITensorMPS gate application; `:qr` contracts a dense
+  uncapped window and splits it with QR/LQ; `:fused` passes an exact two-site SVD to the DMT
+  solve; `:direct` applies DMT directly to the rectangular gated center and currently requires
+  `truncation=:dense`; `:controlled` accepts [`PXPControlledGate`](@ref) entries.
 - `normalize`: Whether `evolve!` / `dmt_evolve!` renormalize the state after evolution.
   Default `true`; set `false` to track unnormalized traces of a traceless operator.
 """
@@ -94,6 +99,7 @@ struct DMTGateEvolution{TG,TS,TR}
   preserve_diameter::Int
   preserve_operators::Any
   truncation::Symbol
+  gate_backend::Symbol
   normalize::Bool
 end
 
@@ -117,7 +123,10 @@ function _reject_connector_buffer(connector_buffer)
 end
 
 """
-    DMTGateEvolution(gate, dt; schedule, reverse_schedule=reverse(schedule), nstep=1, maxdim=30, cutoff=1e-12, gate_maxdim=0, preserve_diameter=3, truncation=:dense, normalize=true)
+    DMTGateEvolution(gate, dt; schedule, reverse_schedule=reverse(schedule), nstep=1,
+                     maxdim=30, cutoff=1e-12, gate_maxdim=0,
+                     preserve_diameter=3, truncation=:dense,
+                     gate_backend=:product, normalize=true)
 
 Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
 
@@ -131,7 +140,8 @@ Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
 - `nstep`: Number of complete forward-plus-reverse sweeps per evolution call.
 - `maxdim`: **Total** bond dimension after DMT truncation, inclusive of the protected block; it
   must be at least `2 d^(preserve_diameter - 1) + 1` for the local dimension `d` in use.
-- `cutoff`: Truncation cutoff used when refactorizing the compressed bond.
+- `cutoff`: Relative cutoff applied only to complement singular values; it cannot remove a
+  protected direction.
 - `gate_maxdim`: Temporary gate-application bond dimension cap. **`0` (the default) means no
   cap: the gate is applied exactly.** A positive cap pre-truncates the inflated bond with a
   plain SVD, discarding the smallest singular values *before* DMT can protect the local-operator
@@ -158,6 +168,10 @@ Construct a [`DMTGateEvolution`](@ref) for **transport** simulations.
   1.1 GB at `d = 4, maxdim = 200`, and ~7 GB at `d = 4, preserve_diameter = 5, maxdim = 513` — so
   at `d >= 4`, or at `preserve_diameter = 5`, choosing `:random` is a memory decision and not only
   a speed one. See [`DMTOptions`](@ref).
+- `gate_backend`: `:product` (default), opt-in dense `:qr`, opt-in two-site `:fused` or
+  `:direct`, or opt-in PXP `:controlled`. `:direct` requires `truncation=:dense`.
+  Non-product backends require `gate_maxdim=0`; their intermediate gauge can change
+  finite-budget output, so neither is the default.
 - `normalize`: Default normalization choice carried by the object; `evolve!` / `dmt_evolve!`
   use it unless overridden by their own `normalize` keyword. Set `false` for traceless
   operators (see [`dmt_evolve!`](@ref)).
@@ -177,6 +191,7 @@ function DMTGateEvolution(
   preserve_diameter=3,
   preserve_operators=nothing,
   truncation=:dense,
+  gate_backend=:product,
   normalize=true,
   connector_buffer=nothing,
 )
@@ -190,6 +205,12 @@ function DMTGateEvolution(
     "DMTGateEvolution requires a positive odd preserve_diameter, got $(preserve_diameter)"))
   truncation in (:dense, :random) || throw(ArgumentError(
     "DMTGateEvolution truncation must be :dense or :random, got $(truncation)"))
+  gate_backend in (:product, :qr, :fused, :direct, :controlled) || throw(ArgumentError(
+    "DMTGateEvolution gate_backend must be :product, :qr, :fused, :direct, or :controlled, got $(gate_backend)"))
+  gate_backend === :direct && truncation !== :dense && throw(ArgumentError(
+    "DMTGateEvolution gate_backend=:direct currently requires truncation=:dense"))
+  gate_backend !== :product && gate_maxdim != 0 && throw(ArgumentError(
+    "DMTGateEvolution gate_backend=$(gate_backend) requires gate_maxdim=0"))
   return DMTGateEvolution(
     gate,
     Float64(dt),
@@ -202,6 +223,7 @@ function DMTGateEvolution(
     Int(preserve_diameter),
     preserve_operators,
     Symbol(truncation),
+    Symbol(gate_backend),
     Bool(normalize),
   )
 end

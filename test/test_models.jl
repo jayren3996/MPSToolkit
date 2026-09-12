@@ -25,4 +25,15 @@ using ITensorMPS
   @test right_edge ≈ -kron(sz, sz) - 0.5 * (0.5 * kron(sx, id2) + kron(id2, sx))
   @test_throws ArgumentError spinhalf_tfim_bond_hamiltonian(6, 0)
   @test_throws ArgumentError spinhalf_tfim_bond_hamiltonian(6, 6)
+
+  paulis = pauli_matrices()
+  mfi_left = spinhalf_mixed_field_ising_bond_hamiltonian(4, 1; J=0.7, gx=1.1, gz=-0.3)
+  @test mfi_left ≈ 0.7 * kron(paulis.Z, paulis.Z) +
+    1.1 * (kron(paulis.X, paulis.I) + 0.5 * kron(paulis.I, paulis.X)) -
+    0.3 * (kron(paulis.Z, paulis.I) + 0.5 * kron(paulis.I, paulis.Z))
+  mfi_bulk = spinhalf_mixed_field_ising_bond_hamiltonian(4, 2; J=0.7, gx=1.1, gz=-0.3)
+  @test mfi_bulk ≈ 0.7 * kron(paulis.Z, paulis.Z) +
+    0.55 * (kron(paulis.X, paulis.I) + kron(paulis.I, paulis.X)) -
+    0.15 * (kron(paulis.Z, paulis.I) + kron(paulis.I, paulis.Z))
+  @test_throws ArgumentError spinhalf_mixed_field_ising_bond_hamiltonian(4, 0)
 end

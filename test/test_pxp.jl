@@ -29,6 +29,14 @@ function _pxp_dense(nsites; omega=1.0)
   )
 end
 
+function _pxp_mu_term(nsites, center; omega=1.0, mu=0.0)
+  support = pxp_term_support(nsites, center)
+  center_offset = center - first(support) + 1
+  factors = [offset == center_offset ? mu * _PXP_EXCITED : _PXP_ID2
+    for offset in 1:length(support)]
+  return pxp_term_hamiltonian(nsites, center; omega=omega) + foldl(kron, factors)
+end
+
 # Diagonal dense P_G = prod_j (1 - n_j n_{j+1}); site 1 = most significant bit.
 function _pxp_projector_dense(nsites)
   d = 2^nsites
@@ -103,6 +111,200 @@ end
     @test pxp_term_hamiltonian(6, 3; omega=0.7) ≈ 0.7 * kron(_PXP_GROUND, _PXP_X, _PXP_GROUND)
     @test_throws ArgumentError pxp_term_hamiltonian(1, 1)
     @test_throws ArgumentError pxp_term_hamiltonian(4, 5)
+  end
+
+  @testset "controlled MPO gates equal dense PXP gates" begin
+    for nsites in 2:8
+      sites = pauli_siteinds(nsites)
+      for center in unique((1, cld(nsites, 2), nsites)), duration in (-0.07, 0.11)
+        gate = pauli_pxp_controlled_gate(sites, center, duration; omega=0.8)
+        support = pxp_term_support(nsites, center)
+        local_sites = collect(sites[support])
+        dense = pauli_gate_from_hamiltonian(
+          pxp_term_hamiltonian(nsites, center; omega=0.8), duration)
+        @test _mpo_dense(gate.mpo, local_sites) ≈ dense atol=1e-12
+        @test maxlinkdim(gate.mpo) <= 4
+        @test mapreduce(eltype, promote_type, ITensorMPS.data(gate.mpo)) === Float64
+        @test gate.start == first(support)
+        @test gate.span == length(support)
+      end
+    end
+  end
+
+
+  @testset "controlled PXP plus chemical-potential gates" begin
+    for nsites in 2:8
+      sites = pauli_siteinds(nsites)
+      for center in unique((1, cld(nsites, 2), nsites)), duration in (-0.07, 0.11), mu in (-0.4, 0.3)
+        gate = pauli_pxp_controlled_gate(sites, center, duration; omega=0.8, mu=mu)
+        support = pxp_term_support(nsites, center)
+        dense = pauli_gate_from_hamiltonian(
+          _pxp_mu_term(nsites, center; omega=0.8, mu=mu), duration)
+        @test _mpo_dense(gate.mpo, collect(sites[support])) ≈ dense atol=2e-12
+        @test maxlinkdim(gate.mpo) <= 4
+        @test gate.mu == mu
+      end
+    end
+    sites = pauli_siteinds(5)
+    onsite_only = pxp_s4_dmt_plan(sites, 0.1; omega=0.0, mu=-0.7, maxdim=16)
+    @test all(gate.omega == 0.0 && gate.mu == -0.7 for gate in onsite_only.evolution.gate)
+    @test occursin("mu=-0.7", onsite_only.signature)
+
+    nsites = 4
+    omega, mu, total_time = 0.8, -0.35, 0.4
+    h = sum(_embed_term(_pxp_mu_term(nsites, center; omega=omega, mu=mu),
+      first(pxp_term_support(nsites, center)), nsites) for center in 1:nsites)
+    for (builder, threshold) in ((pxp_s2_dmt_plan, 3.5), (pxp_s4_dmt_plan, 10.0))
+      errors = Float64[]
+      for nsteps in (builder === pxp_s2_dmt_plan ? (2, 4, 8) : (1, 2, 4))
+        plan = builder(pauli_siteinds(nsites), total_time / nsteps;
+          omega=omega, mu=mu, maxdim=16)
+        step = Matrix{ComplexF64}(I, 2^nsites, 2^nsites)
+        for entry in plan.entries
+          local_gate = exp(-im * entry.duration *
+            _pxp_mu_term(nsites, entry.center; omega=omega, mu=mu))
+          step = _embed_term(local_gate, entry.start, nsites) * step
+        end
+        push!(errors, norm(step^nsteps - exp(-im * total_time * h)))
+      end
+      @test errors[1] / errors[2] > threshold
+      @test errors[2] / errors[3] > threshold
+    end
+    left_odd = _embed_term(_pxp_mu_term(nsites, 1; omega=omega, mu=mu), 1, nsites)
+    right_odd = _embed_term(_pxp_mu_term(nsites, 3; omega=omega, mu=mu), 2, nsites)
+    @test norm(left_odd * right_odd - right_odd * left_odd) <= 1e-13
+    @test_throws ArgumentError pauli_pxp_controlled_gate(sites, 2, Inf; mu=mu)
+  end
+
+  @testset "S2 parity plan metadata and order" begin
+    for nsites in 2:8
+      plan = pxp_s2_dmt_plan(pauli_siteinds(nsites), 0.2; omega=0.8,
+        maxdim=12, normalize=false)
+      @test plan.scheme == :S2
+      @test plan.tau == 0.2
+      @test plan.evolution.gate_backend == :controlled
+      @test isempty(plan.evolution.reverse_schedule)
+      @test [entry.id for entry in plan.entries] == collect(eachindex(plan.entries))
+      @test all(entry.direction == :R for entry in plan.entries)
+      @test pxp_dmt_attempted_updates(plan) == 3 * (nsites - 1)
+      @test [entry.center for entry in plan.entries if entry.layer == 1] ==
+        collect(1:2:nsites)
+      @test [entry.center for entry in plan.entries if entry.layer == 2] ==
+        collect(2:2:nsites)
+      @test all(entry.duration == 0.1 for entry in plan.entries if entry.layer != 2)
+      @test all(entry.duration == 0.2 for entry in plan.entries if entry.layer == 2)
+    end
+
+    nsites = 4
+    total_time = 0.4
+    exact = exp(-1im * total_time * _pxp_dense(nsites; omega=0.8))
+    errors = Float64[]
+    for nsteps in (2, 4, 8)
+      tau = total_time / nsteps
+      plan = pxp_s2_dmt_plan(pauli_siteinds(nsites), tau; omega=0.8, maxdim=16)
+      step = Matrix{ComplexF64}(I, 2^nsites, 2^nsites)
+      for entry in plan.entries
+        local_gate = exp(-1im * entry.duration *
+          pxp_term_hamiltonian(nsites, entry.center; omega=0.8))
+        step = _embed_term(local_gate, entry.start, nsites) * step
+      end
+      push!(errors, norm(step^nsteps - exact))
+    end
+    @test errors[1] > errors[2] > errors[3]
+    @test errors[1] / errors[2] > 3.5
+    @test errors[2] / errors[3] > 3.5
+    @test_throws ArgumentError pxp_s2_dmt_plan(pauli_siteinds(4), 0.0)
+  end
+
+  @testset "S4 Yoshida plan metadata and order" begin
+    for nsites in 2:8
+      plan = pxp_s4_dmt_plan(pauli_siteinds(nsites), 0.2; omega=0.8,
+        maxdim=12, normalize=false)
+      @test plan.scheme == :S4
+      @test isempty(plan.evolution.reverse_schedule)
+      @test pxp_dmt_attempted_updates(plan) == 7 * (nsites - 1)
+      @test all(entry.direction == :R for entry in plan.entries)
+      @test any(entry.duration < 0 for entry in plan.entries)
+      @test [entry.center for entry in plan.entries if entry.layer == 1] ==
+        collect(1:2:nsites)
+      @test [entry.center for entry in plan.entries if entry.layer == 2] ==
+        collect(2:2:nsites)
+      odd_duration = sum(entry.duration for entry in plan.entries if entry.center == 1)
+      even_center = 2
+      even_duration = sum(entry.duration for entry in plan.entries
+        if entry.center == even_center)
+      @test odd_duration ≈ plan.tau atol=1e-14
+      @test even_duration ≈ plan.tau atol=1e-14
+    end
+
+    nsites = 4
+    total_time = 0.4
+    exact = exp(-1im * total_time * _pxp_dense(nsites; omega=0.8))
+    errors = Float64[]
+    for nsteps in (1, 2, 4)
+      tau = total_time / nsteps
+      plan = pxp_s4_dmt_plan(pauli_siteinds(nsites), tau; omega=0.8, maxdim=16)
+      step = Matrix{ComplexF64}(I, 2^nsites, 2^nsites)
+      for entry in plan.entries
+        local_gate = exp(-1im * entry.duration *
+          pxp_term_hamiltonian(nsites, entry.center; omega=0.8))
+        step = _embed_term(local_gate, entry.start, nsites) * step
+      end
+      push!(errors, norm(step^nsteps - exact))
+    end
+    @test errors[1] > errors[2] > errors[3]
+    @test errors[1] / errors[2] > 10
+    @test errors[2] / errors[3] > 10
+  end
+
+  @testset "parity-layer MPOs equal sequential controlled gates" begin
+    for nsites in 2:6, parity in (:odd, :even)
+      duration = isodd(nsites) ? -0.07 : 0.11
+      sites = pauli_siteinds(nsites)
+      layer = pauli_pxp_parity_layer(sites, parity, duration; omega=0.8)
+      @test maxlinkdim(layer.mpo) <= 4
+      @test mapreduce(eltype, promote_type, ITensorMPS.data(layer.mpo)) === Float64
+      state, _ = _random_pauli_product(sites, nsites + (parity === :odd ? 1 : 2))
+      via_layer = apply(layer.mpo, state; cutoff=0.0)
+      via_gates = copy(state)
+      centers = parity === :odd ? (1:2:nsites) : (2:2:nsites)
+      for center in centers
+        gate = pauli_pxp_controlled_gate(sites, center, duration; omega=0.8)
+        via_gates = apply(MPSToolkit._embed_local_mpo(gate.mpo, sites, gate.start),
+          via_gates; cutoff=0.0)
+      end
+      @test abs(inner(via_layer, via_gates)) /
+        (norm(via_layer) * norm(via_gates)) ≈ 1.0 atol=1e-11
+    end
+
+    for scheme in (:S2, :S4)
+      plan = pxp_layer_dmt_plan(pauli_siteinds(6), 0.1; scheme=scheme, maxdim=12,
+        normalize=false)
+      expected_layers = scheme === :S2 ? 3 : 7
+      @test length(plan.layers) == expected_layers
+      @test pxp_dmt_attempted_updates(plan) == expected_layers * 5
+    end
+
+
+    @test_throws ArgumentError pxp_layer_dmt_plan(pauli_siteinds(4), 0.1; nstep=0)
+    @test_throws ArgumentError pxp_layer_dmt_plan(pauli_siteinds(4), 0.1; nstep=-1)
+    sites = pauli_siteinds(4)
+    right = pxp_layer_dmt_plan(sites, 0.1; maxdim=16, direction=:R)
+    left = pxp_layer_dmt_plan(sites, 0.1; maxdim=16, direction=:L)
+    @test right.direction == :R
+    @test left.direction == :L
+    @test right.signature != left.signature
+    @test right.signature != pxp_layer_dmt_plan(sites, 0.1;
+      maxdim=12, direction=:R).signature
+
+    state, _ = _random_pauli_product(sites, 19)
+    via_right = copy(state)
+    via_left = copy(state)
+    dmt_evolve!(via_right, right; normalize=false)
+    dmt_evolve!(via_left, left; normalize=false)
+    @test norm(via_right - via_left) <= 1e-9 * norm(via_right)
+
+    @test_throws ArgumentError pxp_layer_dmt_plan(sites, 0.1; maxdim=1, normalize=true)
   end
 
   @testset "embedded terms sum to the open-chain PXP Hamiltonian" begin
@@ -209,6 +411,11 @@ end
       state = pauli_pxp_constraint_state(psites)
       @test maxlinkdim(state) <= 2
       @test pauli_trace(state) ≈ count atol = 1e-10
+      @test mapreduce(eltype, promote_type, ITensorMPS.data(state)) === Float64
+      legacy = pauli_state_from_mpo(
+        pxp_constraint_mpo(MPSToolkit._pxp_physical_sites(nsites)), psites)
+      @test norm(state) ≈ norm(legacy) atol=1e-12
+      @test abs(inner(state, legacy)) / (norm(state) * norm(legacy)) ≈ 1.0 atol=1e-12
     end
   end
 
@@ -217,6 +424,10 @@ end
     psites = pauli_siteinds(nsites)
     superop = pauli_pxp_constraint_projector(psites)
     dense_projector = _pxp_projector_dense(nsites)
+    @test mapreduce(eltype, promote_type, ITensorMPS.data(superop)) === Float64
+    legacy_superop = pauli_superoperator_mpo(
+      pxp_constraint_mpo(MPSToolkit._pxp_physical_sites(nsites)), psites)
+    @test _mpo_dense(superop, psites) ≈ _mpo_dense(legacy_superop, psites) atol=1e-12
 
     rho, dense_rho = _random_pauli_product(psites, 1)
     projected = apply(superop, rho; cutoff=0.0)
@@ -514,6 +725,148 @@ end
   @test maximum(abs.(real.(pauli_expectation_profile(every1, terms)) - real.(pauli_expectation_profile(everyN, terms)))) < 1e-6
   # projector_cutoff is validated.
   @test_throws ArgumentError constrained_dmt_evolve!(copy(rho), evo, projector; projector_cutoff=-1e-12)
+
+  @testset "exact gate backends track at finite chi" begin
+    product_evo = DMTGateEvolution(gates, dt; schedule=schedule,
+      reverse_schedule=reverse(schedule), nstep=2, maxdim=12, cutoff=1e-12,
+      gate_maxdim=0, gate_backend=:product, normalize=false)
+    qr_evo = DMTGateEvolution(gates, dt; schedule=schedule,
+      reverse_schedule=reverse(schedule), nstep=2, maxdim=12, cutoff=1e-12,
+      gate_maxdim=0, gate_backend=:qr, normalize=false)
+    via_product = copy(rho)
+    via_qr = copy(rho)
+    dmt_evolve!(via_product, product_evo)
+    dmt_evolve!(via_qr, qr_evo)
+    @test maximum(abs.(pauli_expectation_profile(via_product, terms) .-
+      pauli_expectation_profile(via_qr, terms))) < 1e-6
+    @test abs(inner(via_product, via_qr)) / (norm(via_product) * norm(via_qr)) > 1 - 1e-6
+  end
+
+  @testset "controlled gate schedule matches dense QR evolution" begin
+    controlled_gates = [pauli_pxp_controlled_gate(psites, center, dt)
+      for center in 1:nsites]
+    dense_evo = DMTGateEvolution(gates, dt; schedule=schedule,
+      reverse_schedule=reverse(schedule), maxdim=64, cutoff=0.0,
+      gate_maxdim=0, gate_backend=:qr, normalize=false)
+    controlled_evo = DMTGateEvolution(controlled_gates, dt; schedule=schedule,
+      reverse_schedule=reverse(schedule), maxdim=64, cutoff=0.0,
+      gate_maxdim=0, gate_backend=:controlled, normalize=false)
+    via_dense = copy(rho)
+    via_controlled = copy(rho)
+    dmt_evolve!(via_dense, dense_evo)
+    dmt_evolve!(via_controlled, controlled_evo)
+    @test abs(inner(via_dense, via_controlled)) /
+      (norm(via_dense) * norm(via_controlled)) ≈ 1.0 atol=1e-10
+    @test pauli_expectation_profile(via_dense, terms) ≈
+      pauli_expectation_profile(via_controlled, terms) atol=1e-10
+    @test MPSToolkit._mps_eltype(via_controlled) === Float64
+
+    plan = pxp_s2_dmt_plan(psites, dt; nstep=2, maxdim=64, cutoff=0.0,
+      normalize=false)
+    planned = copy(rho)
+    run_state = ConstrainedDMTRunState()
+    constrained_dmt_evolve!(planned, plan, projector; project_every=2,
+      run_state=run_state, normalize=false)
+    @test run_state.completed_steps == 2
+    @test run_state.physical_time ≈ 2 * dt
+    @test run_state.projection_count == 1
+    @test MPSToolkit._mps_eltype(planned) === Float64
+
+    gatewise_plan = pxp_s2_dmt_plan(psites, dt; maxdim=64, cutoff=0.0,
+      normalize=false)
+    layerwise_plan = pxp_layer_dmt_plan(psites, dt; scheme=:S2, maxdim=64,
+      cutoff=0.0, normalize=false)
+    gatewise = copy(rho)
+    layerwise = copy(rho)
+    dmt_evolve!(gatewise, gatewise_plan)
+    dmt_evolve!(layerwise, layerwise_plan)
+    @test abs(inner(gatewise, layerwise)) / (norm(gatewise) * norm(layerwise)) ≈
+      1.0 atol=1e-10
+    @test pauli_expectation_profile(gatewise, terms) ≈
+      pauli_expectation_profile(layerwise, terms) atol=1e-10
+    @test MPSToolkit._mps_eltype(layerwise) === Float64
+  end
+
+  @testset "persistent projection cadence is independent of call boundaries" begin
+    make_evo(nstep) = DMTGateEvolution(
+      gates, dt; schedule=schedule, reverse_schedule=reverse(schedule), nstep=nstep,
+      maxdim=64, cutoff=0.0, gate_maxdim=256, normalize=false)
+
+    whole = copy(rho)
+    whole_state = ConstrainedDMTRunState()
+    constrained_dmt_evolve!(whole, make_evo(10), projector; project_every=3,
+      normalize=false, run_state=whole_state)
+
+    split = copy(rho)
+    split_state = ConstrainedDMTRunState()
+    for _ in 1:10
+      constrained_dmt_evolve!(split, make_evo(1), projector; project_every=3,
+        normalize=false, run_state=split_state)
+    end
+    @test whole_state.completed_steps == split_state.completed_steps == 10
+    @test whole_state.physical_time ≈ split_state.physical_time ≈ 20 * dt
+    @test whole_state.steps_since_projection == split_state.steps_since_projection == 1
+    @test whole_state.projection_count == split_state.projection_count == 3
+    @test pauli_expectation_profile(whole, terms) ≈ pauli_expectation_profile(split, terms)
+
+    normalized_whole = copy(rho)
+    normalized_split = copy(rho)
+    normalized_whole[1] *= 2
+    normalized_split[1] *= 2
+    normalized_whole_state = ConstrainedDMTRunState()
+    normalized_split_state = ConstrainedDMTRunState()
+    constrained_dmt_evolve!(normalized_whole, make_evo(4), projector; project_every=3,
+      normalize=true, run_state=normalized_whole_state)
+    for _ in 1:4
+      constrained_dmt_evolve!(normalized_split, make_evo(1), projector; project_every=3,
+        normalize=true, run_state=normalized_split_state)
+    end
+    @test pauli_expectation_profile(normalized_whole, terms) ≈
+      pauli_expectation_profile(normalized_split, terms)
+
+    dir = mktempdir()
+    restarted = copy(rho)
+    restart_state = ConstrainedDMTRunState()
+    constrained_dmt_evolve!(restarted, make_evo(7), projector; project_every=3,
+      normalize=false, run_state=restart_state)
+    path = dmt_checkpoint_save(dmt_checkpoint_path("cadence", restart_state.physical_time;
+      dir=dir), restarted, Dict(:project_every => 3, :dt => dt); time=restart_state.physical_time,
+      sweep=restart_state.completed_steps, run_state=restart_state)
+    checkpoint = dmt_checkpoint_load(path)
+    restarted = checkpoint.state
+    restart_state = dmt_checkpoint_run_state(checkpoint)
+    constrained_dmt_evolve!(restarted, make_evo(3), projector; project_every=3,
+      normalize=false, run_state=restart_state)
+    @test restart_state.completed_steps == 10
+    @test restart_state.projection_count == 3
+    @test pauli_expectation_profile(whole, terms) ≈ pauli_expectation_profile(restarted, terms)
+
+    constrained_dmt_evolve!(restarted, make_evo(1), projector; project_every=3,
+      normalize=false, run_state=restart_state, final_project=true)
+    @test restart_state.steps_since_projection == 0
+    @test restart_state.projection_count == 4
+  end
+
+  @testset "chunk copies every DMT option" begin
+    selected = [Matrix{Float64}(I, 2, 2)]
+    configured = DMTGateEvolution(gates, dt; schedule=schedule,
+      reverse_schedule=reverse(schedule), nstep=2, maxdim=12, cutoff=2e-10,
+      gate_maxdim=19, preserve_diameter=3, preserve_operators=selected,
+      truncation=:random, normalize=false)
+    copied = MPSToolkit._copy_dmt_evolution(configured; nstep=1)
+    for field in fieldnames(DMTGateEvolution)
+      field == :nstep && continue
+      @test getfield(copied, field) == getfield(configured, field)
+    end
+    @test copied.nstep == 1
+  end
+
+  @testset "direct leakage contraction agrees with an exact residual" begin
+    projected = apply(projector, rho; maxdim=256, cutoff=0.0)
+    residual_squared = real(inner(rho, rho) + inner(projected, projected) -
+      2 * inner(rho, projected)) / real(inner(rho, rho))
+    @test constraint_leakage_squared(rho, projector) ≈ residual_squared atol=1e-10
+  end
 end
 
 @testset "energy-correlator protocol matches dense ED (normalize=false)" begin

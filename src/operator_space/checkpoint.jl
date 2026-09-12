@@ -27,6 +27,38 @@ struct DMTCheckpoint
 end
 
 const _DMT_CHECKPOINT_VERSION = 1
+const _DMT_RUN_STATE_KEY = :_dmt_run_state
+const _DMT_PROVENANCE_KEY = :_dmt_provenance
+
+"""
+    dmt_run_provenance(; algorithm_version, root=pkgdir(MPSToolkit))
+
+Collect reproducibility metadata for a DMT run: the algorithm label, git commit and dirty
+status, and the SHA-256 digest of `Manifest.toml`. Missing git or manifest data is recorded as
+`nothing`; it is never guessed for an old checkpoint.
+"""
+function dmt_run_provenance(; algorithm_version::AbstractString,
+                            root::AbstractString=pkgdir(MPSToolkit))
+  code_sha = try
+    String(readchomp(`git -C $root rev-parse HEAD`))
+  catch
+    nothing
+  end
+  dirty_summary = try
+    String(readchomp(`git -C $root status --short`))
+  catch
+    nothing
+  end
+  manifest_path = joinpath(root, "Manifest.toml")
+  manifest_hash = isfile(manifest_path) ? bytes2hex(sha256(read(manifest_path))) : nothing
+  return Dict{Symbol,Any}(
+    :algorithm_version => String(algorithm_version),
+    :code_sha => code_sha,
+    :code_dirty => isnothing(dirty_summary) ? nothing : !isempty(dirty_summary),
+    :dirty_summary => dirty_summary,
+    :manifest_sha256 => manifest_hash,
+  )
+end
 
 """
     dmt_checkpoint_path(name, time; dir=".")
@@ -43,7 +75,9 @@ function dmt_checkpoint_path(name::AbstractString, time::Real; dir::AbstractStri
 end
 
 """
-    dmt_checkpoint_save(path, rho, parameters; time, sweep, observables=Dict{Symbol,Any}())
+    dmt_checkpoint_save(path, rho, parameters; time, sweep,
+                        observables=Dict{Symbol,Any}(), run_state=nothing,
+                        provenance=nothing)
 
 Write a [`DMTCheckpoint`](@ref) to `path`, atomically.
 
@@ -57,6 +91,9 @@ Write a [`DMTCheckpoint`](@ref) to `path`, atomically.
 - `time`: Simulation time reached.
 - `sweep`: Sweep index reached.
 - `observables`: Accumulated time series to carry across the restart.
+- `run_state`: Persistent evolution cadence/counter state. It is deep-copied into the checkpoint.
+- `provenance`: Output of [`dmt_run_provenance`](@ref), or equivalent metadata supplied by the
+  caller. Old checkpoints return no provenance; code identity is never inferred at load time.
 
 # Returns
 - `path`.
@@ -69,9 +106,26 @@ Write a [`DMTCheckpoint`](@ref) to `path`, atomically.
 """
 function dmt_checkpoint_save(path::AbstractString, rho::MPS, parameters::AbstractDict;
                              time::Real, sweep::Integer,
-                             observables::AbstractDict=Dict{Symbol,Any}())
+                             observables::AbstractDict=Dict{Symbol,Any}(), run_state=nothing,
+                             provenance::Union{Nothing,AbstractDict}=nothing)
+  saved_observables = Dict{Symbol,Any}(observables)
+  haskey(saved_observables, _DMT_RUN_STATE_KEY) && throw(ArgumentError(
+    "observables key $(_DMT_RUN_STATE_KEY) is reserved for checkpoint run state"))
+  haskey(saved_observables, _DMT_PROVENANCE_KEY) && throw(ArgumentError(
+    "observables key $(_DMT_PROVENANCE_KEY) is reserved for checkpoint provenance"))
+  if !isnothing(run_state)
+    hasproperty(run_state, :completed_steps) && sweep != getproperty(run_state, :completed_steps) &&
+      throw(ArgumentError("checkpoint sweep does not match run_state.completed_steps"))
+    hasproperty(run_state, :physical_time) &&
+      !isapprox(time, getproperty(run_state, :physical_time); rtol=0, atol=8eps(Float64) *
+        max(abs(Float64(time)), 1.0)) &&
+      throw(ArgumentError("checkpoint time does not match run_state.physical_time"))
+    saved_observables[_DMT_RUN_STATE_KEY] = deepcopy(run_state)
+  end
+  isnothing(provenance) ||
+    (saved_observables[_DMT_PROVENANCE_KEY] = Dict{Symbol,Any}(provenance))
   checkpoint = DMTCheckpoint(_DMT_CHECKPOINT_VERSION, Dict{Symbol,Any}(parameters),
-                             Float64(time), Int(sweep), rho, Dict{Symbol,Any}(observables))
+                             Float64(time), Int(sweep), rho, saved_observables)
   directory = dirname(path)
   isempty(directory) || mkpath(directory)
   scratch = string(path, ".partial")
@@ -80,6 +134,26 @@ function dmt_checkpoint_save(path::AbstractString, rho::MPS, parameters::Abstrac
   end
   mv(scratch, path; force=true)
   return path
+end
+
+"""Return the persisted run state, or `nothing` for checkpoints that predate it."""
+dmt_checkpoint_run_state(checkpoint::DMTCheckpoint) =
+  get(checkpoint.observables, _DMT_RUN_STATE_KEY, nothing)
+
+"""Return persisted provenance, or an empty dictionary when none was recorded."""
+dmt_checkpoint_provenance(checkpoint::DMTCheckpoint) =
+  get(checkpoint.observables, _DMT_PROVENANCE_KEY, Dict{Symbol,Any}())
+
+"""
+    dmt_checkpoint_observables(checkpoint)
+
+Return a copy of the user observables stored in `checkpoint`, excluding checkpoint-internal
+run-state and provenance metadata. The result can be passed directly to
+[`dmt_checkpoint_save`](@ref) when continuing a run.
+"""
+function dmt_checkpoint_observables(checkpoint::DMTCheckpoint)
+  return deepcopy(Dict{Symbol,Any}(key => value for (key, value) in checkpoint.observables
+    if key !== _DMT_RUN_STATE_KEY && key !== _DMT_PROVENANCE_KEY))
 end
 
 """
